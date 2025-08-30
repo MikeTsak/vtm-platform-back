@@ -4,12 +4,12 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const pool = require('./db');
+const pool = require('./db'); // should export pool.promise()
 const { authRequired, requireAdmin } = require('./authMiddleware');
 
 const app = express();
 app.use(cors({ origin: true, credentials: true }));
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 
 /* ---------- Helpers ---------- */
 const issueToken = (user) =>
@@ -24,13 +24,16 @@ app.post('/api/auth/register', async (req, res) => {
   try {
     const { email, display_name, password } = req.body;
     if (!email || !display_name || !password) return res.status(400).json({ error: 'Missing fields' });
+
     const [exists] = await pool.query('SELECT id FROM users WHERE email=?', [email]);
     if (exists.length) return res.status(409).json({ error: 'Email already in use' });
+
     const hash = await bcrypt.hash(password, 12);
     const [r] = await pool.query(
       'INSERT INTO users (email, display_name, password_hash) VALUES (?,?,?)',
       [email, display_name, hash]
     );
+
     const [rows] = await pool.query('SELECT id, email, display_name, role FROM users WHERE id=?', [r.insertId]);
     return res.json({ token: issueToken(rows[0]) });
   } catch (e) {
@@ -45,8 +48,10 @@ app.post('/api/auth/login', async (req, res) => {
     const [rows] = await pool.query('SELECT * FROM users WHERE email=?', [email]);
     const user = rows[0];
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+
     const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+
     res.json({ token: issueToken(user) });
   } catch (e) {
     console.error(e);
@@ -59,28 +64,61 @@ app.get('/api/auth/me', authRequired, async (req, res) => {
 });
 
 /* ---------- Characters ---------- */
-// Get or create prompt state
+// Get my character (with parsed sheet)
 app.get('/api/characters/me', authRequired, async (req, res) => {
   const [rows] = await pool.query('SELECT * FROM characters WHERE user_id=?', [req.user.id]);
-  res.json({ character: rows[0] || null });
+  const ch = rows[0] || null;
+  if (ch && ch.sheet && typeof ch.sheet === 'string') {
+    try { ch.sheet = JSON.parse(ch.sheet); } catch {}
+  }
+  res.json({ character: ch });
 });
 
+// Create character (stores full sheet JSON)
 app.post('/api/characters', authRequired, async (req, res) => {
-  const { name, clan } = req.body;
+  const { name, clan, sheet } = req.body;
   if (!name || !clan) return res.status(400).json({ error: 'Name and clan are required' });
+
   try {
     const [exists] = await pool.query('SELECT id FROM characters WHERE user_id=?', [req.user.id]);
     if (exists.length) return res.status(409).json({ error: 'Character already exists' });
+
     const [r] = await pool.query(
-      'INSERT INTO characters (user_id, name, clan) VALUES (?,?,?)',
-      [req.user.id, name, clan]
+      'INSERT INTO characters (user_id, name, clan, sheet) VALUES (?,?,?,?)',
+      [req.user.id, name, clan, sheet ? JSON.stringify(sheet) : null]
     );
+
     const [rows] = await pool.query('SELECT * FROM characters WHERE id=?', [r.insertId]);
-    res.json({ character: rows[0] });
+    const ch = rows[0];
+    if (ch && ch.sheet && typeof ch.sheet === 'string') { try { ch.sheet = JSON.parse(ch.sheet); } catch {} }
+    res.json({ character: ch });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to create character' });
   }
+});
+
+// (Optional) Update my character later
+app.put('/api/characters', authRequired, async (req, res) => {
+  const { name, clan, sheet } = req.body;
+
+  const [rows] = await pool.query('SELECT id FROM characters WHERE user_id=?', [req.user.id]);
+  if (!rows.length) return res.status(404).json({ error: 'No character' });
+
+  const fields = [];
+  const vals = [];
+  if (name) { fields.push('name=?'); vals.push(name); }
+  if (clan) { fields.push('clan=?'); vals.push(clan); }
+  if (sheet !== undefined) { fields.push('sheet=?'); vals.push(sheet ? JSON.stringify(sheet) : null); }
+  if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
+
+  vals.push(rows[0].id);
+  await pool.query(`UPDATE characters SET ${fields.join(', ')} WHERE id=?`, vals);
+
+  const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [rows[0].id]);
+  const ch = out[0];
+  if (ch && ch.sheet && typeof ch.sheet === 'string') { try { ch.sheet = JSON.parse(ch.sheet); } catch {} }
+  res.json({ character: ch });
 });
 
 /* ---------- Downtimes ---------- */
@@ -89,16 +127,22 @@ app.get('/api/downtimes/mine', authRequired, async (req, res) => {
     pool.query('SELECT * FROM characters WHERE user_id=?', [req.user.id]),
   ]);
   if (!char?.[0]) return res.json({ downtimes: [] });
-  const [rows] = await pool.query('SELECT * FROM downtimes WHERE character_id=? ORDER BY created_at DESC', [char[0].id]);
+
+  const [rows] = await pool.query(
+    'SELECT * FROM downtimes WHERE character_id=? ORDER BY created_at DESC',
+    [char[0].id]
+  );
   res.json({ downtimes: rows });
 });
 
 app.post('/api/downtimes', authRequired, async (req, res) => {
   const { title, body } = req.body;
   if (!title || !body) return res.status(400).json({ error: 'Title and body required' });
+
   const [chars] = await pool.query('SELECT id FROM characters WHERE user_id=?', [req.user.id]);
   const ch = chars[0];
   if (!ch) return res.status(400).json({ error: 'Create a character first' });
+
   const [r] = await pool.query(
     'INSERT INTO downtimes (character_id, title, body) VALUES (?,?,?)',
     [ch.id, title, body]
@@ -110,11 +154,17 @@ app.post('/api/downtimes', authRequired, async (req, res) => {
 /* ---------- Admin ---------- */
 app.get('/api/admin/users', authRequired, requireAdmin, async (_req, res) => {
   const [rows] = await pool.query(
-    `SELECT u.id, u.email, u.display_name, u.role, c.name AS char_name, c.clan
+    `SELECT u.id, u.email, u.display_name, u.role,
+            c.name AS char_name, c.clan, c.sheet
      FROM users u
      LEFT JOIN characters c ON c.user_id=u.id
      ORDER BY u.created_at DESC`
   );
+  rows.forEach(r => {
+    if (r.sheet && typeof r.sheet === 'string') {
+      try { r.sheet = JSON.parse(r.sheet); } catch {}
+    }
+  });
   res.json({ users: rows });
 });
 
@@ -133,13 +183,16 @@ app.patch('/api/admin/downtimes/:id', authRequired, requireAdmin, async (req, re
   const { status, gm_notes } = req.body;
   const allowed = ['submitted','approved','rejected','resolved'];
   if (status && !allowed.includes(status)) return res.status(400).json({ error: 'Bad status' });
+
   const fields = [];
   const vals = [];
   if (status) { fields.push('status=?'); vals.push(status); }
   if (typeof gm_notes === 'string') { fields.push('gm_notes=?'); vals.push(gm_notes); }
   if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
+
   vals.push(req.params.id);
   await pool.query(`UPDATE downtimes SET ${fields.join(', ')} WHERE id=?`, vals);
+
   const [rows] = await pool.query('SELECT * FROM downtimes WHERE id=?', [req.params.id]);
   res.json({ downtime: rows[0] });
 });
