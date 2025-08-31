@@ -206,7 +206,11 @@ app.put('/api/characters', authRequired, async (req, res) => {
 
 /* -------------------- XP Spend -------------------- */
 app.post('/api/characters/xp/spend', authRequired, async (req, res) => {
-  const { type, target, currentLevel, newLevel, ritualLevel, formulaLevel, dots, disciplineKind, patchSheet } = req.body;
+  const {
+    type, target, currentLevel, newLevel,
+    ritualLevel, formulaLevel, dots,
+    disciplineKind, patchSheet
+  } = req.body;
 
   const [rows] = await pool.query('SELECT * FROM characters WHERE user_id=?', [req.user.id]);
   const ch = rows[0];
@@ -215,35 +219,49 @@ app.post('/api/characters/xp/spend', authRequired, async (req, res) => {
     return res.status(400).json({ error: 'Create a character first' });
   }
 
-  let cost;
+  // Determine cost (special-case free power assignment)
+  let cost = 0;
   try {
-    cost = xpCost({ type, newLevel, ritualLevel, formulaLevel, dots, disciplineKind });
+    if (
+      type === 'discipline' &&
+      (
+        disciplineKind === 'select' ||                           // explicit "assignment only"
+        Number(newLevel) === Number(currentLevel)                // or no level change
+      )
+    ) {
+      cost = 0; // assigning a specific power for an existing dot is free
+    } else {
+      cost = xpCost({ type, newLevel, ritualLevel, formulaLevel, dots, disciplineKind });
+    }
   } catch (e) {
     log.warn('XP spend bad type', { type });
     return res.status(400).json({ error: e.message });
   }
 
-  if ((ch.xp || 0) < cost) {
-    log.warn('XP spend insufficient', { user_id: req.user.id, have: ch.xp, need: cost });
-    return res.status(400).json({ error: `Not enough XP (need ${cost}, have ${ch.xp})` });
+  // If this is a paid action, verify balance and deduct XP
+  if (cost > 0) {
+    if ((ch.xp || 0) < cost) {
+      log.warn('XP spend insufficient', { user_id: req.user.id, have: ch.xp, need: cost });
+      return res.status(400).json({ error: `Not enough XP (need ${cost}, have ${ch.xp})` });
+    }
+    log.xp('XP spend request', { user_id: req.user.id, type, target, currentLevel, newLevel, cost });
+    await pool.query('UPDATE characters SET xp = xp - ? WHERE id=?', [cost, ch.id]);
+  } else {
+    log.xp('Discipline power assignment (free)', { user_id: req.user.id, target, level: newLevel });
   }
 
-  log.xp('XP spend request', { user_id: req.user.id, type, target, currentLevel, newLevel, cost });
-
-  // Deduct XP
-  await pool.query('UPDATE characters SET xp = xp - ? WHERE id=?', [cost, ch.id]);
-
-  // Optional: update sheet if a full patched object is provided
+  // Apply optional sheet patch for both paid and free actions
   if (patchSheet !== undefined) {
     await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(patchSheet), ch.id]);
-    log.xp('Sheet patched after spend', { user_id: req.user.id, character_id: ch.id });
+    log.xp('Sheet patched after action', { user_id: req.user.id, character_id: ch.id });
   }
 
-  // XP log (if table exists)
+  // XP log (store 0-cost entries too)
   try {
     await pool.query(
       'INSERT INTO xp_log (character_id, action, target, from_level, to_level, cost, payload) VALUES (?,?,?,?,?,?,?)',
-      [ch.id, type, target || null, currentLevel || null, newLevel || null, cost, JSON.stringify({ disciplineKind, ritualLevel, formulaLevel, dots })]
+      [ch.id, type, target || null, currentLevel || null, newLevel || null, cost,
+        JSON.stringify({ disciplineKind, ritualLevel, formulaLevel, dots })]
     );
     log.xp('XP logged', { character_id: ch.id, cost });
   } catch (_) { /* ignore if xp_log missing */ }
@@ -251,11 +269,17 @@ app.post('/api/characters/xp/spend', authRequired, async (req, res) => {
   const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [ch.id]);
   const outCh = out[0];
   if (outCh && outCh.sheet && typeof outCh.sheet === 'string') { try { outCh.sheet = JSON.parse(outCh.sheet); } catch {} }
-  log.ok('XP spend complete', { user_id: req.user.id, remaining_xp: outCh?.xp });
+
+  if (cost > 0) {
+    log.ok('XP spend complete', { user_id: req.user.id, remaining_xp: outCh?.xp });
+  } else {
+    log.ok('Power assignment saved (no XP charged)', { user_id: req.user.id });
+  }
+
   res.json({ character: outCh, spent: cost });
 });
 
-// Admin add/remove XP
+/* -------------------- Admin add/remove XP -------------------- */
 app.patch('/api/admin/characters/:id/xp', authRequired, requireAdmin, async (req, res) => {
   const { delta } = req.body;
   if (typeof delta !== 'number') return res.status(400).json({ error: 'delta must be a number' });
@@ -265,6 +289,7 @@ app.patch('/api/admin/characters/:id/xp', authRequired, requireAdmin, async (req
   log.adm('Admin XP adjust', { character_id: req.params.id, delta, new_xp: out[0]?.xp });
   res.json({ character: out[0] });
 });
+
 
 /* -------------------- Downtimes -------------------- */
 // My quota this month
