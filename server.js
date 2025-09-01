@@ -204,6 +204,39 @@ app.put('/api/characters', authRequired, async (req, res) => {
   res.json({ character: ch });
 });
 
+// ================== XP Totals ==================
+app.get('/api/characters/xp/total', authRequired, async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT * FROM characters WHERE user_id=?', [req.user.id]);
+    const ch = rows[0];
+    if (!ch) return res.status(404).json({ error: 'Character not found' });
+
+    // Remaining XP is in characters.xp
+    const remaining = ch.xp || 0;
+
+    // If xp_log table exists, calculate spent total
+    let spent = 0;
+    try {
+      const [logRows] = await pool.query(
+        'SELECT SUM(cost) AS total_spent FROM xp_log WHERE character_id=?',
+        [ch.id]
+      );
+      spent = Number(logRows[0]?.total_spent || 0);
+    } catch {
+      // fallback if xp_log missing
+      spent = 0;
+    }
+
+    const granted = remaining + spent;
+
+    res.json({ character_id: ch.id, granted, spent, remaining });
+  } catch (e) {
+    log.err('XP total fetch failed', e);
+    res.status(500).json({ error: 'Failed to calculate XP total' });
+  }
+});
+
+
 /* -------------------- XP Spend -------------------- */
 app.post('/api/characters/xp/spend', authRequired, async (req, res) => {
   const {
@@ -462,14 +495,23 @@ app.get('/api/admin/downtimes', authRequired, requireAdmin, async (_req, res) =>
 });
 
 app.patch('/api/admin/downtimes/:id', authRequired, requireAdmin, async (req, res) => {
-  const { status, gm_notes } = req.body;
+  const { status, gm_notes, gm_resolution } = req.body;
   const allowed = ['submitted', 'approved', 'rejected', 'resolved'];
   if (status && !allowed.includes(status)) return res.status(400).json({ error: 'Bad status' });
 
   const fields = [];
   const vals = [];
+
   if (status) { fields.push('status=?'); vals.push(status); }
   if (typeof gm_notes === 'string') { fields.push('gm_notes=?'); vals.push(gm_notes); }
+  if (typeof gm_resolution === 'string') { fields.push('gm_resolution=?'); vals.push(gm_resolution); }
+
+  // auto-set resolved_at when marking resolved
+  if (status === 'resolved') {
+    fields.push('resolved_at=?');
+    vals.push(new Date());
+  }
+
   if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
 
   vals.push(req.params.id);
@@ -478,6 +520,74 @@ app.patch('/api/admin/downtimes/:id', authRequired, requireAdmin, async (req, re
   const [rows] = await pool.query('SELECT * FROM downtimes WHERE id=?', [req.params.id]);
   log.adm('Downtime updated', { id: req.params.id, fields });
   res.json({ downtime: rows[0] });
+});
+
+/* -------------------- Domain Claims -------------------- */
+/** List all claims (public for logged-in users) */
+app.get('/api/domain-claims', authRequired, async (_req, res) => {
+  const [rows] = await pool.query(
+    'SELECT division, owner_name, color, owner_character_id, claimed_at FROM domain_claims'
+  );
+  res.json({ claims: rows });
+});
+
+/** Claim a division by number with a hex color (first come first served) */
+app.post('/api/domain-claims/claim', authRequired, async (req, res) => {
+  const { division, color } = req.body;
+  const hex = (color || '').trim();
+  if (!Number.isInteger(division)) {
+    return res.status(400).json({ error: 'division must be an integer' });
+  }
+  if (!/^#([0-9a-fA-F]{6})$/.test(hex)) {
+    return res.status(400).json({ error: 'color must be a 6-digit hex like #ff0066' });
+  }
+
+  // find caller’s character (optional owner_character_id)
+  const [chars] = await pool.query('SELECT id, name FROM characters WHERE user_id=?', [req.user.id]);
+  const myChar = chars[0] || null;
+  const ownerName = myChar?.name || req.user.display_name || req.user.email;
+
+  // is it already claimed?
+  const [exists] = await pool.query('SELECT division FROM domain_claims WHERE division=?', [division]);
+  if (exists.length) {
+    return res.status(409).json({ error: 'This division is already claimed.' });
+  }
+
+  await pool.query(
+    'INSERT INTO domain_claims (division, owner_character_id, owner_name, color) VALUES (?,?,?,?)',
+    [division, myChar?.id || null, ownerName, hex]
+  );
+
+  const [row] = await pool.query('SELECT * FROM domain_claims WHERE division=?', [division]);
+  res.json({ claim: row[0] });
+});
+
+/** Admin: override or transfer a claim */
+app.patch('/api/admin/domain-claims/:division', authRequired, requireAdmin, async (req, res) => {
+  const division = Number(req.params.division);
+  const { owner_name, color, owner_character_id } = req.body;
+
+  const fields = [], vals = [];
+  if (typeof owner_name === 'string' && owner_name.trim()) { fields.push('owner_name=?'); vals.push(owner_name.trim()); }
+  if (typeof color === 'string' && /^#([0-9a-fA-F]{6})$/.test(color)) { fields.push('color=?'); vals.push(color); }
+  if (owner_character_id === null) { fields.push('owner_character_id=NULL'); }
+  else if (Number.isInteger(owner_character_id)) { fields.push('owner_character_id=?'); vals.push(owner_character_id); }
+
+  if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
+
+  vals.push(division);
+  await pool.query(`INSERT INTO domain_claims (division, owner_name, color) VALUES (?, 'Admin Set', '#888888')
+                    ON DUPLICATE KEY UPDATE ${fields.join(', ')}`, [division, ...vals]);
+
+  const [row] = await pool.query('SELECT * FROM domain_claims WHERE division=?', [division]);
+  res.json({ claim: row[0] });
+});
+
+/** Admin: unclaim (delete) */
+app.delete('/api/admin/domain-claims/:division', authRequired, requireAdmin, async (req, res) => {
+  const division = Number(req.params.division);
+  await pool.query('DELETE FROM domain_claims WHERE division=?', [division]);
+  res.json({ ok: true });
 });
 
 /* -------------------- Start -------------------- */
