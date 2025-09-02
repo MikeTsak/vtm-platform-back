@@ -323,6 +323,42 @@ app.patch('/api/admin/characters/:id/xp', authRequired, requireAdmin, async (req
   res.json({ character: out[0] });
 });
 
+// --- Admin: edit character ---
+app.patch('/api/admin/characters/:id', authRequired, requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  const { name, clan, sheet } = req.body;
+
+  const fields = [];
+  const vals = [];
+
+  if (typeof name === 'string') { fields.push('name=?'); vals.push(name.trim()); }
+  if (typeof clan === 'string') { fields.push('clan=?'); vals.push(clan.trim()); }
+
+  if (sheet !== undefined) {
+    let jsonStr = null;
+    try {
+      const obj = (typeof sheet === 'string') ? JSON.parse(sheet) : sheet;
+      jsonStr = JSON.stringify(obj ?? {});
+    } catch {
+      return res.status(400).json({ error: 'sheet must be valid JSON (object or stringified object)' });
+    }
+    fields.push('sheet=?'); vals.push(jsonStr);
+  }
+
+  if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
+
+  vals.push(id);
+  await pool.query(`UPDATE characters SET ${fields.join(', ')} WHERE id=?`, vals);
+
+  const [rows] = await pool.query('SELECT * FROM characters WHERE id=?', [id]);
+  const ch = rows[0];
+  if (ch && ch.sheet && typeof ch.sheet === 'string') { try { ch.sheet = JSON.parse(ch.sheet); } catch {} }
+  log.adm('Character updated', { id, fields });
+  res.json({ character: ch });
+});
+
+
+
 
 /* -------------------- Downtimes -------------------- */
 // My quota this month
@@ -562,26 +598,50 @@ app.post('/api/domain-claims/claim', authRequired, async (req, res) => {
   res.json({ claim: row[0] });
 });
 
-/** Admin: override or transfer a claim */
+// --- Admin: override/transfer a claim (safe upsert) ---
 app.patch('/api/admin/domain-claims/:division', authRequired, requireAdmin, async (req, res) => {
   const division = Number(req.params.division);
   const { owner_name, color, owner_character_id } = req.body;
 
-  const fields = [], vals = [];
+  const fields = [];
+  const vals = [];
+
   if (typeof owner_name === 'string' && owner_name.trim()) { fields.push('owner_name=?'); vals.push(owner_name.trim()); }
-  if (typeof color === 'string' && /^#([0-9a-fA-F]{6})$/.test(color)) { fields.push('color=?'); vals.push(color); }
-  if (owner_character_id === null) { fields.push('owner_character_id=NULL'); }
-  else if (Number.isInteger(owner_character_id)) { fields.push('owner_character_id=?'); vals.push(owner_character_id); }
+  if (typeof color === 'string') {
+    if (!/^#([0-9a-fA-F]{6})$/.test(color)) return res.status(400).json({ error: 'color must be #RRGGBB' });
+    fields.push('color=?'); vals.push(color);
+  }
+  if (owner_character_id === null) {
+    fields.push('owner_character_id=NULL');
+  } else if (owner_character_id !== undefined) {
+    if (!Number.isInteger(owner_character_id)) return res.status(400).json({ error: 'owner_character_id must be integer or null' });
+    fields.push('owner_character_id=?'); vals.push(owner_character_id);
+  }
 
   if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
 
+  // 1) Try update existing
   vals.push(division);
-  await pool.query(`INSERT INTO domain_claims (division, owner_name, color) VALUES (?, 'Admin Set', '#888888')
-                    ON DUPLICATE KEY UPDATE ${fields.join(', ')}`, [division, ...vals]);
+  const [upd] = await pool.query(`UPDATE domain_claims SET ${fields.join(', ')} WHERE division=?`, vals);
+
+  if (upd.affectedRows === 0) {
+    // 2) Insert new with provided fields merged onto sensible defaults
+    const base = {
+      owner_name: (typeof owner_name === 'string' && owner_name.trim()) ? owner_name.trim() : 'Admin Set',
+      color: (typeof color === 'string') ? color : '#888888',
+      owner_character_id: (owner_character_id === null || owner_character_id === undefined) ? null : Number(owner_character_id),
+    };
+    await pool.query(
+      'INSERT INTO domain_claims (division, owner_name, color, owner_character_id) VALUES (?,?,?,?)',
+      [division, base.owner_name, base.color, base.owner_character_id]
+    );
+  }
 
   const [row] = await pool.query('SELECT * FROM domain_claims WHERE division=?', [division]);
+  log.adm('Domain claim upsert', { division });
   res.json({ claim: row[0] });
 });
+
 
 /** Admin: unclaim (delete) */
 app.delete('/api/admin/domain-claims/:division', authRequired, requireAdmin, async (req, res) => {
