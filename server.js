@@ -58,20 +58,41 @@ function feedingFromPredator(pred) {
 
 // XP cost rules
 function xpCost({ type, newLevel, ritualLevel, formulaLevel, dots = 1, disciplineKind }) {
-  if (type === 'attribute') return newLevel * 5;
-  if (type === 'skill') return newLevel * 3;
+  // attribute / skill
+  if (type === 'attribute') return Number(newLevel) * 5;
+  if (type === 'skill') return Number(newLevel) * 3;
+
+  // specialties
   if (type === 'specialty') return 3;
+
+  // disciplines
   if (type === 'discipline') {
-    if (disciplineKind === 'clan') return newLevel * 5;
-    if (disciplineKind === 'caitiff') return newLevel * 6;
-    return newLevel * 7; // other/predator type
+    if (disciplineKind === 'clan')   return Number(newLevel) * 5;
+    if (disciplineKind === 'caitiff')return Number(newLevel) * 6;
+    return Number(newLevel) * 7; // other/predator
   }
-  if (type === 'ritual') return (ritualLevel || 1) * 3;
-  if (type === 'thin_blood_formula') return (formulaLevel || 1) * 3;
-  if (type === 'advantage') return 3 * (dots || 1);
-  if (type === 'blood_potency') return newLevel * 10;
+
+  // rituals & ceremonies (Oblivion ceremonies use same pricing as rituals)
+  if (type === 'ritual' || type === 'ceremony') {
+    const lvl = Number(ritualLevel ?? newLevel ?? 1);
+    return lvl * 3;
+  }
+
+  // thin-blood formula
+  if (type === 'thin_blood_formula') {
+    const lvl = Number(formulaLevel ?? newLevel ?? 1);
+    return lvl * 3;
+  }
+
+  // merits/backgrounds
+  if (type === 'advantage') return 3 * Number(dots || 1);
+
+  // blood potency
+  if (type === 'blood_potency') return Number(newLevel) * 10;
+
   throw new Error('Unknown XP type');
 }
+
 
 /* -------------------- Auth -------------------- */
 app.post('/api/auth/register', async (req, res) => {
