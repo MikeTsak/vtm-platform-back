@@ -378,6 +378,130 @@ app.patch('/api/admin/characters/:id', authRequired, requireAdmin, async (req, r
   res.json({ character: ch });
 });
 
+/* -------------------- NPCs (Admin only) -------------------- */
+
+// List all NPCs
+app.get('/api/admin/npcs', authRequired, requireAdmin, async (_req, res) => {
+  const [rows] = await pool.query('SELECT * FROM npcs ORDER BY created_at DESC');
+  rows.forEach(r => {
+    if (r.sheet && typeof r.sheet === 'string') { try { r.sheet = JSON.parse(r.sheet); } catch {} }
+  });
+  console.log('🧛‍♂️ [NPC] List ->', rows.length);
+  res.json({ npcs: rows });
+});
+
+// Create NPC (starts with 10,000 XP)
+app.post('/api/admin/npcs', authRequired, requireAdmin, async (req, res) => {
+  const { name, clan, sheet } = req.body;
+  if (!name || !clan) return res.status(400).json({ error: 'name and clan are required' });
+
+  const s = sheet ? (typeof sheet === 'string' ? sheet : JSON.stringify(sheet)) : null;
+  const [r] = await pool.query(
+    'INSERT INTO npcs (name, clan, sheet, xp) VALUES (?,?,?,10000)',
+    [name, clan, s]
+  );
+  const [rows] = await pool.query('SELECT * FROM npcs WHERE id=?', [r.insertId]);
+  const npc = rows[0];
+  if (npc && npc.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch {} }
+  console.log('✨ [NPC] Created ->', npc.id, npc.name, `(${npc.clan})`);
+  res.json({ npc });
+});
+
+// Get one NPC (detail)
+app.get('/api/admin/npcs/:id', authRequired, requireAdmin, async (req, res) => {
+  const [rows] = await pool.query('SELECT * FROM npcs WHERE id=?', [req.params.id]);
+  const npc = rows[0];
+  if (!npc) return res.status(404).json({ error: 'NPC not found' });
+  if (npc.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch {} }
+  console.log('👁️ [NPC] View ->', npc.id);
+  res.json({ npc });
+});
+
+// Edit NPC (name / clan / sheet / xp)
+app.patch('/api/admin/npcs/:id', authRequired, requireAdmin, async (req, res) => {
+  const { name, clan, sheet, xp } = req.body;
+  const fields = [], vals = [];
+  if (typeof name === 'string') { fields.push('name=?'); vals.push(name.trim()); }
+  if (typeof clan === 'string') { fields.push('clan=?'); vals.push(clan.trim()); }
+  if (sheet !== undefined) {
+    let jsonStr = null;
+    try { jsonStr = JSON.stringify(typeof sheet === 'string' ? JSON.parse(sheet) : sheet || {}); }
+    catch { return res.status(400).json({ error: 'sheet must be valid JSON' }); }
+    fields.push('sheet=?'); vals.push(jsonStr);
+  }
+  if (xp !== undefined) {
+    const n = Number(xp);
+    if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: 'xp must be a non-negative number' });
+    fields.push('xp=?'); vals.push(Math.floor(n));
+  }
+  if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
+
+  vals.push(req.params.id);
+  await pool.query(`UPDATE npcs SET ${fields.join(', ')} WHERE id=?`, vals);
+  const [rows] = await pool.query('SELECT * FROM npcs WHERE id=?', [req.params.id]);
+  const npc = rows[0];
+  if (npc && npc.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch {} }
+  console.log('🛠️ [NPC] Updated ->', npc.id);
+  res.json({ npc });
+});
+
+// Delete NPC
+app.delete('/api/admin/npcs/:id', authRequired, requireAdmin, async (req, res) => {
+  await pool.query('DELETE FROM npcs WHERE id=?', [req.params.id]);
+  console.log('🗑️ [NPC] Deleted ->', req.params.id);
+  res.json({ ok: true });
+});
+
+// Spend XP on NPC (same rules as PCs; free power assignment allowed)
+app.post('/api/admin/npcs/:id/xp/spend', authRequired, requireAdmin, async (req, res) => {
+  const {
+    type, target, currentLevel, newLevel,
+    ritualLevel, formulaLevel, dots,
+    disciplineKind, patchSheet
+  } = req.body;
+
+  const [rows] = await pool.query('SELECT * FROM npcs WHERE id=?', [req.params.id]);
+  const npc = rows[0];
+  if (!npc) return res.status(404).json({ error: 'NPC not found' });
+
+  // cost calc (same free-select logic as PCs)
+  let cost = 0;
+  try {
+    if (type === 'discipline' && (disciplineKind === 'select' || Number(newLevel) === Number(currentLevel))) {
+      cost = 0;
+    } else {
+      cost = xpCost({ type, newLevel, ritualLevel, formulaLevel, dots, disciplineKind });
+    }
+  } catch (e) {
+    console.warn('⚠️ NPC XP bad type', { type });
+    return res.status(400).json({ error: e.message });
+  }
+
+  if ((npc.xp || 0) < cost) {
+    return res.status(400).json({ error: `Not enough XP (need ${cost}, have ${npc.xp})` });
+  }
+
+  await pool.query('UPDATE npcs SET xp = xp - ? WHERE id=?', [cost, npc.id]);
+
+  if (patchSheet !== undefined) {
+    await pool.query('UPDATE npcs SET sheet=? WHERE id=?', [JSON.stringify(patchSheet), npc.id]);
+    console.log('📜 [NPC] Sheet patched ->', npc.id);
+  }
+
+  // optional log table, if you want parity with PCs:
+  try {
+    await pool.query(
+      'INSERT INTO xp_log (character_id, action, target, from_level, to_level, cost, payload, is_npc) VALUES (?,?,?,?,?,?,?,1)',
+      [npc.id, type, target || null, currentLevel || null, newLevel || null, cost, JSON.stringify({ disciplineKind, ritualLevel, formulaLevel, dots })]
+    );
+  } catch {}
+
+  const [out] = await pool.query('SELECT * FROM npcs WHERE id=?', [npc.id]);
+  const updated = out[0];
+  if (updated && updated.sheet && typeof updated.sheet === 'string') { try { updated.sheet = JSON.parse(updated.sheet); } catch {} }
+  console.log('✅ [NPC] XP spend ->', npc.id, 'spent:', cost, 'remaining:', updated?.xp);
+  res.json({ npc: updated, spent: cost });
+});
 
 
 
