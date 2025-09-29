@@ -1,41 +1,40 @@
-// server.js (with emoji logs)
+// server.js (with advanced logging)
 require('dotenv').config();
+
+// Import the new logger and its utility functions
+const { log, attachRequestLogger, expressErrorHandler, installProcessHandlers } = require('./logger');
+
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const nodemailer = require('nodemailer');
 const pool = require('./db'); // export pool.promise() from db.js
 const { authRequired, requireAdmin } = require('./authMiddleware');
 const axios = require('axios');
 
+// --- Setup ---
+
+// Install global handlers to catch crashes and unhandled promise rejections
+installProcessHandlers();
+
 const app = express();
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '1mb' }));
+app.set('trust proxy', true);
 
-/* -------------------- Logger helpers -------------------- */
-const log = {
-  start: (msg, extra) => console.log(`🚀 ${msg}`, extra ?? ''),
-  auth: (msg, extra) => console.log(`🔐 ${msg}`, extra ?? ''),
-  char: (msg, extra) => console.log(`🧛 ${msg}`, extra ?? ''),
-  xp:   (msg, extra) => console.log(`✨ ${msg}`, extra ?? ''),
-  dt:   (msg, extra) => console.log(`🕰️ ${msg}`, extra ?? ''),
-  dom:  (msg, extra) => console.log(`🏰 ${msg}`, extra ?? ''),
-  adm:  (msg, extra) => console.log(`🛡️ ${msg}`, extra ?? ''),
-  ok:   (msg, extra) => console.log(`✅ ${msg}`, extra ?? ''),
-  warn: (msg, extra) => console.warn(`⚠️ ${msg}`, extra ?? ''),
-  err:  (msg, extra) => console.error(`💥 ${msg}`, extra ?? '')
-};
+// Add the request logger middleware. It will log every incoming request and its response.
+// Place it right after express.json() to ensure it can log request bodies.
+app.use(attachRequestLogger());
 
 /* ------------------ Start server Mail ------------------ */
-
 async function sendResetEmailWithEmailJS({ to, name, link, appName='Erebus Portal' }) {
+  // (Your existing function)
   const payload = {
     service_id: process.env.EMAILJS_SERVICE_ID,
     template_id: process.env.EMAILJS_TEMPLATE_ID,
-    user_id: process.env.EMAILJS_PUBLIC_KEY,     // EmailJS calls this "public key" / user_id
-    accessToken: process.env.EMAILJS_PRIVATE_KEY || undefined, // optional, if you have it
+    user_id: process.env.EMAILJS_PUBLIC_KEY,
+    accessToken: process.env.EMAILJS_PRIVATE_KEY || undefined,
     template_params: {
       to_email: to,
       to_name: name || 'there',
@@ -44,13 +43,11 @@ async function sendResetEmailWithEmailJS({ to, name, link, appName='Erebus Porta
       expires_minutes: 30
     }
   };
-
   await axios.post('https://api.emailjs.com/api/v1.0/email/send', payload, {
     timeout: 20000,
     headers: { 'Content-Type': 'application/json' },
   });
 }
-
 
 
 /* -------------------- Helpers -------------------- */
@@ -61,68 +58,36 @@ const issueToken = (user) =>
     { expiresIn: '7d' }
   );
 
-function startOfMonth(d = new Date()) {
-  return new Date(d.getFullYear(), d.getMonth(), 1);
-}
-function endOfMonth(d = new Date()) {
-  return new Date(d.getFullYear(), d.getMonth() + 1, 1);
-}
-
+function startOfMonth(d = new Date()) { return new Date(d.getFullYear(), d.getMonth(), 1); }
+function endOfMonth(d = new Date()) { return new Date(d.getFullYear(), d.getMonth() + 1, 1); }
 function feedingFromPredator(pred) {
-  const map = {
-    Alleycat: 'Violent Hunt',
-    Sandman: 'Sleeping Prey',
-    Siren: 'Seduction',
-    Osiris: 'Cult Feeding',
-    Farmer: 'Animal/Bagged',
-    Bagger: 'Bagged Blood',
-    'Scene Queen': 'Scene Influence',
-    Consensualist: 'Consent Feeding',
-    Extortionist: 'Blackmail Feeding',
-    'Blood Leech': 'Vitae Theft',
-  };
+  const map = { Alleycat: 'Violent Hunt', Sandman: 'Sleeping Prey', Siren: 'Seduction', Osiris: 'Cult Feeding', Farmer: 'Animal/Bagged', Bagger: 'Bagged Blood', 'Scene Queen': 'Scene Influence', Consensualist: 'Consent Feeding', Extortionist: 'Blackmail Feeding', 'Blood Leech': 'Vitae Theft' };
   return map[pred] || 'Standard Feeding';
 }
-
-// XP cost rules
 function xpCost({ type, newLevel, ritualLevel, formulaLevel, dots = 1, disciplineKind }) {
-  // attribute / skill
   if (type === 'attribute') return Number(newLevel) * 5;
   if (type === 'skill') return Number(newLevel) * 3;
-
-  // specialties
   if (type === 'specialty') return 3;
-
-  // disciplines
   if (type === 'discipline') {
-    if (disciplineKind === 'clan')   return Number(newLevel) * 5;
-    if (disciplineKind === 'caitiff')return Number(newLevel) * 6;
-    return Number(newLevel) * 7; // other/predator
+    if (disciplineKind === 'clan') return Number(newLevel) * 5;
+    if (disciplineKind === 'caitiff') return Number(newLevel) * 6;
+    return Number(newLevel) * 7;
   }
-
-  // rituals & ceremonies (Oblivion ceremonies use same pricing as rituals)
   if (type === 'ritual' || type === 'ceremony') {
     const lvl = Number(ritualLevel ?? newLevel ?? 1);
     return lvl * 3;
   }
-
-  // thin-blood formula
   if (type === 'thin_blood_formula') {
     const lvl = Number(formulaLevel ?? newLevel ?? 1);
     return lvl * 3;
   }
-
-  // merits/backgrounds
   if (type === 'advantage') return 3 * Number(dots || 1);
-
-  // blood potency
   if (type === 'blood_potency') return Number(newLevel) * 10;
-
   throw new Error('Unknown XP type');
 }
 
 
-/* -------------------- Auth -------------------- */
+/* -------------------- Auth Routes -------------------- */
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { email, display_name, password } = req.body;
@@ -130,183 +95,120 @@ app.post('/api/auth/register', async (req, res) => {
       log.warn('Register missing fields', { email, display_name });
       return res.status(400).json({ error: 'Missing fields' });
     }
-
     const [exists] = await pool.query('SELECT id FROM users WHERE email=?', [email]);
     if (exists.length) {
       log.warn('Register email in use', { email });
       return res.status(409).json({ error: 'Email already in use' });
     }
-
     const hash = await bcrypt.hash(password, 12);
-    const [r] = await pool.query(
-      'INSERT INTO users (email, display_name, password_hash) VALUES (?,?,?)',
-      [email, display_name, hash]
-    );
-
+    const [r] = await pool.query('INSERT INTO users (email, display_name, password_hash) VALUES (?,?,?)', [email, display_name, hash]);
     log.auth('User registered', { id: r.insertId, email });
-
     const [rows] = await pool.query('SELECT id, email, display_name, role FROM users WHERE id=?', [r.insertId]);
     res.json({ token: issueToken(rows[0]) });
   } catch (e) {
-    log.err('Register failed', e);
+    log.err('Register failed', { message: e.message, stack: e.stack });
     res.status(500).json({ error: 'Register failed' });
   }
 });
 
 app.post('/api/auth/login', async (req, res) => {
+  // best-effort client IP (works with proxies/CDNs)
+  const ip =
+    req.headers['cf-connecting-ip'] ||
+    req.headers['x-real-ip'] ||
+    (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
+    req.ip ||
+    req.socket?.remoteAddress ||
+    'unknown';
+  const ua = req.get('user-agent');
+
   try {
-    const { email, password } = req.body;
+    const { email, password } = req.body || {};
     const [rows] = await pool.query('SELECT * FROM users WHERE email=?', [email]);
     const user = rows[0];
+
     if (!user) {
-      log.warn('Login invalid email', { email });
-      return res.status(401).json({ error: 'Invalid credentials' });
+      log.warn('Login invalid email', { email, ip, ua, req_id: req.id });
+      return res.status(401).json({ error: 'Invalid credentials', req_id: req.id });
     }
 
     const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) {
-      log.warn('Login wrong password', { email });
-      return res.status(401).json({ error: 'Invalid credentials' });
+      log.warn('Login wrong password', { email, ip, ua, req_id: req.id });
+      return res.status(401).json({ error: 'Invalid credentials', req_id: req.id });
     }
 
-    log.auth('User logged in', { id: user.id, email });
+    log.auth('User logged in', { user_id: user.id, email, ip, ua, req_id: req.id });
     res.json({ token: issueToken(user) });
   } catch (e) {
-    log.err('Login failed', e);
-    res.status(500).json({ error: 'Login failed' });
+    log.err('Login failed', { message: e.message, stack: e.stack, ip, ua, req_id: req.id });
+    res.status(500).json({ error: 'Login failed', req_id: req.id });
   }
 });
+
 
 app.get('/api/auth/me', authRequired, async (req, res) => {
   log.auth('Auth me', { id: req.user.id, email: req.user.email, role: req.user.role });
   res.json({ user: req.user });
 });
 
-
-async function sendResetEmailWithEmailJS({ to, name, link, appName = process.env.APP_NAME || 'Erebus Portal' }) {
-  if (!process.env.EMAILJS_SERVICE_ID || !process.env.EMAILJS_TEMPLATE_ID || !process.env.EMAILJS_PUBLIC_KEY) {
-    // Don't throw; log and pretend success to avoid breaking the flow / enumeration differences
-    log?.warn?.('EmailJS env not fully set; skipping send');
-    return;
-  }
-
-  const payload = {
-    service_id: process.env.EMAILJS_SERVICE_ID,
-    template_id: process.env.EMAILJS_TEMPLATE_ID,
-    user_id: process.env.EMAILJS_PUBLIC_KEY,        // EmailJS "Public Key"
-    accessToken: process.env.EMAILJS_PRIVATE_KEY || undefined, // optional
-    template_params: {
-      to_email: to,
-      to_name: name || 'there',
-      app_name: appName,
-      reset_link: link,
-      expires_minutes: 30,
-    },
-  };
-
-  await axios.post('https://api.emailjs.com/api/v1.0/email/send', payload, {
-    headers: { 'Content-Type': 'application/json' },
-    timeout: 20000,
-  });
-}
-// --------------------------------------------
-
-// Request a password reset email (generic response — no account enumeration)
 app.post('/api/auth/forgot', async (req, res) => {
-  const { email } = req.body || {};
-  const norm = (email || '').trim().toLowerCase();
-
-  // Always 200 at the end (don’t leak which emails exist)
-  const okResponse = () => res.json({ ok: true, message: 'If the email exists, a reset link has been sent.' });
-
-  try {
-    const [rows] = await pool.query('SELECT id, display_name FROM users WHERE email=?', [norm]);
-    const user = rows[0];
-    if (!user) return okResponse();
-
-    // basic throttle: if a token was created for this user in the last 10 minutes, silently succeed
-    const [recent] = await pool.query(
-      'SELECT id FROM password_resets WHERE user_id=? AND created_at >= DATE_SUB(NOW(), INTERVAL 10 MINUTE) AND used_at IS NULL',
-      [user.id]
-    );
-    if (recent.length) return okResponse();
-
-    // create token: tokenId.visible + secret.hidden
-    const tokenId = crypto.randomUUID();
-    const secret = crypto.randomBytes(32).toString('hex');
-    const combined = `${tokenId}.${secret}`;
-    const secretHash = await bcrypt.hash(secret, 12);
-    const expires = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
-
-    await pool.query(
-      'INSERT INTO password_resets (user_id, token_id, secret_hash, expires_at) VALUES (?,?,?,?)',
-      [user.id, tokenId, secretHash, expires]
-    );
-
-    // Build reset link
-    const appBase =
-      (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
-    const link = `${appBase}/reset?token=${encodeURIComponent(combined)}`;
-
-    // send via EmailJS (server-side)
+    // (Your existing route)
+    const { email } = req.body || {};
+    const norm = (email || '').trim().toLowerCase();
+    const okResponse = () => res.json({ ok: true, message: 'If the email exists, a reset link has been sent.' });
     try {
-      await sendResetEmailWithEmailJS({
-        to: norm,
-        name: user.display_name,
-        link,
-        appName: process.env.APP_NAME || 'Erebus Portal',
-      });
-    } catch (sendErr) {
-      // Log but do NOT reveal to the client (avoid enumeration/leakage)
-      log?.err?.('EmailJS send failed', sendErr?.response?.data || sendErr?.message || sendErr);
+        const [rows] = await pool.query('SELECT id, display_name FROM users WHERE email=?', [norm]);
+        const user = rows[0];
+        if (!user) return okResponse();
+        const [recent] = await pool.query('SELECT id FROM password_resets WHERE user_id=? AND created_at >= DATE_SUB(NOW(), INTERVAL 10 MINUTE) AND used_at IS NULL', [user.id]);
+        if (recent.length) return okResponse();
+        const tokenId = crypto.randomUUID();
+        const secret = crypto.randomBytes(32).toString('hex');
+        const combined = `${tokenId}.${secret}`;
+        const secretHash = await bcrypt.hash(secret, 12);
+        const expires = new Date(Date.now() + 30 * 60 * 1000);
+        await pool.query('INSERT INTO password_resets (user_id, token_id, secret_hash, expires_at) VALUES (?,?,?,?)', [user.id, tokenId, secretHash, expires]);
+        const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
+        const link = `${appBase}/reset?token=${encodeURIComponent(combined)}`;
+        try {
+            await sendResetEmailWithEmailJS({ to: norm, name: user.display_name, link, appName: process.env.APP_NAME || 'Erebus Portal' });
+        } catch (sendErr) {
+            log.err('EmailJS send failed', { error: sendErr?.response?.data || sendErr?.message });
+        }
+        return okResponse();
+    } catch (e) {
+        log.err('Forgot password error', { message: e.message, stack: e.stack });
+        return okResponse();
     }
-
-    return okResponse();
-  } catch (e) {
-    log.err('Forgot password error', e);
-    return okResponse(); // still generic
-  }
 });
 
-// Complete a password reset with token + new password
 app.post('/api/auth/reset', async (req, res) => {
-  const { token, password } = req.body || {};
-  if (typeof token !== 'string' || typeof password !== 'string' || password.length < 8) {
-    return res.status(400).json({ error: 'Bad request (password must be at least 8 chars).' });
-  }
-
-  const parts = token.split('.');
-  if (parts.length !== 2) return res.status(400).json({ error: 'Invalid token' });
-
-  const [tokenId, secret] = parts;
-
-  try {
-    const [rows] = await pool.query(
-      'SELECT * FROM password_resets WHERE token_id=? AND used_at IS NULL AND expires_at > NOW()',
-      [tokenId]
-    );
-    const row = rows[0];
-    if (!row) return res.status(400).json({ error: 'Invalid or expired token' });
-
-    const ok = await bcrypt.compare(secret, row.secret_hash);
-    if (!ok) return res.status(400).json({ error: 'Invalid or expired token' });
-
-    // update password
-    const hash = await bcrypt.hash(password, 12);
-    await pool.query('UPDATE users SET password_hash=? WHERE id=?', [hash, row.user_id]);
-
-    // mark token used, and optionally invalidate other outstanding tokens for this user
-    await pool.query('UPDATE password_resets SET used_at=NOW() WHERE id=?', [row.id]);
-    await pool.query('UPDATE password_resets SET used_at=NOW() WHERE user_id=? AND used_at IS NULL', [row.user_id]);
-
-    log.auth('Password reset complete', { user_id: row.user_id });
-    return res.json({ ok: true });
-  } catch (e) {
-    log.err('Reset password error', e);
-    return res.status(500).json({ error: 'Reset failed' });
-  }
+    // (Your existing route)
+    const { token, password } = req.body || {};
+    if (typeof token !== 'string' || typeof password !== 'string' || password.length < 8) {
+        return res.status(400).json({ error: 'Bad request (password must be at least 8 chars).' });
+    }
+    const parts = token.split('.');
+    if (parts.length !== 2) return res.status(400).json({ error: 'Invalid token' });
+    const [tokenId, secret] = parts;
+    try {
+        const [rows] = await pool.query('SELECT * FROM password_resets WHERE token_id=? AND used_at IS NULL AND expires_at > NOW()', [tokenId]);
+        const row = rows[0];
+        if (!row) return res.status(400).json({ error: 'Invalid or expired token' });
+        const ok = await bcrypt.compare(secret, row.secret_hash);
+        if (!ok) return res.status(400).json({ error: 'Invalid or expired token' });
+        const hash = await bcrypt.hash(password, 12);
+        await pool.query('UPDATE users SET password_hash=? WHERE id=?', [hash, row.user_id]);
+        await pool.query('UPDATE password_resets SET used_at=NOW() WHERE id=?', [row.id]);
+        await pool.query('UPDATE password_resets SET used_at=NOW() WHERE user_id=? AND used_at IS NULL', [row.user_id]);
+        log.auth('Password reset complete', { user_id: row.user_id });
+        return res.json({ ok: true });
+    } catch (e) {
+        log.err('Reset password error', { message: e.message, stack: e.stack });
+        return res.status(500).json({ error: 'Reset failed' });
+    }
 });
-
 
 
 /* -------------------- Characters -------------------- */
@@ -950,6 +852,8 @@ app.delete('/api/admin/domain-claims/:division', authRequired, requireAdmin, asy
   res.json({ ok: true });
 });
 
-/* -------------------- Start -------------------- */
+app.use(expressErrorHandler());
+
+/* -------------------- Start Server -------------------- */
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => log.start(`API on http://localhost:${PORT}`));
+app.listen(PORT, () => log.start(`API server started`, { port: PORT, env: process.env.NODE_ENV || 'development' }));
