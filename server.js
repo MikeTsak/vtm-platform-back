@@ -4,8 +4,11 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const nodemailer = require('nodemailer');
 const pool = require('./db'); // export pool.promise() from db.js
 const { authRequired, requireAdmin } = require('./authMiddleware');
+const axios = require('axios');
 
 const app = express();
 app.use(cors({ origin: true, credentials: true }));
@@ -24,6 +27,31 @@ const log = {
   warn: (msg, extra) => console.warn(`⚠️ ${msg}`, extra ?? ''),
   err:  (msg, extra) => console.error(`💥 ${msg}`, extra ?? '')
 };
+
+/* ------------------ Start server Mail ------------------ */
+
+async function sendResetEmailWithEmailJS({ to, name, link, appName='Erebus Portal' }) {
+  const payload = {
+    service_id: process.env.EMAILJS_SERVICE_ID,
+    template_id: process.env.EMAILJS_TEMPLATE_ID,
+    user_id: process.env.EMAILJS_PUBLIC_KEY,     // EmailJS calls this "public key" / user_id
+    accessToken: process.env.EMAILJS_PRIVATE_KEY || undefined, // optional, if you have it
+    template_params: {
+      to_email: to,
+      to_name: name || 'there',
+      app_name: appName,
+      reset_link: link,
+      expires_minutes: 30
+    }
+  };
+
+  await axios.post('https://api.emailjs.com/api/v1.0/email/send', payload, {
+    timeout: 20000,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+
 
 /* -------------------- Helpers -------------------- */
 const issueToken = (user) =>
@@ -153,6 +181,133 @@ app.get('/api/auth/me', authRequired, async (req, res) => {
   log.auth('Auth me', { id: req.user.id, email: req.user.email, role: req.user.role });
   res.json({ user: req.user });
 });
+
+
+async function sendResetEmailWithEmailJS({ to, name, link, appName = process.env.APP_NAME || 'Erebus Portal' }) {
+  if (!process.env.EMAILJS_SERVICE_ID || !process.env.EMAILJS_TEMPLATE_ID || !process.env.EMAILJS_PUBLIC_KEY) {
+    // Don't throw; log and pretend success to avoid breaking the flow / enumeration differences
+    log?.warn?.('EmailJS env not fully set; skipping send');
+    return;
+  }
+
+  const payload = {
+    service_id: process.env.EMAILJS_SERVICE_ID,
+    template_id: process.env.EMAILJS_TEMPLATE_ID,
+    user_id: process.env.EMAILJS_PUBLIC_KEY,        // EmailJS "Public Key"
+    accessToken: process.env.EMAILJS_PRIVATE_KEY || undefined, // optional
+    template_params: {
+      to_email: to,
+      to_name: name || 'there',
+      app_name: appName,
+      reset_link: link,
+      expires_minutes: 30,
+    },
+  };
+
+  await axios.post('https://api.emailjs.com/api/v1.0/email/send', payload, {
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 20000,
+  });
+}
+// --------------------------------------------
+
+// Request a password reset email (generic response — no account enumeration)
+app.post('/api/auth/forgot', async (req, res) => {
+  const { email } = req.body || {};
+  const norm = (email || '').trim().toLowerCase();
+
+  // Always 200 at the end (don’t leak which emails exist)
+  const okResponse = () => res.json({ ok: true, message: 'If the email exists, a reset link has been sent.' });
+
+  try {
+    const [rows] = await pool.query('SELECT id, display_name FROM users WHERE email=?', [norm]);
+    const user = rows[0];
+    if (!user) return okResponse();
+
+    // basic throttle: if a token was created for this user in the last 10 minutes, silently succeed
+    const [recent] = await pool.query(
+      'SELECT id FROM password_resets WHERE user_id=? AND created_at >= DATE_SUB(NOW(), INTERVAL 10 MINUTE) AND used_at IS NULL',
+      [user.id]
+    );
+    if (recent.length) return okResponse();
+
+    // create token: tokenId.visible + secret.hidden
+    const tokenId = crypto.randomUUID();
+    const secret = crypto.randomBytes(32).toString('hex');
+    const combined = `${tokenId}.${secret}`;
+    const secretHash = await bcrypt.hash(secret, 12);
+    const expires = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+
+    await pool.query(
+      'INSERT INTO password_resets (user_id, token_id, secret_hash, expires_at) VALUES (?,?,?,?)',
+      [user.id, tokenId, secretHash, expires]
+    );
+
+    // Build reset link
+    const appBase =
+      (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
+    const link = `${appBase}/reset?token=${encodeURIComponent(combined)}`;
+
+    // send via EmailJS (server-side)
+    try {
+      await sendResetEmailWithEmailJS({
+        to: norm,
+        name: user.display_name,
+        link,
+        appName: process.env.APP_NAME || 'Erebus Portal',
+      });
+    } catch (sendErr) {
+      // Log but do NOT reveal to the client (avoid enumeration/leakage)
+      log?.err?.('EmailJS send failed', sendErr?.response?.data || sendErr?.message || sendErr);
+    }
+
+    return okResponse();
+  } catch (e) {
+    log.err('Forgot password error', e);
+    return okResponse(); // still generic
+  }
+});
+
+// Complete a password reset with token + new password
+app.post('/api/auth/reset', async (req, res) => {
+  const { token, password } = req.body || {};
+  if (typeof token !== 'string' || typeof password !== 'string' || password.length < 8) {
+    return res.status(400).json({ error: 'Bad request (password must be at least 8 chars).' });
+  }
+
+  const parts = token.split('.');
+  if (parts.length !== 2) return res.status(400).json({ error: 'Invalid token' });
+
+  const [tokenId, secret] = parts;
+
+  try {
+    const [rows] = await pool.query(
+      'SELECT * FROM password_resets WHERE token_id=? AND used_at IS NULL AND expires_at > NOW()',
+      [tokenId]
+    );
+    const row = rows[0];
+    if (!row) return res.status(400).json({ error: 'Invalid or expired token' });
+
+    const ok = await bcrypt.compare(secret, row.secret_hash);
+    if (!ok) return res.status(400).json({ error: 'Invalid or expired token' });
+
+    // update password
+    const hash = await bcrypt.hash(password, 12);
+    await pool.query('UPDATE users SET password_hash=? WHERE id=?', [hash, row.user_id]);
+
+    // mark token used, and optionally invalidate other outstanding tokens for this user
+    await pool.query('UPDATE password_resets SET used_at=NOW() WHERE id=?', [row.id]);
+    await pool.query('UPDATE password_resets SET used_at=NOW() WHERE user_id=? AND used_at IS NULL', [row.user_id]);
+
+    log.auth('Password reset complete', { user_id: row.user_id });
+    return res.json({ ok: true });
+  } catch (e) {
+    log.err('Reset password error', e);
+    return res.status(500).json({ error: 'Reset failed' });
+  }
+});
+
+
 
 /* -------------------- Characters -------------------- */
 // Get my character (parse sheet if string)
@@ -380,18 +535,8 @@ app.patch('/api/admin/characters/:id', authRequired, requireAdmin, async (req, r
 
 /* -------------------- NPCs (Admin only) -------------------- */
 
-// List all NPCs
-app.get('/api/admin/npcs', authRequired, requireAdmin, async (_req, res) => {
-  const [rows] = await pool.query('SELECT * FROM npcs ORDER BY created_at DESC');
-  rows.forEach(r => {
-    if (r.sheet && typeof r.sheet === 'string') { try { r.sheet = JSON.parse(r.sheet); } catch {} }
-  });
-  console.log('🧛‍♂️ [NPC] List ->', rows.length);
-  res.json({ npcs: rows });
-});
 
-/* -------------------- NPCs (ADMIN) -------------------- */
-// List NPCs
+// List NPCs (characters table; NPCs have user_id NULL)
 app.get('/api/admin/npcs', authRequired, requireAdmin, async (req, res) => {
   const [rows] = await pool.query(
     'SELECT * FROM characters WHERE user_id IS NULL ORDER BY created_at DESC'
@@ -413,7 +558,6 @@ app.post('/api/admin/npcs', authRequired, requireAdmin, async (req, res) => {
   const [rows] = await pool.query('SELECT * FROM characters WHERE id=?', [r.insertId]);
   const npc = rows[0];
   if (npc && npc.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch {} }
-  log.ok('🧪 NPC created', { id: npc.id, name: npc.name, xp: npc.xp });
   res.json({ npc });
 });
 
@@ -443,13 +587,13 @@ app.patch('/api/admin/npcs/:id', authRequired, requireAdmin, async (req, res) =>
   if (clan != null) { fields.push('clan=?'); vals.push(clan); }
   if (sheet !== undefined) { fields.push('sheet=?'); vals.push(sheet ? JSON.stringify(sheet) : null); }
   if (typeof xp === 'number') { fields.push('xp=?'); vals.push(xp); }
-
   if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
-  vals.push(req.params.id);
-  await pool.query(`UPDATE characters SET ${fields.join(', ')} WHERE id=?`, vals);
 
-  const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [req.params.id]);
-  const npc = out[0];
+  vals.push(req.params.id);
+  await pool.query(`UPDATE characters SET ${fields.join(', ')} WHERE id=? AND user_id IS NULL`, vals);
+
+  const [rows2] = await pool.query('SELECT * FROM characters WHERE id=?', [req.params.id]);
+  const npc = rows2[0];
   if (npc.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch {} }
   res.json({ npc });
 });
