@@ -85,6 +85,88 @@ function xpCost({ type, newLevel, ritualLevel, formulaLevel, dots = 1, disciplin
   if (type === 'blood_potency') return Number(newLevel) * 10;
   throw new Error('Unknown XP type');
 }
+// --- Simple status/health ---
+
+// Optional: capture server start time
+const startedAt = new Date();
+
+// JSON health probe (good for uptime checks / Kubernetes / monitors)
+app.get('/api/health', async (req, res) => {
+  try {
+    // Quick DB ping (remove if you don't want DB coupled to health)
+    const [rows] = await pool.query('SELECT 1 AS ok');
+    const dbOk = rows?.[0]?.ok === 1;
+
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      ok: true,
+      db: dbOk,
+      env: process.env.NODE_ENV || 'stable',
+      uptime_sec: Math.floor(process.uptime()),
+      started_at: startedAt.toISOString(),
+      now: new Date().toISOString(),
+    });
+  } catch (e) {
+    return res.status(500).json({
+      ok: false,
+      db: false,
+      error: e.message,
+      now: new Date().toISOString(),
+    });
+  }
+});
+
+// Friendly HTML at "/" (quick glance in the browser)
+app.get('/', async (req, res) => {
+  // Optionally also check DB here; keep it light
+  let dbStatus = 'unknown';
+  try {
+    const [rows] = await pool.query('SELECT 1 AS ok');
+    dbStatus = rows?.[0]?.ok === 1 ? 'OK' : 'DOWN';
+  } catch {
+    dbStatus = 'DOWN';
+  }
+
+  res.set('Cache-Control', 'no-store').type('html').send(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>API Status</title>
+<style>
+  :root { --bg:#0b0b0c; --card:#141418; --fg:#e8e8ea; --muted:#a3a3ad; --ok:#3ecf8e; --bad:#ff6b6b; --dim:#1f1f24; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Ubuntu,Helvetica,Arial,sans-serif; background:var(--bg); color:var(--fg); display:grid; place-items:center; min-height:100vh; }
+  .card { background:var(--card); border:1px solid var(--dim); border-radius:14px; padding:20px 22px; width:min(680px,92vw); box-shadow:0 10px 30px rgba(0,0,0,.35); }
+  h1 { margin:0 0 6px; font-size:22px; letter-spacing:.25px; }
+  .muted { color:var(--muted); font-size:13px; }
+  .grid { display:grid; grid-template-columns: 160px 1fr; row-gap:8px; column-gap:12px; margin-top:14px; }
+  .k { color:var(--muted); }
+  .v { font-weight:600; }
+  .ok { color:var(--ok); }
+  .bad { color:var(--bad); }
+  code { background:var(--dim); padding:2px 6px; border-radius:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; }
+  a { color:#8ab4f8; text-decoration:none; }
+  a:hover { text-decoration:underline; }
+</style>
+</head>
+<body>
+  <main class="card" role="status" aria-live="polite">
+    <h1>Erebus🦇 API Status: <span class="${dbStatus === 'OK' ? 'ok' : 'bad'}">${dbStatus === 'OK' ? 'OK' : 'DEGRADED'}</span></h1>
+    <div class="muted">This page is served by the API process.</div>
+    <div class="grid">
+      <div class="k">Environment</div><div class="v"><code>${process.env.NODE_ENV || 'stable'}</code></div>
+      <div class="k">Node.js</div><div class="v"><code>${process.version}</code></div>
+      <div class="k">Uptime</div><div class="v">${Math.floor(process.uptime())}s</div>
+      <div class="k">Started</div><div class="v">${startedAt.toISOString()}</div>
+      <div class="k">Now</div><div class="v">${new Date().toISOString()}</div>
+      <div class="k">DB</div><div class="v ${dbStatus === 'OK' ? 'ok' : 'bad'}">${dbStatus}</div>
+      <div class="k">Health JSON</div><div class="v"><a href="/api/health">/api/health</a></div>
+    </div>
+  </main>
+</body>
+</html>`);
+});
 
 
 /* -------------------- Auth Routes -------------------- */
@@ -438,52 +520,57 @@ app.patch('/api/admin/characters/:id', authRequired, requireAdmin, async (req, r
 /* -------------------- NPCs (Admin only) -------------------- */
 
 
-// List NPCs (characters table; NPCs have user_id NULL)
+// List NPCs (admin) — single canonical route
 app.get('/api/admin/npcs', authRequired, requireAdmin, async (req, res) => {
-  const [rows] = await pool.query(
-    'SELECT * FROM characters WHERE user_id IS NULL ORDER BY created_at DESC'
-  );
+  const [rows] = await pool.query('SELECT * FROM npcs ORDER BY id DESC');
+
+  // Parse JSON sheet if stored as string
   rows.forEach(r => {
-    if (r.sheet && typeof r.sheet === 'string') { try { r.sheet = JSON.parse(r.sheet); } catch {} }
+    if (r.sheet && typeof r.sheet === 'string') {
+      try { r.sheet = JSON.parse(r.sheet); } catch {}
+    }
   });
+
+  // DEBUG: confirm DB and count to diagnose “empty” responses
+  try {
+    const [[db]] = await pool.query('SELECT DATABASE() AS db');
+    console.log('🛡️ NPC list', { db: db.db, count: rows.length });
+  } catch {}
+
   res.json({ npcs: rows });
 });
 
-// Create NPC (starts with 10,000 XP)
+
+
+
+/// Create NPC
 app.post('/api/admin/npcs', authRequired, requireAdmin, async (req, res) => {
   const { name, clan, sheet } = req.body;
   if (!name || !clan) return res.status(400).json({ error: 'Name and clan are required' });
+
   const [r] = await pool.query(
-    'INSERT INTO characters (user_id, name, clan, sheet, xp) VALUES (NULL,?,?,?,?)',
+    'INSERT INTO npcs (name, clan, sheet, xp) VALUES (?,?,?,?)',
     [name, clan, sheet ? JSON.stringify(sheet) : null, 10000]
   );
-  const [rows] = await pool.query('SELECT * FROM characters WHERE id=?', [r.insertId]);
+
+  const [rows] = await pool.query('SELECT * FROM npcs WHERE id=?', [r.insertId]);
   const npc = rows[0];
-  if (npc && npc.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch {} }
+  if (npc?.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch {} }
   res.json({ npc });
 });
 
 // Get NPC by id
 app.get('/api/admin/npcs/:id', authRequired, requireAdmin, async (req, res) => {
-  const [rows] = await pool.query(
-    'SELECT * FROM characters WHERE id=? AND user_id IS NULL',
-    [req.params.id]
-  );
+  const [rows] = await pool.query('SELECT * FROM npcs WHERE id=?', [req.params.id]);
   if (!rows.length) return res.status(404).json({ error: 'NPC not found' });
   const npc = rows[0];
-  if (npc.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch {} }
+  if (npc?.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch {} }
   res.json({ npc });
 });
 
 // Update NPC
 app.patch('/api/admin/npcs/:id', authRequired, requireAdmin, async (req, res) => {
   const { name, clan, sheet, xp } = req.body;
-  const [rows] = await pool.query(
-    'SELECT * FROM characters WHERE id=? AND user_id IS NULL',
-    [req.params.id]
-  );
-  if (!rows.length) return res.status(404).json({ error: 'NPC not found' });
-
   const fields = [], vals = [];
   if (name != null) { fields.push('name=?'); vals.push(name); }
   if (clan != null) { fields.push('clan=?'); vals.push(clan); }
@@ -492,36 +579,29 @@ app.patch('/api/admin/npcs/:id', authRequired, requireAdmin, async (req, res) =>
   if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
 
   vals.push(req.params.id);
-  await pool.query(`UPDATE characters SET ${fields.join(', ')} WHERE id=? AND user_id IS NULL`, vals);
+  await pool.query(`UPDATE npcs SET ${fields.join(', ')} WHERE id=?`, vals);
 
-  const [rows2] = await pool.query('SELECT * FROM characters WHERE id=?', [req.params.id]);
-  const npc = rows2[0];
-  if (npc.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch {} }
+  const [rows] = await pool.query('SELECT * FROM npcs WHERE id=?', [req.params.id]);
+  const npc = rows[0];
+  if (npc?.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch {} }
   res.json({ npc });
 });
 
 // Delete NPC
 app.delete('/api/admin/npcs/:id', authRequired, requireAdmin, async (req, res) => {
-  await pool.query('DELETE FROM characters WHERE id=? AND user_id IS NULL', [req.params.id]);
+  await pool.query('DELETE FROM npcs WHERE id=?', [req.params.id]);
   res.json({ ok: true });
 });
 
-// Spend XP (NPC) — same rules as players, but target by :id
+// Spend XP (NPC)
 app.post('/api/admin/npcs/:id/xp/spend', authRequired, requireAdmin, async (req, res) => {
-  const {
-    type, target, currentLevel, newLevel,
-    ritualLevel, formulaLevel, dots,
-    disciplineKind, patchSheet
-  } = req.body;
+  const { type, target, currentLevel, newLevel, ritualLevel, formulaLevel, dots, disciplineKind, patchSheet } = req.body;
 
-  const [rows] = await pool.query(
-    'SELECT * FROM characters WHERE id=? AND user_id IS NULL',
-    [req.params.id]
-  );
+  const [rows] = await pool.query('SELECT * FROM npcs WHERE id=?', [req.params.id]);
   const ch = rows[0];
   if (!ch) return res.status(404).json({ error: 'NPC not found' });
 
-  // cost (discipline power assignment is free)
+  // cost calc same as before
   let cost = 0;
   try {
     if (type === 'discipline' && (disciplineKind === 'select' || Number(newLevel) === Number(currentLevel))) {
@@ -530,7 +610,6 @@ app.post('/api/admin/npcs/:id/xp/spend', authRequired, requireAdmin, async (req,
       cost = xpCost({ type, newLevel, ritualLevel, formulaLevel, dots, disciplineKind });
     }
   } catch (e) {
-    log.warn('XP spend bad type', { type });
     return res.status(400).json({ error: e.message });
   }
 
@@ -538,27 +617,21 @@ app.post('/api/admin/npcs/:id/xp/spend', authRequired, requireAdmin, async (req,
     return res.status(400).json({ error: `Not enough XP (need ${cost}, have ${ch.xp})` });
   }
 
-  log.xp('NPC XP spend', { npc_id: ch.id, type, target, currentLevel, newLevel, cost });
-
-  await pool.query('UPDATE characters SET xp = xp - ? WHERE id=?', [cost, ch.id]);
-
+  if (cost > 0) {
+    await pool.query('UPDATE npcs SET xp = xp - ? WHERE id=?', [cost, ch.id]);
+  }
   if (patchSheet !== undefined) {
-    await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(patchSheet), ch.id]);
+    await pool.query('UPDATE npcs SET sheet=? WHERE id=?', [JSON.stringify(patchSheet), ch.id]);
   }
 
-  try {
-    await pool.query(
-      'INSERT INTO xp_log (character_id, action, target, from_level, to_level, cost, payload) VALUES (?,?,?,?,?,?,?)',
-      [ch.id, type, target || null, currentLevel || null, newLevel || null, cost,
-        JSON.stringify({ disciplineKind, ritualLevel, formulaLevel, dots })]
-    );
-  } catch (_) {}
+  // optional: log to xp_log if you want, but use character_id=null or a separate npc_id column if your schema supports it
 
-  const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [ch.id]);
+  const [out] = await pool.query('SELECT * FROM npcs WHERE id=?', [ch.id]);
   const outCh = out[0];
-  if (outCh.sheet && typeof outCh.sheet === 'string') { try { outCh.sheet = JSON.parse(outCh.sheet); } catch {} }
+  if (outCh?.sheet && typeof outCh.sheet === 'string') { try { outCh.sheet = JSON.parse(outCh.sheet); } catch {} }
   res.json({ character: outCh, spent: cost });
 });
+
 
 
 
@@ -856,4 +929,4 @@ app.use(expressErrorHandler());
 
 /* -------------------- Start Server -------------------- */
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => log.start(`API server started`, { port: PORT, env: process.env.NODE_ENV || 'development' }));
+app.listen(PORT, () => log.start(`API server started`, { port: PORT, env: process.env.NODE_ENV || 'stable' }));
