@@ -775,6 +775,118 @@ app.delete('/api/admin/domains/:id/members/:character_id', authRequired, require
   res.json({ ok: true });
 });
 
+/* -------------------- Chat -------------------- */
+// NOTE TO USER: You may need to add 'chat' to your logger configuration if it's a custom one.
+// Get list of users to chat with (all except me)
+app.get('/api/chat/users', authRequired, async (req, res) => {
+  try {
+    const [users] = await pool.query(
+      // FIX: Added 'c.clan' to the SELECT statement
+      `SELECT u.id, u.display_name, c.name as char_name, c.clan
+       FROM users u
+       LEFT JOIN characters c ON u.id = c.user_id
+       WHERE u.id != ?
+       ORDER BY u.display_name ASC`,
+      [req.user.id]
+    );
+    res.json({ users });
+  } catch (e) {
+    log.err('Failed to get chat users', { message: e.message });
+    res.status(500).json({ error: 'Failed to get users' });
+  }
+});
+
+// Get message history with another user
+app.get('/api/chat/history/:otherUserId', authRequired, async (req, res) => {
+  try {
+    const otherUserId = Number(req.params.otherUserId);
+    const myId = req.user.id;
+
+    const [messages] = await pool.query(
+      `SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at, u_sender.display_name as sender_name
+       FROM chat_messages cm
+       JOIN users u_sender ON cm.sender_id = u_sender.id
+       WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)
+       ORDER BY created_at ASC`,
+      [myId, otherUserId, otherUserId, myId]
+    );
+    res.json({ messages });
+  } catch (e) {
+    log.err('Failed to get chat history', { message: e.message });
+    res.status(500).json({ error: 'Failed to get history' });
+  }
+});
+
+// Send a message
+app.post('/api/chat/messages', authRequired, async (req, res) => {
+  try {
+    const { recipient_id, body } = req.body;
+    if (!recipient_id || !body || typeof body !== 'string' || body.trim().length === 0) {
+      return res.status(400).json({ error: 'Recipient and non-empty body are required' });
+    }
+
+    const [r] = await pool.query(
+      'INSERT INTO chat_messages (sender_id, recipient_id, body) VALUES (?, ?, ?)',
+      [req.user.id, recipient_id, body.trim()]
+    );
+
+    const [[message]] = await pool.query(
+        `SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at, u_sender.display_name as sender_name
+         FROM chat_messages cm
+         JOIN users u_sender ON cm.sender_id = u_sender.id
+         WHERE cm.id = ?`,
+        [r.insertId]
+    );
+    
+    // Using `log.ok` as a generic success logger, assuming `log.chat` is not configured.
+    log.ok('Message sent', { from: req.user.id, to: recipient_id, msg_id: r.insertId });
+    res.status(201).json({ message });
+
+  } catch (e) {
+    log.err('Failed to send message', { message: e.message });
+    res.status(500).json({ error: 'Failed to send message' });
+  }
+});
+
+// Mark messages from a specific user as read
+app.post('/api/chat/read', authRequired, async (req, res) => {
+    try {
+        const { sender_id } = req.body;
+        if (!sender_id) return res.status(400).json({ error: 'sender_id is required' });
+
+        await pool.query(
+            'UPDATE chat_messages SET read_at = NOW() WHERE sender_id = ? AND recipient_id = ? AND read_at IS NULL',
+            [sender_id, req.user.id]
+        );
+        res.json({ ok: true });
+    } catch (e) {
+        log.err('Failed to mark messages as read', { message: e.message });
+        res.status(500).json({ error: 'Failed to mark as read' });
+    }
+});
+
+// ADMIN: Get all chat messages
+app.get('/api/admin/chat/all', authRequired, requireAdmin, async (req, res) => {
+    try {
+        const [messages] = await pool.query(
+            `SELECT
+                cm.id, cm.body, cm.created_at,
+                s.id as sender_id, s.display_name as sender_name,
+                r.id as recipient_id, r.display_name as recipient_name
+            FROM chat_messages cm
+            JOIN users s ON cm.sender_id = s.id
+            JOIN users r ON cm.recipient_id = r.id
+            ORDER BY cm.created_at DESC`
+        );
+        log.adm('Admin fetched all chat messages', { count: messages.length });
+        res.json({ messages });
+    } catch (e) {
+        log.err('Failed to get all chat messages for admin', { message: e.message });
+        res.status(500).json({ error: 'Failed to fetch messages' });
+    }
+});
+
+
 /* -------------------- Admin views -------------------- */
 app.get('/api/admin/users', authRequired, requireAdmin, async (_req, res) => {
   const [rows] = await pool.query(
@@ -930,3 +1042,4 @@ app.use(expressErrorHandler());
 /* -------------------- Start Server -------------------- */
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => log.start(`API server started`, { port: PORT, env: process.env.NODE_ENV || 'stable' }));
+
