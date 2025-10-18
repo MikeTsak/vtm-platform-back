@@ -632,7 +632,196 @@ app.post('/api/admin/npcs/:id/xp/spend', authRequired, requireAdmin, async (req,
   res.json({ character: outCh, spent: cost });
 });
 
+app.get('/api/admin/chat/npc-conversations/:npcId', authRequired, requireAdmin, async (req, res) => {
+  const npcId = Number(req.params.npcId);
+  try {
+    // Query to get distinct users who have messaged this NPC, ordered by last message time.
+    const [rows] = await pool.query(`
+      SELECT 
+        u.id AS user_id, 
+        u.display_name, 
+        c.name AS char_name, 
+        MAX(m.created_at) AS last_message_at
+      FROM npc_chat_messages m
+      JOIN users u ON m.user_id = u.id
+      LEFT JOIN characters c ON u.character_id = c.id
+      WHERE m.npc_id = ?
+      GROUP BY u.id, u.display_name, c.name
+      ORDER BY last_message_at DESC
+    `, [npcId]);
+    
+    res.json({ conversations: rows });
+  } catch (e) {
+    log.err('Admin get NPC conversations failed', { message: e.message, stack: e.stack });
+    res.status(500).json({ error: 'Failed to fetch NPC conversations' });
+  }
+});
 
+/** Admin: Get chat history between a specific NPC and a specific User */
+app.get('/api/admin/chat/npc-history/:npcId/:userId', authRequired, requireAdmin, async (req, res) => {
+  const npcId = Number(req.params.npcId);
+  const userId = Number(req.params.userId);
+
+  try {
+    const [messages] = await pool.query(
+      `SELECT id, body, from_side, created_at FROM npc_chat_messages 
+       WHERE npc_id = ? AND user_id = ? 
+       ORDER BY created_at ASC`,
+      [npcId, userId]
+    );
+    
+    res.json({ messages });
+  } catch (e) {
+    log.err('Admin fetch NPC chat history failed', { message: e.message, stack: e.stack });
+    res.status(500).json({ error: 'Failed to fetch chat history' });
+  }
+});
+
+/** Admin: Send a message from an NPC to a User */
+app.post('/api/admin/chat/reply-as-npc/:npcId/:userId', authRequired, requireAdmin, async (req, res) => {
+  const npcId = Number(req.params.npcId);
+  const userId = Number(req.params.userId);
+  const { body } = req.body;
+
+  if (!body || body.trim().length === 0) {
+    return res.status(400).json({ error: 'Message body is required' });
+  }
+
+  try {
+    // Basic validation (NPC/User existence, assuming tables/data models)
+    const [npcRows] = await pool.query('SELECT id FROM npcs WHERE id=?', [npcId]);
+    if (npcRows.length === 0) {
+      return res.status(404).json({ error: 'NPC not found' });
+    }
+    const [userRows] = await pool.query('SELECT id FROM users WHERE id=?', [userId]);
+    if (userRows.length === 0) {
+      return res.status(404).json({ error: 'Target user not found' });
+    }
+
+    // Insert message into the NPC chat table, sent from the 'npc' side
+    await pool.query(
+      'INSERT INTO npc_chat_messages (user_id, npc_id, body, from_side) VALUES (?, ?, ?, ?)',
+      [userId, npcId, body, 'npc']
+    );
+    
+    log.adm('Admin replied as NPC', { admin_id: req.user.id, npc_id: npcId, to_user_id: userId });
+    res.json({ ok: true, message: 'Message sent as NPC' });
+  } catch (e) {
+    log.err('Admin reply as NPC failed', { message: e.message, stack: e.stack });
+    res.status(500).json({ error: 'Failed to send message as NPC' });
+  }
+});
+
+// List all NPCs (public for logged-in players)
+app.get('/api/chat/npcs', authRequired, async (_req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, name, clan
+       FROM npcs
+       ORDER BY name ASC`
+    );
+    res.json({ npcs: rows });
+  } catch (e) {
+    log.err('Failed to list NPCs', { message: e.message });
+    res.status(500).json({ error: 'Failed to list NPCs' });
+  }
+});
+
+// Player: get my conversation with an NPC
+app.get('/api/chat/npc-history/:npcId', authRequired, async (req, res) => {
+  try {
+    const npcId = Number(req.params.npcId);
+    const userId = req.user.id;
+
+    const [rows] = await pool.query(
+      `SELECT id, npc_id, user_id, from_side, body, created_at
+         FROM npc_messages
+        WHERE npc_id=? AND user_id=?
+        ORDER BY created_at ASC`,
+      [npcId, userId]
+    );
+    res.json({ messages: rows });
+  } catch (e) {
+    log.err('Failed to get NPC chat history', { message: e.message });
+    res.status(500).json({ error: 'Failed to get history' });
+  }
+});
+
+// Player: send message to an NPC
+app.post('/api/chat/npc/messages', authRequired, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { npc_id, body } = req.body || {};
+    if (!npc_id || !body || String(body).trim().length === 0) {
+      return res.status(400).json({ error: 'npc_id and non-empty body are required' });
+    }
+
+    const [r] = await pool.query(
+      'INSERT INTO npc_messages (npc_id, user_id, from_side, body) VALUES (?,?,?,?)',
+      [Number(npc_id), userId, 'user', String(body).trim()]
+    );
+
+    const [[message]] = await pool.query(
+      `SELECT id, npc_id, user_id, from_side, body, created_at
+         FROM npc_messages
+        WHERE id=?`,
+      [r.insertId]
+    );
+    log.ok('NPC message (player)', { user_id: userId, npc_id, msg_id: r.insertId });
+    res.status(201).json({ message });
+  } catch (e) {
+    log.err('Failed to send NPC message', { message: e.message });
+    res.status(500).json({ error: 'Failed to send message' });
+  }
+});
+
+// --- Admin: reply as NPC to a specific player ---
+app.get('/api/admin/chat/npc/history', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const npcId = Number(req.query.npc_id);
+    const userId = Number(req.query.user_id);
+    if (!npcId || !userId) return res.status(400).json({ error: 'npc_id and user_id are required' });
+
+    const [rows] = await pool.query(
+      `SELECT id, npc_id, user_id, from_side, body, created_at
+         FROM npc_messages
+        WHERE npc_id=? AND user_id=?
+        ORDER BY created_at ASC`,
+      [npcId, userId]
+    );
+    res.json({ messages: rows });
+  } catch (e) {
+    log.err('Admin: NPC history failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to get history' });
+  }
+});
+
+app.post('/api/admin/chat/npc/messages', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const { npc_id, user_id, body } = req.body || {};
+    if (!npc_id || !user_id || !body || String(body).trim().length === 0) {
+      return res.status(400).json({ error: 'npc_id, user_id and non-empty body are required' });
+    }
+
+    const [r] = await pool.query(
+      'INSERT INTO npc_messages (npc_id, user_id, from_side, body) VALUES (?,?,?,?)',
+      [Number(npc_id), Number(user_id), 'npc', String(body).trim()]
+    );
+
+    const [[message]] = await pool.query(
+      `SELECT id, npc_id, user_id, from_side, body, created_at
+         FROM npc_messages
+        WHERE id=?`,
+      [r.insertId]
+    );
+
+    log.ok('Admin NPC reply', { npc_id, to_user: user_id, msg_id: r.insertId });
+    res.status(201).json({ message });
+  } catch (e) {
+    log.err('Admin NPC reply failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to send NPC reply' });
+  }
+});
 
 
 /* -------------------- Downtimes -------------------- */
