@@ -51,6 +51,15 @@ async function sendResetEmailWithEmailJS({ to, name, link, appName='Erebus Porta
 
 
 /* -------------------- Helpers -------------------- */
+// *** NEW MIDDLEWARE ***
+const requireCourt = (req, res, next) => {
+  if (req.user && (req.user.role === 'admin' || req.user.role === 'courtuser')) {
+    return next();
+  }
+  log.warn('Court access denied', { user_id: req.user?.id, role: req.user?.role });
+  return res.status(403).json({ error: 'Forbidden: Court access required' });
+};
+
 const issueToken = (user) =>
   jwt.sign(
     { id: user.id, email: user.email, role: user.role, display_name: user.display_name },
@@ -517,6 +526,41 @@ app.patch('/api/admin/characters/:id', authRequired, requireAdmin, async (req, r
   res.json({ character: ch });
 });
 
+// Delete Character (admin)
+app.delete('/api/admin/characters/:id', authRequired, requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: 'Invalid character id' });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // Remove/neutralize references to this character
+    await conn.query('DELETE FROM domain_members WHERE character_id=?', [id]);
+    await conn.query('DELETE FROM downtimes WHERE character_id=?', [id]);
+    try { await conn.query('DELETE FROM xp_log WHERE character_id=?', [id]); } catch (_) { /* xp_log may not exist */ }
+    await conn.query('UPDATE domain_claims SET owner_character_id=NULL WHERE owner_character_id=?', [id]);
+
+    // Finally delete the character
+    const [result] = await conn.query('DELETE FROM characters WHERE id=?', [id]);
+    await conn.commit();
+
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'Character not found' });
+
+    log.adm('Character deleted', { id, by_user_id: req.user.id });
+    res.json({ ok: true });
+  } catch (e) {
+    await conn.rollback();
+    log.err('Delete character failed', { message: e.message, stack: e.stack, id });
+    res.status(500).json({ error: 'Failed to delete character' });
+  } finally {
+    conn.release();
+  }
+});
+
+
 /* -------------------- NPCs (Admin only) -------------------- */
 
 
@@ -964,6 +1008,111 @@ app.delete('/api/admin/domains/:id/members/:character_id', authRequired, require
   res.json({ ok: true });
 });
 
+/* -------------------- Boons (FIXED) -------------------- */
+
+// GET /api/boons/entities (Court/Admin only)
+// Get all players and NPCs for dropdowns
+app.get('/api/boons/entities', authRequired, requireCourt, async (req, res) => {
+  try {
+    const [characters] = await pool.query('SELECT id, name, clan FROM characters ORDER BY name ASC');
+    const [npcs] = await pool.query('SELECT id, name, clan FROM npcs ORDER BY name ASC');
+    
+    const players = characters.map(c => ({ type: 'player', id: c.id, name: `${c.name} (${c.clan || 'Unknown'})` }));
+    const nonPlayers = npcs.map(n => ({ type: 'npc', id: n.id, name: `${n.name} (NPC)` }));
+    
+    res.json({ entities: [...players, ...nonPlayers] });
+  } catch (e) {
+    log.err('Failed to get boon entities', { message: e.message });
+    res.status(500).json({ error: 'Failed to fetch entities' });
+  }
+});
+
+// GET /api/boons (All logged-in users)
+app.get('/api/boons', authRequired, async (req, res) => {
+  try {
+    // Assuming a 'boons' table exists
+    const [boons] = await pool.query(
+      `SELECT * FROM boons ORDER BY created_at DESC`
+    );
+    res.json({ boons });
+  } catch (e) {
+    log.err('Failed to get boons', { message: e.message });
+    res.status(500).json({ error: 'Failed to fetch boons' });
+  }
+});
+
+// POST /api/boons (Court/Admin only)
+app.post('/api/boons', authRequired, requireCourt, async (req, res) => {
+  try {
+    // FIX: Removed from_id and to_id
+    const { from_name, to_name, level, status, description } = req.body;
+
+    if (!from_name || !to_name || !level || !status) {
+      return res.status(400).json({ error: 'From, To, Level, and Status are required' });
+    }
+    
+    // FIX: Removed from_id and to_id from query
+    const [r] = await pool.query(
+      `INSERT INTO boons (from_name, to_name, level, status, description, created_at) 
+       VALUES (?, ?, ?, ?, ?, NOW())`,
+      [from_name, to_name, level, status, description || null]
+    );
+    
+    const [[boon]] = await pool.query('SELECT * FROM boons WHERE id=?', [r.insertId]);
+    log.adm('Boon created', { id: r.insertId, by_user_id: req.user.id });
+    res.status(201).json({ boon });
+    
+  } catch (e) {
+    log.err('Failed to create boon', { message: e.message, stack: e.stack });
+    res.status(500).json({ error: 'Failed to create boon' });
+  }
+});
+
+// PATCH /api/boons/:id (Court/Admin only)
+app.patch('/api/boons/:id', authRequired, requireCourt, async (req, res) => {
+  try {
+    const { id } = req.params;
+    // FIX: Removed from_id and to_id
+    const { from_name, to_name, level, status, description } = req.body;
+    
+    const fields = [], vals = [];
+    if (from_name !== undefined) { fields.push('from_name=?'); vals.push(from_name); }
+    if (to_name !== undefined) { fields.push('to_name=?'); vals.push(to_name); }
+    if (level !== undefined) { fields.push('level=?'); vals.push(level); }
+    if (status !== undefined) { fields.push('status=?'); vals.push(status); }
+    if (description !== undefined) { fields.push('description=?'); vals.push(description); }
+
+    if (!fields.length) {
+      return res.status(400).json({ error: 'Nothing to update' });
+    }
+    
+    vals.push(id);
+    await pool.query(`UPDATE boons SET ${fields.join(', ')} WHERE id=?`, vals);
+    
+    const [[boon]] = await pool.query('SELECT * FROM boons WHERE id=?', [id]);
+    log.adm('Boon updated', { id, by_user_id: req.user.id });
+    res.json({ boon });
+    
+  } catch (e) {
+    log.err('Failed to update boon', { message: e.message });
+    res.status(500).json({ error: 'Failed to update boon' });
+  }
+});
+
+// DELETE /api/boons/:id (Court/Admin only)
+app.delete('/api/boons/:id', authRequired, requireCourt, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('DELETE FROM boons WHERE id=?', [id]);
+    log.adm('Boon deleted', { id, by_user_id: req.user.id });
+    res.json({ ok: true });
+  } catch (e) {
+    log.err('Failed to delete boon', { message: e.message });
+    res.status(500).json({ error: 'Failed to delete boon' });
+  }
+});
+
+
 /* -------------------- Chat -------------------- */
 // NOTE TO USER: You may need to add 'chat' to your logger configuration if it's a custom one.
 // Get list of users to chat with (all except me)
@@ -1231,4 +1380,3 @@ app.use(expressErrorHandler());
 /* -------------------- Start Server -------------------- */
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => log.start(`API server started`, { port: PORT, env: process.env.NODE_ENV || 'stable' }));
-
