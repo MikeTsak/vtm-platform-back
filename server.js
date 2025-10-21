@@ -24,6 +24,8 @@ const VAR_EXPIRES = process.env.EMAILJS_VAR_EXPIRES || 'expires_minutes';
 
 // Install global handlers to catch crashes and unhandled promise rejections
 installProcessHandlers();
+log.start('API booting…');
+
 
 const app = express();
 app.use(cors({ origin: true, credentials: true }));
@@ -33,6 +35,8 @@ app.set('trust proxy', true);
 // Add the request logger middleware. It will log every incoming request and its response.
 // Place it right after express.json() to ensure it can log request bodies.
 app.use(attachRequestLogger());
+
+
 
 // Human-friendly masking
 const maskEmail = (email) => {
@@ -1542,7 +1546,91 @@ app.delete('/api/admin/domain-claims/:division', authRequired, requireAdmin, asy
   res.json({ ok: true });
 });
 
-app.use(expressErrorHandler());
+const fs = require('fs');
+const readline = require('readline');
+const path = require('path');
+
+// helper to tail last N lines of a file fairly efficiently (works for large files)
+async function tailFile(filePath, maxLines = 200) {
+  // fallback if file missing
+  if (!fs.existsSync(filePath)) return [];
+
+  // For simplicity/readability: read file stream and keep last N lines in an array
+  return new Promise((resolve, reject) => {
+    const input = fs.createReadStream(filePath, { encoding: 'utf8' });
+    const rl = readline.createInterface({ input, crlfDelay: Infinity });
+    const buf = [];
+    rl.on('line', (line) => {
+      buf.push(line);
+      if (buf.length > maxLines) buf.shift();
+    });
+    rl.on('close', () => resolve(buf));
+    rl.on('error', (err) => reject(err));
+  });
+}
+
+// Admin: fetch last N lines
+app.get('/api/admin/logs', authRequired, requireAdmin, async (req, res) => {
+  const file = process.env.LOG_FILE;
+  if (!file) return res.status(404).json({ error: 'Log file not configured' });
+
+  const lines = Number(req.query.lines || 200);
+  try {
+    const last = await tailFile(file, Math.min(1000, Math.max(10, lines)));
+    // If LOG_JSON=1, return parsed JSON objects (best-effort)
+    if (process.env.LOG_JSON === '1') {
+      const parsed = last.map(l => {
+        try { return JSON.parse(l); } catch { return { raw: l }; }
+      });
+      return res.json({ ok: true, lines: parsed });
+    } else {
+      return res.json({ ok: true, lines: last });
+    }
+  } catch (e) {
+    log.err('Admin logs read failed', { message: e.message });
+    return res.status(500).json({ error: 'Failed to read log file' });
+  }
+});
+
+// Admin: download full log (stream)
+app.get('/api/admin/logs/download', authRequired, requireAdmin, (req, res) => {
+  const file = process.env.LOG_FILE;
+  if (!file) return res.status(404).json({ error: 'Log file not configured' });
+  const fp = path.resolve(file);
+  if (!fs.existsSync(fp)) return res.status(404).json({ error: 'Log file missing' });
+
+  res.setHeader('Content-Disposition', `attachment; filename="${path.basename(fp)}"`);
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  const stream = fs.createReadStream(fp);
+  stream.pipe(res);
+  stream.on('error', (err) => {
+    log.err('Admin logs download failed', { message: err.message });
+    res.end();
+  });
+});
+
+// Admin: clear log file (truncate) — use with care
+app.post('/api/admin/logs/clear', authRequired, requireAdmin, (req, res) => {
+  const file = process.env.LOG_FILE;
+  if (!file) return res.status(404).json({ error: 'Log file not configured' });
+  const fp = path.resolve(file);
+  try {
+    fs.truncateSync(fp, 0);
+    log.adm('Log file truncated by admin', { admin_id: req.user.id });
+    return res.json({ ok: true });
+  } catch (e) {
+    log.err('Admin clear logs failed', { message: e.message });
+    return res.status(500).json({ error: 'Failed to clear log file' });
+  }
+});
+
+
+
+app.use(attachRequestLogger({
+  silentPaths: [/^\/api\/admin\/logs(?:\/.*)?$/] // don’t log when hitting the logs endpoints
+}));
+
+app.use(expressErrorHandler);
 
 /* -------------------- Start Server -------------------- */
 const PORT = process.env.PORT || 3001;
