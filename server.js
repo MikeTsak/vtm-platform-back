@@ -15,6 +15,13 @@ const axios = require('axios');
 
 // --- Setup ---
 
+// Optional mapping of template variable names via env
+const VAR_TO      = process.env.EMAILJS_VAR_TO      || 'to_email';
+const VAR_NAME    = process.env.EMAILJS_VAR_NAME    || 'to_name';
+const VAR_APP     = process.env.EMAILJS_VAR_APP     || 'app_name';
+const VAR_LINK    = process.env.EMAILJS_VAR_LINK    || 'reset_link';
+const VAR_EXPIRES = process.env.EMAILJS_VAR_EXPIRES || 'expires_minutes';
+
 // Install global handlers to catch crashes and unhandled promise rejections
 installProcessHandlers();
 
@@ -27,27 +34,114 @@ app.set('trust proxy', true);
 // Place it right after express.json() to ensure it can log request bodies.
 app.use(attachRequestLogger());
 
-/* ------------------ Start server Mail ------------------ */
-async function sendResetEmailWithEmailJS({ to, name, link, appName='Erebus Portal' }) {
-  // (Your existing function)
-  const payload = {
-    service_id: process.env.EMAILJS_SERVICE_ID,
-    template_id: process.env.EMAILJS_TEMPLATE_ID,
-    user_id: process.env.EMAILJS_PUBLIC_KEY,
-    accessToken: process.env.EMAILJS_PRIVATE_KEY || undefined,
-    template_params: {
-      to_email: to,
-      to_name: name || 'there',
-      app_name: appName,
-      reset_link: link,
-      expires_minutes: 30
-    }
-  };
-  await axios.post('https://api.emailjs.com/api/v1.0/email/send', payload, {
-    timeout: 20000,
-    headers: { 'Content-Type': 'application/json' },
-  });
+// Human-friendly masking
+const maskEmail = (email) => {
+  if (!email || typeof email !== 'string') return email;
+  const [u, d] = email.trim().toLowerCase().split('@');
+  if (!d) return email;
+  const maskedUser = u.length <= 2 ? (u[0] || '') + '*' : u[0] + '*'.repeat(u.length - 2) + u.slice(-1);
+  return `${maskedUser}@${d}`;
+};
+
+// Mask helper for logs
+function _maskEmail(email) {
+  if (!email || typeof email !== 'string') return email;
+  const [u, d] = email.trim().toLowerCase().split('@');
+  if (!d) return email;
+  const maskedUser = u.length <= 2 ? (u[0] || '') + '*' : u[0] + '*'.repeat(u.length - 2) + u.slice(-1);
+  return `${maskedUser}@${d}`;
 }
+
+// Respect EmailJS rate limit: 1 request / second
+let __lastSendAt = 0;
+async function _respectEmailJsRateLimit() {
+  const now = Date.now();
+  const delta = now - __lastSendAt;
+  if (delta < 1000) {
+    await new Promise(r => setTimeout(r, 1000 - delta));
+  }
+  __lastSendAt = Date.now();
+}
+
+
+/* ------------------ Start server Mail ------------------ */
+
+async function sendResetEmailWithEmailJS({
+  to,                // recipient email (string)
+  name,              // display name (string)
+  link,              // absolute reset URL
+  appName = process.env.APP_NAME || 'Erebus Portal',
+  expiresMinutes = 30
+}) {
+  // Build exactly what EmailJS expects
+  const payload = {
+    service_id:  process.env.EMAILJS_SERVICE_ID,
+    template_id: process.env.EMAILJS_TEMPLATE_ID,
+    user_id:     process.env.EMAILJS_PUBLIC_KEY,     // "user_id" = PUBLIC key
+    accessToken: process.env.EMAILJS_PRIVATE_KEY || undefined, // optional
+    template_params: {
+      [VAR_TO]: to,
+      [VAR_NAME]: name || 'there',
+      [VAR_APP]: appName,
+      [VAR_LINK]: link,
+      [VAR_EXPIRES]: expiresMinutes,
+    },
+  };
+
+  // Pre-flight log (no secrets)
+  log.mail('EmailJS → sending reset', {
+    to: _maskEmail(to),
+    service_id: process.env.EMAILJS_SERVICE_ID ? 'set' : 'MISSING',
+    template_id: process.env.EMAILJS_TEMPLATE_ID ? 'set' : 'MISSING',
+    user_id: process.env.EMAILJS_PUBLIC_KEY ? 'set' : 'MISSING',
+    // show the exact param keys we send so you can align the template
+    vars: Object.keys(payload.template_params)
+  });
+
+  // Hard sanity checks (fail fast with meaningful error in logs)
+  if (!payload.service_id || !payload.template_id || !payload.user_id) {
+    const err = 'EmailJS env vars missing (need EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, EMAILJS_PUBLIC_KEY).';
+    log.err('EmailJS config error', { err });
+    throw new Error(err);
+  }
+  if (!payload.template_params[VAR_TO]) {
+    const err = `Missing recipient email for template var ${VAR_TO}. Check your route inputs.`;
+    log.err('EmailJS param error', { err });
+    throw new Error(err);
+  }
+
+  // Respect 1 rps
+  await _respectEmailJsRateLimit();
+
+  // Send (per docs)
+  const res = await axios.post(
+    'https://api.emailjs.com/api/v1.0/email/send',
+    payload,
+    {
+      timeout: 20000,
+      headers: { 'Content-Type': 'application/json' },
+      validateStatus: () => true, // log non-2xx too
+    }
+  );
+
+  const body = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+  if (res.status >= 200 && res.status < 300) {
+    // EmailJS success format: 200 "OK"
+    log.ok('EmailJS ← OK', { status: res.status, body });
+  } else {
+    // Typical failure: 400 "The parameters are invalid..."
+    log.err('EmailJS ← NON-2XX', {
+      status: res.status,
+      statusText: res.statusText,
+      body
+    });
+    throw new Error(`EmailJS responded ${res.status} ${res.statusText}: ${body}`);
+  }
+}
+
+module.exports = { sendResetEmailWithEmailJS };
+
+
 
 
 /* -------------------- Helpers -------------------- */
@@ -243,36 +337,109 @@ app.get('/api/auth/me', authRequired, async (req, res) => {
   res.json({ user: req.user });
 });
 
+// --- COMPLETE /api/auth/forgot ---
 app.post('/api/auth/forgot', async (req, res) => {
-    // (Your existing route)
-    const { email } = req.body || {};
-    const norm = (email || '').trim().toLowerCase();
-    const okResponse = () => res.json({ ok: true, message: 'If the email exists, a reset link has been sent.' });
-    try {
-        const [rows] = await pool.query('SELECT id, display_name FROM users WHERE email=?', [norm]);
-        const user = rows[0];
-        if (!user) return okResponse();
-        const [recent] = await pool.query('SELECT id FROM password_resets WHERE user_id=? AND created_at >= DATE_SUB(NOW(), INTERVAL 10 MINUTE) AND used_at IS NULL', [user.id]);
-        if (recent.length) return okResponse();
-        const tokenId = crypto.randomUUID();
-        const secret = crypto.randomBytes(32).toString('hex');
-        const combined = `${tokenId}.${secret}`;
-        const secretHash = await bcrypt.hash(secret, 12);
-        const expires = new Date(Date.now() + 30 * 60 * 1000);
-        await pool.query('INSERT INTO password_resets (user_id, token_id, secret_hash, expires_at) VALUES (?,?,?,?)', [user.id, tokenId, secretHash, expires]);
-        const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
-        const link = `${appBase}/reset?token=${encodeURIComponent(combined)}`;
-        try {
-            await sendResetEmailWithEmailJS({ to: norm, name: user.display_name, link, appName: process.env.APP_NAME || 'Erebus Portal' });
-        } catch (sendErr) {
-            log.err('EmailJS send failed', { error: sendErr?.response?.data || sendErr?.message });
-        }
-        return okResponse();
-    } catch (e) {
-        log.err('Forgot password error', { message: e.message, stack: e.stack });
-        return okResponse();
+  const { email } = req.body || {};
+  const norm = (email || '').trim().toLowerCase();
+  const okResponse = () => res.json({ ok: true, message: 'If the email exists, a reset link has been sent.' });
+
+  // Configurable cooldown (minutes). In dev set RESET_COOLDOWN_MIN=0 to disable.
+  const COOLDOWN_MIN = Number(process.env.RESET_COOLDOWN_MIN ?? 10);
+  const IS_PROD = (process.env.NODE_ENV || '').toLowerCase() === 'production';
+
+  // Force resend in dev only: ?resend=1 or header x-reset-resend: 1
+  const wantResend = (req.query?.resend === '1') || (req.get('x-reset-resend') === '1');
+  const forceResend = wantResend && !IS_PROD;
+
+  try {
+    if (!norm) {
+      log.warn('Forgot: missing email');
+      return okResponse();
     }
+
+    // Only select columns that exist in your schema
+    const [rows] = await pool.query(
+      'SELECT id, display_name FROM users WHERE email = ? LIMIT 1',
+      [norm]
+    );
+    const user = rows[0];
+    if (!user) {
+      log.mail('Forgot: email not found (OK sent)', { email: maskEmail(norm) });
+      return okResponse();
+    }
+
+    // Get the latest non-used reset (if any)
+    const [recentRows] = await pool.query(
+      'SELECT id, created_at FROM password_resets WHERE user_id=? AND used_at IS NULL ORDER BY created_at DESC LIMIT 1',
+      [user.id]
+    );
+    if (recentRows.length) {
+      const last = recentRows[0];
+      const lastTs = new Date(last.created_at).getTime();
+      const sinceMs = Date.now() - lastTs;
+      const sinceMin = Math.floor(sinceMs / 60000);
+      const remain = Math.max(0, COOLDOWN_MIN - sinceMin);
+
+      if (remain > 0 && !forceResend) {
+        log.mail('Forgot: recent reset exists (cooldown active, OK sent)', {
+          email: maskEmail(norm),
+          cooldown_min: COOLDOWN_MIN,
+          since_min: sinceMin,
+          remaining_min: remain,
+          note: 'use ?resend=1 in DEV to bypass',
+        });
+        return okResponse();
+      }
+
+      if (forceResend) {
+        log.mail('Forgot: cooldown bypass via resend (DEV)', {
+          email: maskEmail(norm),
+          since_min: sinceMin,
+        });
+      }
+    }
+
+    // Create fresh token (invalidate nothing explicitly; old unused tokens remain but still expire)
+    const tokenId    = crypto.randomUUID();
+    const secret     = crypto.randomBytes(32).toString('hex');
+    const combined   = `${tokenId}.${secret}`;
+    const secretHash = await bcrypt.hash(secret, 12);
+    const expiresAt  = new Date(Date.now() + 30 * 60 * 1000); // 30 min
+
+    await pool.query(
+      'INSERT INTO password_resets (user_id, token_id, secret_hash, expires_at) VALUES (?,?,?,?)',
+      [user.id, tokenId, secretHash, expiresAt]
+    );
+
+    const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
+    const link = `${appBase}/reset?token=${encodeURIComponent(combined)}`;
+
+    log.mail('Reset token created', {
+      email: maskEmail(norm),
+      link_path: new URL(link).pathname,
+      expires_min: 30,
+      cooldown_min: COOLDOWN_MIN,
+    });
+
+    try {
+      await sendResetEmailWithEmailJS({
+        to: norm,
+        name: user.display_name || 'there',
+        link,
+        appName: process.env.APP_NAME || 'Erebus Portal',
+      });
+    } catch (e) {
+      log.err('EmailJS send failed', { error: e?.message || String(e) });
+    }
+
+    return okResponse();
+  } catch (e) {
+    log.err('Forgot password error', { message: e.message, stack: e.stack });
+    return okResponse();
+  }
 });
+
+
 
 app.post('/api/auth/reset', async (req, res) => {
     // (Your existing route)
