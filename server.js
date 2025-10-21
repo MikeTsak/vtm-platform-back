@@ -1394,6 +1394,65 @@ app.get('/api/admin/chat/all', authRequired, requireAdmin, async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch messages' });
     }
 });
+// Admin: list recent conversations with one NPC
+app.get('/api/admin/chat/npc/conversations', authRequired, requireAdmin, async (req, res) => {
+  const npcId = Number(req.query.npc_id);
+  if (!npcId) return res.status(400).json({ error: 'npc_id required' });
+  try {
+    const [rows] = await pool.query(`
+      SELECT 
+        u.id AS user_id,
+        u.display_name,
+        c.name AS char_name,
+        MAX(m.created_at) AS last_message_at
+      FROM npc_messages m
+      JOIN users u ON m.user_id = u.id
+      LEFT JOIN characters c ON c.user_id = u.id
+      WHERE m.npc_id = ?
+      GROUP BY u.id, u.display_name, c.name
+      ORDER BY last_message_at DESC
+    `, [npcId]);
+    res.json({ conversations: rows });
+  } catch (e) {
+    log.err('Admin get NPC conversations failed', { message: e.message, stack: e.stack });
+    res.status(500).json({ error: 'Failed to fetch NPC conversations' });
+  }
+});
+
+// Alias (path params)
+app.get('/api/admin/chat/npc-conversations/:npcId', authRequired, requireAdmin, async (req, res) => {
+  req.query.npc_id = req.params.npcId;
+  return app._router.handle(req, res, () => {});
+});
+
+// Admin: history between NPC and specific user
+app.get('/api/admin/chat/npc/history', authRequired, requireAdmin, async (req, res) => {
+  const npcId  = Number(req.query.npc_id);
+  const userId = Number(req.query.user_id);
+  if (!npcId || !userId) return res.status(400).json({ error: 'npc_id and user_id required' });
+
+  try {
+    const [messages] = await pool.query(
+      `SELECT id, npc_id, user_id, from_side, body, created_at
+         FROM npc_messages
+        WHERE npc_id=? AND user_id=?
+        ORDER BY created_at ASC`,
+      [npcId, userId]
+    );
+    res.json({ messages });
+  } catch (e) {
+    log.err('Admin fetch NPC chat history failed', { message: e.message, stack: e.stack });
+    res.status(500).json({ error: 'Failed to fetch chat history' });
+  }
+});
+
+// Alias (path params)
+app.get('/api/admin/chat/npc-history/:npcId/:userId', authRequired, requireAdmin, async (req, res) => {
+  req.query.npc_id  = req.params.npcId;
+  req.query.user_id = req.params.userId;
+  return app._router.handle(req, res, () => {});
+});
+
 
 
 /* -------------------- Admin views -------------------- */
