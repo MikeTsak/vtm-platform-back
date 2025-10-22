@@ -1289,21 +1289,39 @@ app.delete('/api/boons/:id', authRequired, requireCourt, async (req, res) => {
 // Get list of users to chat with (all except me)
 app.get('/api/chat/users', authRequired, async (req, res) => {
   try {
-    const [users] = await pool.query(
-      // FIX: Added 'c.clan' to the SELECT statement
-      `SELECT u.id, u.display_name, c.name as char_name, c.clan
-       FROM users u
-       LEFT JOIN characters c ON u.id = c.user_id
-       WHERE u.id != ?
-       ORDER BY u.display_name ASC`,
+    const [rows] = await pool.query(
+      `
+      SELECT
+        u.id,
+        u.display_name,
+        u.role,
+        CASE WHEN u.role = 'admin' THEN 1 ELSE 0 END AS is_admin,
+        /* collapse possible multiple characters to a single row */
+        MAX(c.id)   AS char_id,
+        MAX(c.name) AS char_name,
+        MAX(c.clan) AS clan
+      FROM users u
+      LEFT JOIN characters c ON c.user_id = u.id
+      WHERE u.id <> ?
+      GROUP BY u.id, u.display_name, u.role
+      ORDER BY u.display_name ASC
+      `,
       [req.user.id]
     );
+
+    const users = rows.map(r => ({
+      ...r,
+      is_admin: !!r.is_admin,
+      char_id: r.char_id ? Number(r.char_id) : null
+    }));
+
     res.json({ users });
   } catch (e) {
-    log.err('Failed to get chat users', { message: e.message });
+    log.err('Failed to get chat users', { message: e.message, stack: e.stack });
     res.status(500).json({ error: 'Failed to get users' });
   }
 });
+
 
 // Get message history with another user
 app.get('/api/chat/history/:otherUserId', authRequired, async (req, res) => {
