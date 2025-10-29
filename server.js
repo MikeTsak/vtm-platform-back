@@ -12,6 +12,7 @@ const crypto = require('crypto');
 const pool = require('./db'); // export pool.promise() from db.js
 const { authRequired, requireAdmin } = require('./authMiddleware');
 const axios = require('axios');
+const webpush = require('web-push');
 
 // --- Setup ---
 
@@ -26,6 +27,10 @@ const VAR_EXPIRES = process.env.EMAILJS_VAR_EXPIRES || 'expires_minutes';
 installProcessHandlers();
 log.start('API booting…');
 
+// Load keys from .env
+const vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
+const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
+
 
 const app = express();
 app.use(cors({ origin: true, credentials: true }));
@@ -35,6 +40,17 @@ app.set('trust proxy', true);
 // Add the request logger middleware. It will log every incoming request and its response.
 // Place it right after express.json() to ensure it can log request bodies.
 app.use(attachRequestLogger());
+
+if (vapidPublicKey && vapidPrivateKey) {
+  webpush.setVapidDetails(
+    'mailto:your-email@example.com', // Your contact email
+    vapidPublicKey,
+    vapidPrivateKey
+  );
+  log.start('Web-push configured');
+} else {
+  log.warn('VAPID keys not set. Push notifications will be disabled.');
+}
 
 
 
@@ -1358,13 +1374,57 @@ app.post('/api/chat/messages', authRequired, async (req, res) => {
     );
 
     const [[message]] = await pool.query(
-        `SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at, u_sender.display_name as sender_name
-         FROM chat_messages cm
-         JOIN users u_sender ON cm.sender_id = u_sender.id
-         WHERE cm.id = ?`,
-        [r.insertId]
+      `SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at, u_sender.display_name as sender_name
+       FROM chat_messages cm
+       JOIN users u_sender ON cm.sender_id = u_sender.id
+       WHERE cm.id = ?`,
+      [r.insertId]
     );
-    
+
+    // --- START PUSH NOTIFICATION LOGIC ---
+    try {
+      // 1. Find all subscriptions for the user we are sending TO
+      const [subs] = await pool.query(
+        'SELECT id, subscription_json FROM push_subscriptions WHERE user_id = ?',
+        [recipient_id]
+      );
+
+      if (subs.length > 0) {
+        // 2. Create the notification payload
+        const payload = JSON.stringify({
+          title: `New message from ${req.user.display_name}`,
+          body: body.trim(),
+          data: {
+            url: '/comms', // URL to open when clicked
+            // Tagging allows notifications from the same user to stack
+            tag: `chat-u-${req.user.id}` 
+          }
+        });
+
+        // 3. Send a notification to each subscription
+        // We use Promise.all but don't await it, so it runs in the background
+        // and doesn't slow down the API response.
+        const sendPromises = subs.map(row => {
+          const subscription = JSON.parse(row.subscription_json);
+          return webpush.sendNotification(subscription, payload)
+            .catch(err => {
+              // 4. If a subscription is "gone" (410), delete it from the DB
+              if (err.statusCode === 410) {
+                log.warn('Stale push subscription deleted', { sub_id: row.id, user_id: recipient_id });
+                return pool.query('DELETE FROM push_subscriptions WHERE id = ?', [row.id]);
+              } else {
+                log.err('Push notification send failed', { message: err.message, statusCode: err.statusCode, user_id: recipient_id });
+              }
+            });
+        });
+        Promise.all(sendPromises);
+      }
+    } catch (pushError) {
+      // Log the push error, but DO NOT fail the main API request
+      log.err('Push notification trigger failed', { message: pushError.message, stack: pushError.stack });
+    }
+    // --- END PUSH NOTIFICATION LOGIC ---
+
     // Using `log.ok` as a generic success logger, assuming `log.chat` is not configured.
     log.ok('Message sent', { from: req.user.id, to: recipient_id, msg_id: r.insertId });
     res.status(201).json({ message });
@@ -1490,6 +1550,145 @@ app.get('/api/admin/users', authRequired, requireAdmin, async (_req, res) => {
   log.adm('Admin users list', { count: rows.length });
   res.json({ users: rows });
 });
+
+// Player: get my recent NPC conversations (latest messages first)
+app.get('/api/chat/my-recent', authRequired, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const limit = Math.min(Number(req.query.limit) || 5, 10);
+
+    // Last messages with any NPC for this user
+    const [rows] = await pool.query(
+      `
+      SELECT m.npc_id,
+             n.name   AS npc_name,
+             m.body   AS last_message,
+             m.created_at
+      FROM npc_messages m
+      JOIN npcs n ON n.id = m.npc_id
+      WHERE m.user_id = ?
+      ORDER BY m.created_at DESC
+      LIMIT ?
+      `,
+      [userId, limit]
+    );
+
+    const conversations = rows.map(r => ({
+      id: `npc-${r.npc_id}`,
+      partnerName: r.npc_name,
+      lastMessage: r.last_message,
+      timestamp: r.created_at,
+      isNPC: true,
+    }));
+
+    res.json({ conversations });
+  } catch (e) {
+    log.err('Failed to fetch my recent chats', { message: e.message });
+    res.status(500).json({ error: 'Failed to load recent chats' });
+  }
+});
+
+// Update a user (admin only)
+
+app.patch('/api/admin/users/:id', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ error: 'Invalid user id' });
+    }
+
+    const { display_name, email, role } = req.body || {};
+    const fields = [];
+    const vals = [];
+
+    // Validate role if provided
+    const validRoles = new Set(['user', 'courtuser', 'admin']);
+    let roleChanged = false;
+    if (role !== undefined) {
+      const r = String(role);
+      if (!validRoles.has(r)) {
+        return res.status(400).json({ error: 'Invalid role' });
+      }
+      fields.push('role=?'); vals.push(r);
+      roleChanged = true;
+    }
+
+    // Validate display_name if provided
+    let nameChanged = false;
+    if (display_name !== undefined) {
+      const name = String(display_name).trim();
+      if (!name) return res.status(400).json({ error: 'Display name cannot be empty' });
+      fields.push('display_name=?'); vals.push(name);
+      nameChanged = true;
+    }
+
+    // Validate email if provided (and ensure uniqueness)
+    let emailChanged = false;
+    if (email !== undefined) {
+      const normEmail = String(email).trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normEmail)) {
+        return res.status(400).json({ error: 'Invalid email' });
+      }
+      const [dup] = await pool.query('SELECT id FROM users WHERE email=? AND id<>?', [normEmail, id]);
+      if (dup.length) return res.status(409).json({ error: 'Email already in use' });
+      fields.push('email=?'); vals.push(normEmail);
+      emailChanged = true;
+    }
+
+    if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
+
+    vals.push(id);
+    await pool.query(`UPDATE users SET ${fields.join(', ')} WHERE id=?`, vals);
+
+    // Return the updated user row (+ basic character info for admin table)
+    const [[row]] = await pool.query(
+      `SELECT u.id, u.email, u.display_name, u.role,
+              c.id AS character_id, c.name AS char_name, c.clan, c.xp
+       FROM users u
+       LEFT JOIN characters c ON c.user_id = u.id
+       WHERE u.id=?`,
+      [id]
+    );
+
+    if (!row) return res.status(404).json({ error: 'User not found after update' });
+
+    const selfEdit = id === req.user.id;
+    if (selfEdit && (roleChanged || nameChanged || emailChanged)) {
+      // Re-issue token so /api/auth/me reflects the new role/name/email
+      const freshToken = issueToken({
+        id: row.id,
+        email: row.email,
+        display_name: row.display_name,
+        role: row.role,
+      });
+      log?.adm?.('Admin self-updated user and refreshed token', { admin_id: req.user.id, user_id: id, fields });
+      return res.json({ user: row, token: freshToken });
+    }
+
+    log?.adm?.('Admin updated user', { admin_id: req.user.id, user_id: id, fields });
+    res.json({ user: row });
+  } catch (e) {
+    log?.err?.('Admin update user failed', { message: e.message, stack: e.stack });
+    res.status(500).json({ error: 'Failed to update user' });
+  }
+});
+
+// 2) Auth: refresh current user's token from DB (useful beyond admin flow)
+app.post('/api/auth/refresh', authRequired, async (req, res) => {
+  try {
+    const [[u]] = await pool.query(
+      'SELECT id, email, display_name, role FROM users WHERE id=?',
+      [req.user.id]
+    );
+    if (!u) return res.status(404).json({ error: 'User not found' });
+    const token = issueToken(u);
+    res.json({ token, user: u });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to refresh token' });
+  }
+});
+
+
 
 app.get('/api/admin/downtimes', authRequired, requireAdmin, async (_req, res) => {
   const [rows] = await pool.query(
@@ -1701,6 +1900,136 @@ app.post('/api/admin/logs/clear', authRequired, requireAdmin, (req, res) => {
   }
 });
 
+// Admin: fetch ALL NPC chat messages (flat list)
+app.get('/api/admin/chat/npc/all', authRequired, requireAdmin, async (_req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT 
+         id, 
+         npc_id, 
+         user_id, 
+         from_side, 
+         body, 
+         created_at
+       FROM npc_messages
+       ORDER BY created_at ASC`
+    );
+
+    // Example shape:
+    // { "messages": [ { id, npc_id, user_id, from_side, body, created_at }, ... ] }
+    res.json({ messages: rows });
+  } catch (e) {
+    log.err('Admin fetch ALL NPC messages failed', { message: e.message, stack: e.stack });
+    res.status(500).json({ error: 'Failed to fetch NPC messages' });
+  }
+});
+
+
+// --- NEW ROUTE to save a subscription ---
+// --- PUSH: UPSERT SUB, TEST SEND, UNSUBSCRIBE ---
+
+// Save/Upsert subscription (auth required)
+app.post('/api/push/subscribe', authRequired, async (req, res) => {
+  try {
+    const { subscription } = req.body || {};
+    if (!subscription || !subscription.endpoint) {
+      return res.status(400).json({ error: 'Valid subscription with endpoint is required' });
+    }
+
+    const endpoint = subscription.endpoint;
+    const json = JSON.stringify(subscription);
+
+    // Ensure table exists (idempotent; comment out if you already created it)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS push_subscriptions (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        endpoint VARCHAR(512) NOT NULL UNIQUE,
+        subscription_json JSON NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB
+    `);
+
+    // Upsert by endpoint, so repeated toggles don't duplicate
+    await pool.query(
+      `INSERT INTO push_subscriptions (user_id, endpoint, subscription_json)
+       VALUES (?, ?, ?)
+       ON DUPLICATE KEY UPDATE user_id=VALUES(user_id), subscription_json=VALUES(subscription_json)`,
+      [req.user.id, endpoint, json]
+    );
+
+    log.ok('Push subscription upserted', { user_id: req.user.id });
+    res.status(201).json({ ok: true });
+  } catch (e) {
+    log.err('Push subscribe failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to save subscription' });
+  }
+});
+
+// Unsubscribe: delete by endpoint (auth required)
+app.post('/api/push/unsubscribe', authRequired, async (req, res) => {
+  try {
+    const { endpoint } = req.body || {};
+    if (!endpoint) return res.status(400).json({ error: 'endpoint is required' });
+
+    await pool.query('DELETE FROM push_subscriptions WHERE user_id=? AND endpoint=?', [req.user.id, endpoint]);
+    log.ok('Push subscription removed', { user_id: req.user.id });
+    res.json({ ok: true });
+  } catch (e) {
+    log.err('Push unsubscribe failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to remove subscription' });
+  }
+});
+
+// Fire a test push to current user (auth required)
+app.post('/api/push/test', authRequired, async (req, res) => {
+  try {
+    if (!vapidPublicKey || !vapidPrivateKey) {
+      return res.status(503).json({ error: 'Push not configured (VAPID keys missing)' });
+    }
+
+    const [subs] = await pool.query(
+      'SELECT id, subscription_json FROM push_subscriptions WHERE user_id=?',
+      [req.user.id]
+    );
+    if (subs.length === 0) {
+      return res.status(404).json({ error: 'No push subscriptions for this user' });
+    }
+
+    const payload = JSON.stringify({
+      title: '🔔 Push Test',
+      body: 'If you can read this, background push works!',
+      data: { url: '/comms', tag: 'push-test' }
+    });
+
+    await Promise.all(subs.map(async (row) => {
+      try {
+        const sub = JSON.parse(row.subscription_json);
+        await webpush.sendNotification(sub, payload);
+      } catch (err) {
+        if (err.statusCode === 410) {
+          log.warn('Stale push sub removed during test', { sub_id: row.id, user_id: req.user.id });
+          await pool.query('DELETE FROM push_subscriptions WHERE id=?', [row.id]);
+        } else {
+          log.err('Push test send failed', { message: err.message, status: err.statusCode });
+        }
+      }
+    }));
+
+    res.json({ ok: true });
+  } catch (e) {
+    log.err('Push test failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to send test push' });
+  }
+});
+
+
+// --- NEW ROUTE to remove a subscription (e.g., on logout) ---
+app.post('/api/push/unsubscribe', authRequired, async (req, res) => {
+    // Logic to find and delete the subscription from your DB
+    // ...
+    res.json({ ok: true });
+});
 
 
 app.use(attachRequestLogger({
@@ -1708,6 +2037,226 @@ app.use(attachRequestLogger({
 }));
 
 app.use(expressErrorHandler);
+
+/* -------------------- Coteries -------------------- */
+
+/**
+ * Create a coterie
+ * body: {
+ *  name, type, domain_id|null,
+ *  traits:{chasse,lien,portillon},
+ *  required (object of {Name: dots}),
+ *  backgrounds (array of {name,dots}),
+ *  extras (array of strings),
+ *  points_per_member (1|2),
+ *  coterie_xp (number),
+ *  members: [{ user_id, display_name }]
+ * }
+ */
+app.post('/api/coteries', authRequired, async (req, res) => {
+  try {
+    const {
+      name, type, domain_id,
+      traits = {},
+      required = null,
+      backgrounds = [],
+      extras = [],
+      points_per_member = 1,
+      coterie_xp = 0,
+      members = []
+    } = req.body || {};
+
+    if (!name || !Array.isArray(members) || members.length < 3) {
+      return res.status(400).json({ error: 'Name and ≥3 members are required' });
+    }
+
+    const chasse = Number(traits.chasse || 0);
+    const lien   = Number(traits.lien   || 0);
+    const portillon = Number(traits.portillon || 0);
+
+    const [ins] = await pool.query(
+      `INSERT INTO coteries
+       (name, type, domain_id, chasse, lien, portillon, required_json, backgrounds_json, extras_json, points_per_member, coterie_xp, created_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [
+        name.trim(),
+        type || null,
+        domain_id || null,
+        chasse, lien, portillon,
+        required ? JSON.stringify(required) : null,
+        JSON.stringify(backgrounds || []),
+        JSON.stringify(extras || []),
+        Math.min(2, Math.max(1, Number(points_per_member || 1))),
+        Number.isFinite(coterie_xp) ? coterie_xp : 0,
+        req.user.id
+      ]
+    );
+    const coterieId = ins.insertId;
+
+    if (members.length) {
+      const values = members.map(m => [coterieId, Number(m.user_id), (m.display_name || null)]);
+      await pool.query(
+        `INSERT INTO coterie_members (coterie_id, user_id, display_name) VALUES ?`,
+        [values]
+      );
+    }
+
+    const [[row]] = await pool.query(`SELECT * FROM coteries WHERE id=?`, [coterieId]);
+    log.ok('Coterie created', { id: coterieId, by_user_id: req.user.id });
+    res.status(201).json({ coterie: row });
+  } catch (e) {
+    log.err('Create coterie failed', { message: e.message, stack: e.stack });
+    res.status(500).json({ error: 'Failed to create coterie' });
+  }
+});
+
+// List coteries (admin → all, user → only where member)
+app.get('/api/coteries', authRequired, async (req, res) => {
+  try {
+    if (req.user.role === 'admin' || req.user.permission_level === 'admin') {
+      const [rows] = await pool.query(`SELECT * FROM coteries ORDER BY updated_at DESC`);
+      return res.json({ coteries: rows });
+    }
+    const [rows] = await pool.query(`
+      SELECT c.*
+      FROM coteries c
+      JOIN coterie_members m ON m.coterie_id=c.id
+      WHERE m.user_id=?
+      ORDER BY c.updated_at DESC
+    `, [req.user.id]);
+    res.json({ coteries: rows });
+  } catch (e) {
+    log.err('List coteries failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to load coteries' });
+  }
+});
+
+// Read single coterie (member or admin)
+app.get('/api/coteries/:id', authRequired, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const [[c]] = await pool.query(`SELECT * FROM coteries WHERE id=?`, [id]);
+    if (!c) return res.status(404).json({ error: 'Not found' });
+
+    // authz: admin or member
+    if (!(req.user.role === 'admin' || req.user.permission_level === 'admin')) {
+      const [m] = await pool.query(`SELECT 1 FROM coterie_members WHERE coterie_id=? AND user_id=?`, [id, req.user.id]);
+      if (!m.length) return res.status(403).json({ error: 'Not allowed' });
+    }
+
+    const [members] = await pool.query(`SELECT user_id, display_name FROM coterie_members WHERE coterie_id=?`, [id]);
+    res.json({ coterie: c, members });
+  } catch (e) {
+    log.err('Read coterie failed', { message: e.message, stack: e.stack });
+    res.status(500).json({ error: 'Failed to load coterie' });
+  }
+});
+
+// Update core fields (member or admin)
+app.put('/api/coteries/:id', authRequired, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    // must be admin or member
+    if (!(req.user.role === 'admin' || req.user.permission_level === 'admin')) {
+      const [m] = await pool.query(`SELECT 1 FROM coterie_members WHERE coterie_id=? AND user_id=?`, [id, req.user.id]);
+      if (!m.length) return res.status(403).json({ error: 'Not allowed' });
+    }
+
+    const {
+      name, type, domain_id,
+      traits = {},
+      required = null,
+      backgrounds = [],
+      extras = [],
+      points_per_member,
+      coterie_xp
+    } = req.body || {};
+
+    const fields = [];
+    const params = [];
+    if (name != null) { fields.push('name=?'); params.push(String(name)); }
+    if (type != null) { fields.push('type=?'); params.push(type || null); }
+    if (domain_id !== undefined) { fields.push('domain_id=?'); params.push(domain_id || null); }
+    if (traits) {
+      fields.push('chasse=?','lien=?','portillon=?');
+      params.push(Number(traits.chasse || 0), Number(traits.lien || 0), Number(traits.portillon || 0));
+    }
+    if (required !== undefined) { fields.push('required_json=?'); params.push(required ? JSON.stringify(required) : null); }
+    if (backgrounds !== undefined) { fields.push('backgrounds_json=?'); params.push(JSON.stringify(backgrounds || [])); }
+    if (extras !== undefined) { fields.push('extras_json=?'); params.push(JSON.stringify(extras || [])); }
+    if (points_per_member !== undefined) { fields.push('points_per_member=?'); params.push(Math.min(2, Math.max(1, Number(points_per_member || 1)))); }
+    if (coterie_xp !== undefined) { fields.push('coterie_xp=?'); params.push(Number(coterie_xp || 0)); }
+
+    if (!fields.length) return res.json({ ok: true });
+
+    await pool.query(`UPDATE coteries SET ${fields.join(', ')} WHERE id=?`, [...params, id]);
+    const [[row]] = await pool.query(`SELECT * FROM coteries WHERE id=?`, [id]);
+    res.json({ coterie: row });
+  } catch (e) {
+    log.err('Update coterie failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to update coterie' });
+  }
+});
+
+// Replace members (admin or current member)
+app.post('/api/coteries/:id/members/set', authRequired, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!(req.user.role === 'admin' || req.user.permission_level === 'admin')) {
+      const [m] = await pool.query(`SELECT 1 FROM coterie_members WHERE coterie_id=? AND user_id=?`, [id, req.user.id]);
+      if (!m.length) return res.status(403).json({ error: 'Not allowed' });
+    }
+
+    const { members = [] } = req.body || {};
+    if (!Array.isArray(members) || members.length < 3) {
+      return res.status(400).json({ error: '≥3 members required' });
+    }
+
+    await pool.query(`DELETE FROM coterie_members WHERE coterie_id=?`, [id]);
+    const values = members.map(m => [id, Number(m.user_id), (m.display_name || null)]);
+    await pool.query(`INSERT INTO coterie_members (coterie_id, user_id, display_name) VALUES ?`, [values]);
+
+    const [rows] = await pool.query(`SELECT user_id, display_name FROM coterie_members WHERE coterie_id=?`, [id]);
+    res.json({ members: rows });
+  } catch (e) {
+    log.err('Set coterie members failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to set members' });
+  }
+});
+
+// Adjust Coterie XP (delta) - admin or member
+// body: { delta: +N | -N }
+app.post('/api/coteries/:id/xp', authRequired, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!(req.user.role === 'admin' || req.user.permission_level === 'admin')) {
+      const [m] = await pool.query(`SELECT 1 FROM coterie_members WHERE coterie_id=? AND user_id=?`, [id, req.user.id]);
+      if (!m.length) return res.status(403).json({ error: 'Not allowed' });
+    }
+    const delta = Number(req.body?.delta || 0);
+    await pool.query(`UPDATE coteries SET coterie_xp = GREATEST(0, coterie_xp + ?) WHERE id=?`, [delta, id]);
+    const [[row]] = await pool.query(`SELECT coterie_xp FROM coteries WHERE id=?`, [id]);
+    res.json({ coterie_xp: row?.coterie_xp ?? 0 });
+  } catch (e) {
+    log.err('Adjust coterie XP failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to adjust XP' });
+  }
+});
+
+// Delete coterie (admin only)
+app.delete('/api/coteries/:id', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    await pool.query(`DELETE FROM coteries WHERE id=?`, [id]);
+    log.adm('Coterie deleted', { id, by_user_id: req.user.id });
+    res.json({ ok: true });
+  } catch (e) {
+    log.err('Delete coterie failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to delete coterie' });
+  }
+});
+
 
 /* -------------------- Start Server -------------------- */
 const PORT = process.env.PORT || 3001;
