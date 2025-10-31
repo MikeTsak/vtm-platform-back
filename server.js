@@ -84,6 +84,71 @@ async function _respectEmailJsRateLimit() {
 }
 
 
+/* -------------------- Settings Helpers -------------------- */
+// server.js
+
+// We'll create the table once on first use
+let settingsTableCreated = false;
+async function _ensureSettingsTable() {
+  if (settingsTableCreated) return;
+  try {
+    // This query creates the key-value table if it doesn't exist
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS app_settings (
+        setting_key VARCHAR(100) PRIMARY KEY NOT NULL,
+        setting_value TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB
+    `);
+    settingsTableCreated = true;
+    log.ok('Settings table (app_settings) verified/created.');
+  } catch (e) {
+    log.err('Failed to create app_settings table', { message: e.message });
+  }
+}
+
+/**
+ * Get a value from the app_settings table
+ * @param {string} key - The setting_key
+ * @param {any} [defaultValue=null] - Value to return if key not found
+ */
+async function getSetting(key, defaultValue = null) {
+  await _ensureSettingsTable(); // Ensure table exists
+  try {
+    const [[row]] = await pool.query(
+      'SELECT setting_value FROM app_settings WHERE setting_key = ?',
+      [key]
+    );
+    // Return the value if found, otherwise the default
+    return row ? row.setting_value : defaultValue;
+  } catch (e) {
+    log.err('getSetting failed', { key, message: e.message });
+    return defaultValue;
+  }
+}
+
+/**
+ * Set a value in the app_settings table (UPSERT)
+ * @param {string} key - The setting_key
+ * @param {string|null} value - The value to set
+ */
+async function setSetting(key, value) {
+  await _ensureSettingsTable(); // Ensure table exists
+  try {
+    // This query inserts a new row or updates the value if the key already exists
+    await pool.query(
+      `INSERT INTO app_settings (setting_key, setting_value)
+       VALUES (?, ?)
+       ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
+      [key, value]
+    );
+  } catch (e) {
+    log.err('setSetting failed', { key, message: e.message });
+    // Re-throw so the route handler can catch it and send a 500
+    throw e;
+  }
+}
+
 /* ------------------ Start server Mail ------------------ */
 
 async function sendResetEmailWithEmailJS({
@@ -2254,6 +2319,56 @@ app.delete('/api/coteries/:id', authRequired, requireAdmin, async (req, res) => 
   } catch (e) {
     log.err('Delete coterie failed', { message: e.message });
     res.status(500).json({ error: 'Failed to delete coterie' });
+  }
+});
+
+// GET: public to logged-in users (players need to see dates)
+// READ: players (and admins) can read the two dates
+app.get('/api/downtimes/config', authRequired, async (req, res) => {
+  try {
+    const deadline = await getSetting('downtime_deadline', null);
+    const opening  = await getSetting('downtime_opening', null);
+    res.json({
+      downtime_deadline: deadline || null,
+      downtime_opening: opening  || null,
+    });
+  } catch (e) {
+    console.error('Fetch downtime config failed:', e);
+    res.status(500).json({ error: 'Failed to fetch downtime config' });
+  }
+});
+
+
+// WRITE (admins): save the two dates
+// ⚠️ make sure the path is **/admin/downtimes/config** (no extra 'c')
+app.post('/api/admin/downtimes/config', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const { downtime_deadline, downtime_opening } = req.body || {};
+
+    if (downtime_deadline && isNaN(new Date(downtime_deadline).getTime())) {
+      return res.status(400).json({ error: 'Invalid downtime_deadline date' });
+    }
+    if (downtime_opening && isNaN(new Date(downtime_opening).getTime())) {
+      return res.status(400).json({ error: 'Invalid downtime_opening date' });
+    }
+
+    if (typeof downtime_deadline !== 'undefined') {
+      await setSetting('downtime_deadline', downtime_deadline || '');
+    }
+    if (typeof downtime_opening !== 'undefined') {
+      await setSetting('downtime_opening', downtime_opening || '');
+    }
+
+    const deadline = await getSetting('downtime_deadline', null);
+    const opening  = await getSetting('downtime_opening', null);
+    res.json({
+      ok: true,
+      downtime_deadline: deadline || null,
+      downtime_opening: opening  || null,
+    });
+  } catch (e) {
+    console.error('Update downtime config failed:', e);
+    res.status(500).json({ error: 'Failed to update downtime config' });
   }
 });
 
