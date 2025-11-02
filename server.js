@@ -1769,7 +1769,7 @@ app.get('/api/admin/downtimes', authRequired, requireAdmin, async (_req, res) =>
 
 app.patch('/api/admin/downtimes/:id', authRequired, requireAdmin, async (req, res) => {
   const { status, gm_notes, gm_resolution } = req.body;
-  const allowed = ['submitted', 'approved', 'rejected', 'resolved'];
+  const allowed = ['submitted', 'approved', 'rejected', 'resolved', 'Needs a Scene', 'Resolved in scene'];
   if (status && !allowed.includes(status)) return res.status(400).json({ error: 'Bad status' });
 
   const fields = [];
