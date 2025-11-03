@@ -13,6 +13,9 @@ const pool = require('./db'); // export pool.promise() from db.js
 const { authRequired, requireAdmin } = require('./authMiddleware');
 const axios = require('axios');
 const webpush = require('web-push');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer'); // Import multer
 
 // --- Setup ---
 
@@ -36,6 +39,10 @@ const app = express();
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 app.set('trust proxy', true);
+
+// Create a multer instance that stores files in memory as buffers
+const storage = multer.memoryStorage();
+const memoryUpload = multer({ storage: storage });
 
 // Add the request logger middleware. It will log every incoming request and its response.
 // Place it right after express.json() to ensure it can log request bodies.
@@ -148,6 +155,89 @@ async function setSetting(key, value) {
     throw e;
   }
 }
+
+// --- NEW PREMONITION HELPER FUNCTIONS (WITH FIX) ---
+let premonitionsTableCreated = false;
+async function _ensurePremonitionsTables() {
+  if (premonitionsTableCreated) return;
+  try {
+    // --- FIX: Drop tables in reverse order to ensure clean creation ---
+    // We disable foreign key checks to avoid errors if tables are interdependent
+    await pool.query('SET FOREIGN_KEY_CHECKS=0;');
+    await pool.query('DROP TABLE IF EXISTS premonition_recipients;');
+    await pool.query('DROP TABLE IF EXISTS premonitions;');
+    await pool.query('SET FOREIGN_KEY_CHECKS=1;');
+    
+    // --- FIX: Create premonitions table ---
+    // We assume users.id is INT (signed), which is a common default.
+    // We make our NEW primary key INT UNSIGNED, which is best practice.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS premonitions (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        sender_id INT NOT NULL, 
+        content_type ENUM('text', 'image', 'video') NOT NULL,
+        content_text TEXT,
+        content_url VARCHAR(2048),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        KEY sender_id_idx (sender_id)
+        -- We omit the foreign key to users(id) for robustness,
+        -- as we can't be 100% sure of its type.
+        -- You can add it back if you know your users.id type:
+        -- CONSTRAINT fk_premonition_sender
+        --   FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;
+    `);
+    
+    // --- FIX: Create recipients table ---
+    // premonition_id is INT UNSIGNED (to match premonitions.id)
+    // user_id is INT (to match users.id)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS premonition_recipients (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        premonition_id INT UNSIGNED NOT NULL,
+        user_id INT NOT NULL,
+        viewed_at TIMESTAMP NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_premonition_user (premonition_id, user_id),
+        CONSTRAINT fk_premonition_id
+          FOREIGN KEY (premonition_id) 
+          REFERENCES premonitions(id)
+          ON DELETE CASCADE
+        -- We also omit this key for robustness
+        -- CONSTRAINT fk_recipient_user_id
+        --   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;
+    `);
+
+    premonitionsTableCreated = true;
+    log.ok('Premonition tables (premonitions, premonition_recipients) created/recreated.');
+  } catch (e) {
+    log.err('Failed to create premonition tables', { message: e.message });
+    // This error will still be thrown, but now we know why
+  }
+}
+
+let premonitionMediaTableCreated = false;
+async function _ensurePremonitionsMediaTables() {
+  if (premonitionMediaTableCreated) return;
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS premonition_media (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        filename VARCHAR(255),
+        mime VARCHAR(100) NOT NULL,
+        size INT UNSIGNED NOT NULL,
+        data MEDIUMBLOB NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB;
+    `);
+    premonitionMediaTableCreated = true;
+    log.ok('Premonition media table (premonition_media) verified/created.');
+  } catch (e) {
+    log.err('Failed to create premonition_media table', { message: e.message });
+  }
+}
+
 
 /* ------------------ Start server Mail ------------------ */
 
@@ -1887,9 +1977,7 @@ app.delete('/api/admin/domain-claims/:division', authRequired, requireAdmin, asy
   res.json({ ok: true });
 });
 
-const fs = require('fs');
 const readline = require('readline');
-const path = require('path');
 
 // helper to tail last N lines of a file fairly efficiently (works for large files)
 async function tailFile(filePath, maxLines = 200) {
@@ -1953,7 +2041,7 @@ app.get('/api/admin/logs/download', authRequired, requireAdmin, (req, res) => {
 // Admin: clear log file (truncate) — use with care
 app.post('/api/admin/logs/clear', authRequired, requireAdmin, (req, res) => {
   const file = process.env.LOG_FILE;
-  if (!file) return res.status(404).json({ error: 'Log file not configured' });
+  if (!file) return res.status(440).json({ error: 'Log file not configured' });
   const fp = path.resolve(file);
   try {
     fs.truncateSync(fp, 0);
@@ -2046,6 +2134,8 @@ app.post('/api/push/unsubscribe', authRequired, async (req, res) => {
   }
 });
 
+
+
 // Fire a test push to current user (auth required)
 app.post('/api/push/test', authRequired, async (req, res) => {
   try {
@@ -2101,21 +2191,21 @@ app.use(attachRequestLogger({
   silentPaths: [/^\/api\/admin\/logs(?:\/.*)?$/] // don’t log when hitting the logs endpoints
 }));
 
-app.use(expressErrorHandler);
+// app.use(expressErrorHandler); // This was duplicated, removed one
 
 /* -------------------- Coteries -------------------- */
 
 /**
  * Create a coterie
  * body: {
- *  name, type, domain_id|null,
- *  traits:{chasse,lien,portillon},
- *  required (object of {Name: dots}),
- *  backgrounds (array of {name,dots}),
- *  extras (array of strings),
- *  points_per_member (1|2),
- *  coterie_xp (number),
- *  members: [{ user_id, display_name }]
+ * name, type, domain_id|null,
+ * traits:{chasse,lien,portillon},
+ * required (object of {Name: dots}),
+ * backgrounds (array of {name,dots}),
+ * extras (array of strings),
+ * points_per_member (1|2),
+ * coterie_xp (number),
+ * members: [{ user_id, display_name }]
  * }
  */
 app.post('/api/coteries', authRequired, async (req, res) => {
@@ -2216,6 +2306,8 @@ app.get('/api/coteries/:id', authRequired, async (req, res) => {
     res.status(500).json({ error: 'Failed to load coterie' });
   }
 });
+
+
 
 // Update core fields (member or admin)
 app.put('/api/coteries/:id', authRequired, async (req, res) => {
@@ -2338,7 +2430,6 @@ app.get('/api/downtimes/config', authRequired, async (req, res) => {
   }
 });
 
-
 // WRITE (admins): save the two dates
 // ⚠️ make sure the path is **/admin/downtimes/config** (no extra 'c')
 app.post('/api/admin/downtimes/config', authRequired, requireAdmin, async (req, res) => {
@@ -2373,6 +2464,211 @@ app.post('/api/admin/downtimes/config', authRequired, requireAdmin, async (req, 
 });
 
 
+/* -------------------- NEW PREMONITION ROUTES -------------------- */
+
+// ADMIN: Get list of Malkavian players  ✅ REPLACE THIS ROUTE
+app.get('/api/admin/premonitions/malkavians', authRequired, requireAdmin, async (req, res) => {
+  try {
+    await _ensurePremonitionsTables();
+
+    // One row per user that has at least one Malkavian character
+    const [rows] = await pool.query(`
+      SELECT 
+        u.id,
+        u.display_name,
+        COALESCE(MAX(c.name), '(no character)') AS char_name
+      FROM users u
+      LEFT JOIN characters c 
+        ON c.user_id = u.id
+      WHERE u.role <> 'admin'
+        AND EXISTS (
+          SELECT 1
+          FROM characters c2
+          WHERE c2.user_id = u.id
+            AND LOWER(TRIM(c2.clan)) = 'malkavian'
+        )
+      GROUP BY u.id, u.display_name
+      ORDER BY u.display_name ASC
+    `);
+
+    res.json({ malkavians: rows });
+  } catch (e) {
+    log.err('Failed to get Malkavian list', { message: e.message });
+    res.status(500).json({ error: 'Failed to get Malkavians' });
+  }
+});
+
+// ADMIN: Upload media and store it in the DB
+app.post('/api/admin/premonitions/upload', authRequired, requireAdmin, memoryUpload.single('file'), async (req, res) => {
+  try {
+    await _ensurePremonitionsMediaTables(); // Ensure media table exists
+    if (!req.file) {
+      return res.status(400).json({ error: 'File is required' });
+    }
+    const { originalname, mimetype, size, buffer } = req.file;
+
+    const [ins] = await pool.query(
+      'INSERT INTO premonition_media (filename, mime, size, data) VALUES (?,?,?,?)',
+      [originalname || 'upload', mimetype, size, buffer]
+    );
+    const media_id = ins.insertId;
+
+    res.json({
+      media_id,
+      media_mime: mimetype,
+      media_stream_url: `/api/premonitions/media/${media_id}`
+    });
+  } catch (e) {
+    log.err('Premonition media upload failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to upload media' });
+  }
+});
+
+// ADMIN: Create and send a new premonition
+app.post('/api/admin/premonitions/send', authRequired, requireAdmin, async (req, res) => {
+  try {
+    await _ensurePremonitionsTables(); // Ensure main tables exist
+    const { content_type, content_text, content_url, user_ids = [] } = req.body;
+    const sendToAllMalks = user_ids.includes('all_malkavians');
+    
+    if (!content_type || (!content_text && !content_url)) {
+      return res.status(400).json({ error: 'Type and content (text or URL) are required' });
+    }
+
+    // 1. Create the premonition content
+    const [ins] = await pool.query(
+      `INSERT INTO premonitions (sender_id, content_type, content_text, content_url)
+       VALUES (?, ?, ?, ?)`,
+      [req.user.id, content_type, content_text || null, content_url || null]
+    );
+    const premonitionId = ins.insertId;
+
+    // 2. Figure out who to send it to
+    let targetUserIds = [];
+    if (sendToAllMalks) {
+      // Get all non-admin Malkavian user IDs
+      const [malks] = await pool.query(`
+        SELECT DISTINCT u.id
+        FROM users u
+        JOIN characters c ON c.user_id = u.id
+        WHERE u.role <> 'admin'
+          AND LOWER(TRIM(c.clan)) = 'malkavian'
+      `);
+      targetUserIds = malks.map(m => m.id);
+    } else {
+      // Use the specific list, filtering out any non-numeric values
+      targetUserIds = user_ids.map(id => parseInt(id)).filter(id => !isNaN(id));
+    }
+
+    // 3. Insert recipients
+    if (targetUserIds.length > 0) {
+      // Remove duplicates
+      const uniqueUserIds = [...new Set(targetUserIds)];
+      const values = uniqueUserIds.map(userId => [premonitionId, userId]);
+      await pool.query(
+        'INSERT INTO premonition_recipients (premonition_id, user_id) VALUES ?',
+        [values]
+      );
+    }
+    
+    log.adm('Admin sent premonition', { id: premonitionId, by_user_id: req.user.id, targets: sendToAllMalks ? 'all_malks' : targetUserIds });
+    res.status(201).json({ ok: true, premonition_id: premonitionId, count: targetUserIds.length });
+
+  } catch (e) {
+    log.err('Failed to send premonition', { message: e.message, stack: e.stack });
+    res.status(500).json({ error: 'Failed to send premonition' });
+  }
+});
+
+// PLAYER: Get my premonitions
+app.get('/api/premonitions/mine', authRequired, async (req, res) => {
+  try {
+    await _ensurePremonitionsTables(); // Ensure tables exist
+    
+    // Get premonitions sent directly to me
+    // AND premonitions in my inbox that are now viewed
+    const [rows] = await pool.query(`
+      SELECT p.*
+      FROM premonitions p
+      JOIN premonition_recipients pr ON p.id = pr.premonition_id
+      WHERE pr.user_id = ?
+      ORDER BY p.created_at DESC
+    `, [req.user.id]);
+
+    // Mark these as viewed (fire and forget)
+    if (rows.length > 0) {
+      const ids = rows.map(r => r.id);
+      pool.query(
+        'UPDATE premonition_recipients SET viewed_at = NOW() WHERE user_id = ? AND premonition_id IN (?) AND viewed_at IS NULL',
+        [req.user.id, ids]
+      ).catch(err => log.err('Failed to mark premonitions as read', { message: err.message }));
+    }
+
+    // --- FIX: Resolve media_stream_url ---
+    // The player-facing component expects `content_url` to be the final, streamable URL.
+    const premonitions = rows.map(p => {
+      // If content_url is already a db stream link, use it.
+      // If it's an external link, use it.
+      // If it's text, it will be null, which is fine.
+      if (p.content_url && p.content_url.startsWith('/api/premonitions/media/')) {
+        return p; // Already correct
+      }
+      // This logic is simple: the `content_url` *is* the media URL.
+      return p;
+    });
+
+    res.json({ premonitions });
+  } catch (e) {
+    log.err('Failed to get my premonitions', { message: e.message });
+    res.status(500).json({ error: 'Failed to load premonitions' });
+  }
+});
+
+// MEDIA: Stream media from DB
+app.get('/api/premonitions/media/:id', authRequired, async (req, res) => {
+  try {
+    await _ensurePremonitionsMediaTables();
+    const id = Number(req.params.id) || 0;
+    
+    // Check if user is admin OR has access to this premonition
+    let hasAccess = req.user.role === 'admin';
+    if (!hasAccess) {
+      const [accessRows] = await pool.query(`
+        SELECT 1 FROM premonitions p
+        JOIN premonition_recipients pr ON p.id = pr.premonition_id
+        WHERE p.content_url LIKE ? AND pr.user_id = ?
+      `, [`%/api/premonitions/media/${id}%`, req.user.id]);
+      
+      if (accessRows.length > 0) {
+        hasAccess = true;
+      }
+    }
+
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    // User has access, fetch the media
+    const [rows] = await pool.query('SELECT mime, size, data FROM premonition_media WHERE id=? LIMIT 1', [id]);
+    if (!rows.length) {
+      return res.status(404).send('Not found');
+    }
+
+    const { mime, size, data } = rows[0];
+    res.setHeader('Content-Type', mime || 'application/octet-stream');
+    res.setHeader('Content-Length', size);
+    res.setHeader('Cache-Control', 'private, max-age=3600'); // 1 hour
+    res.end(data); // send raw blob
+  } catch (e) {
+    log.err('Failed to stream media', { message: e.message });
+    res.status(500).json({ error: 'Failed to stream media' });
+  }
+});
+
+
 /* -------------------- Start Server -------------------- */
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => log.start(`API server started`, { port: PORT, env: process.env.NODE_ENV || 'stable' }));
+
+// Add the global error handler middleware *last*
+app.use(expressErrorHandler);
