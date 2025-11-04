@@ -156,66 +156,48 @@ async function setSetting(key, value) {
   }
 }
 
-// --- NEW PREMONITION HELPER FUNCTIONS (WITH FIX) ---
+// --- PREMONITIONS TABLES (final, safe) ---
 let premonitionsTableCreated = false;
+
 async function _ensurePremonitionsTables() {
   if (premonitionsTableCreated) return;
   try {
-    // --- FIX: Drop tables in reverse order to ensure clean creation ---
-    // We disable foreign key checks to avoid errors if tables are interdependent
-    await pool.query('SET FOREIGN_KEY_CHECKS=0;');
-    await pool.query('DROP TABLE IF EXISTS premonition_recipients;');
-    await pool.query('DROP TABLE IF EXISTS premonitions;');
-    await pool.query('SET FOREIGN_KEY_CHECKS=1;');
-    
-    // --- FIX: Create premonitions table ---
-    // We assume users.id is INT (signed), which is a common default.
-    // We make our NEW primary key INT UNSIGNED, which is best practice.
+    // main premonitions
     await pool.query(`
       CREATE TABLE IF NOT EXISTS premonitions (
         id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-        sender_id INT NOT NULL, 
-        content_type ENUM('text', 'image', 'video') NOT NULL,
+        sender_id INT NOT NULL,
+        content_type ENUM('text','image','video') NOT NULL,
         content_text TEXT,
         content_url VARCHAR(2048),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         KEY sender_id_idx (sender_id)
-        -- We omit the foreign key to users(id) for robustness,
-        -- as we can't be 100% sure of its type.
-        -- You can add it back if you know your users.id type:
-        -- CONSTRAINT fk_premonition_sender
-        --   FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
-      ) ENGINE=InnoDB;
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
-    
-    // --- FIX: Create recipients table ---
-    // premonition_id is INT UNSIGNED (to match premonitions.id)
-    // user_id is INT (to match users.id)
+
+    // who received what
     await pool.query(`
       CREATE TABLE IF NOT EXISTS premonition_recipients (
-        id INT AUTO_INCREMENT PRIMARY KEY,
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
         premonition_id INT UNSIGNED NOT NULL,
         user_id INT NOT NULL,
         viewed_at TIMESTAMP NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE KEY unique_premonition_user (premonition_id, user_id),
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_premonition_user (premonition_id, user_id),
         CONSTRAINT fk_premonition_id
-          FOREIGN KEY (premonition_id) 
+          FOREIGN KEY (premonition_id)
           REFERENCES premonitions(id)
           ON DELETE CASCADE
-        -- We also omit this key for robustness
-        -- CONSTRAINT fk_recipient_user_id
-        --   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-      ) ENGINE=InnoDB;
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
     premonitionsTableCreated = true;
-    log.ok('Premonition tables (premonitions, premonition_recipients) created/recreated.');
+    log.ok('Premonition tables ready');
   } catch (e) {
     log.err('Failed to create premonition tables', { message: e.message });
-    // This error will still be thrown, but now we know why
   }
 }
+
 
 let premonitionMediaTableCreated = false;
 async function _ensurePremonitionsMediaTables() {
@@ -237,6 +219,14 @@ async function _ensurePremonitionsMediaTables() {
     log.err('Failed to create premonition_media table', { message: e.message });
   }
 }
+
+// run once on boot
+_ensurePremonitionsTables().catch(err =>
+  log.err('premonitions init failed', { message: err.message })
+);
+_ensurePremonitionsMediaTables().catch(err =>
+  log.err('premonition media init failed', { message: err.message })
+);
 
 
 /* ------------------ Start server Mail ------------------ */
@@ -2583,10 +2573,8 @@ app.post('/api/admin/premonitions/send', authRequired, requireAdmin, async (req,
 // PLAYER: Get my premonitions
 app.get('/api/premonitions/mine', authRequired, async (req, res) => {
   try {
-    await _ensurePremonitionsTables(); // Ensure tables exist
-    
-    // Get premonitions sent directly to me
-    // AND premonitions in my inbox that are now viewed
+    await _ensurePremonitionsTables();
+
     const [rows] = await pool.query(`
       SELECT p.*
       FROM premonitions p
@@ -2595,34 +2583,28 @@ app.get('/api/premonitions/mine', authRequired, async (req, res) => {
       ORDER BY p.created_at DESC
     `, [req.user.id]);
 
-    // Mark these as viewed (fire and forget)
+    // fire & forget mark viewed
     if (rows.length > 0) {
       const ids = rows.map(r => r.id);
       pool.query(
-        'UPDATE premonition_recipients SET viewed_at = NOW() WHERE user_id = ? AND premonition_id IN (?) AND viewed_at IS NULL',
-        [req.user.id, ids]
+        `UPDATE premonition_recipients
+         SET viewed_at = NOW()
+         WHERE user_id = ? AND premonition_id IN (${ids.map(() => '?').join(',')})
+           AND viewed_at IS NULL`,
+        [req.user.id, ...ids]
       ).catch(err => log.err('Failed to mark premonitions as read', { message: err.message }));
     }
 
-    // --- FIX: Resolve media_stream_url ---
-    // The player-facing component expects `content_url` to be the final, streamable URL.
-    const premonitions = rows.map(p => {
-      // If content_url is already a db stream link, use it.
-      // If it's an external link, use it.
-      // If it's text, it will be null, which is fine.
-      if (p.content_url && p.content_url.startsWith('/api/premonitions/media/')) {
-        return p; // Already correct
-      }
-      // This logic is simple: the `content_url` *is* the media URL.
-      return p;
-    });
-
-    res.json({ premonitions });
+    // 👇 ΑΥΤΟ είναι το σημαντικό
+    res.set('Cache-Control', 'no-store');
+    res.status(200).json({ premonitions: rows });
   } catch (e) {
     log.err('Failed to get my premonitions', { message: e.message });
     res.status(500).json({ error: 'Failed to load premonitions' });
   }
 });
+
+
 
 // MEDIA: Stream media from DB
 app.get('/api/premonitions/media/:id', authRequired, async (req, res) => {
@@ -2630,14 +2612,19 @@ app.get('/api/premonitions/media/:id', authRequired, async (req, res) => {
     await _ensurePremonitionsMediaTables();
     const id = Number(req.params.id) || 0;
     
+    // **FIX: Initialize hasAccess here**
+    let hasAccess = req.user.role === 'admin'; 
+
     // Check if user is admin OR has access to this premonition
-    let hasAccess = req.user.role === 'admin';
     if (!hasAccess) {
+      // FIX: Build the LIKE pattern string first using a template literal (backticks)
+      const likePattern = `%/api/premonitions/media/${id}%`;
+
       const [accessRows] = await pool.query(`
         SELECT 1 FROM premonitions p
         JOIN premonition_recipients pr ON p.id = pr.premonition_id
         WHERE p.content_url LIKE ? AND pr.user_id = ?
-      `, [`%/api/premonitions/media/${id}%`, req.user.id]);
+      `, [likePattern, req.user.id]); // FIX: Pass the correctly built string
       
       if (accessRows.length > 0) {
         hasAccess = true;
