@@ -2456,6 +2456,59 @@ app.post('/api/admin/downtimes/config', authRequired, requireAdmin, async (req, 
 
 /* -------------------- NEW PREMONITION ROUTES -------------------- */
 
+// ADMIN: List all premonitions (+ recipients)
+app.get('/api/admin/premonitions', authRequired, requireAdmin, async (req, res) => {
+  try {
+    await _ensurePremonitionsTables();
+
+    // Base list
+    const [prems] = await pool.query(`
+      SELECT p.id, p.sender_id, u.display_name AS sender_name,
+             p.content_type, p.content_text, p.content_url, p.created_at
+      FROM premonitions p
+      LEFT JOIN users u ON u.id = p.sender_id
+      ORDER BY p.created_at DESC
+      LIMIT 500
+    `);
+
+    if (prems.length === 0) return res.json({ premonitions: [] });
+
+    // Recipients per premonition
+    const ids = prems.map(p => p.id);
+    const [recips] = await pool.query(`
+      SELECT pr.premonition_id, pr.user_id, pr.viewed_at,
+             u.display_name, COALESCE(c.name,'') AS char_name
+      FROM premonition_recipients pr
+      JOIN users u ON u.id = pr.user_id
+      LEFT JOIN characters c ON c.user_id = u.id
+      WHERE pr.premonition_id IN (${ids.map(()=>'?').join(',')})
+      ORDER BY u.display_name ASC
+    `, ids);
+
+    const byPrem = new Map();
+    for (const r of recips) {
+      if (!byPrem.has(r.premonition_id)) byPrem.set(r.premonition_id, []);
+      byPrem.get(r.premonition_id).push({
+        user_id: r.user_id,
+        display_name: r.display_name,
+        char_name: r.char_name || null,
+        viewed_at: r.viewed_at
+      });
+    }
+
+    res.json({
+      premonitions: prems.map(p => ({
+        ...p,
+        recipients: byPrem.get(p.id) || []
+      }))
+    });
+  } catch (e) {
+    log.err('Admin list premonitions failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to load premonitions' });
+  }
+});
+
+
 // ADMIN: Get list of Malkavian players  ✅ REPLACE THIS ROUTE
 app.get('/api/admin/premonitions/malkavians', authRequired, requireAdmin, async (req, res) => {
   try {
