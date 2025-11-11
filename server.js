@@ -79,6 +79,28 @@ function _maskEmail(email) {
   return `${maskedUser}@${d}`;
 }
 
+// V5 success math:
+// - 6..10 = 1 success
+// - Pairs of 10s (across all dice) add +2 successes per pair (on top of the 1-per-die)
+// - messy_crit if any of those tens are on hunger
+// - bestial_failure if total successes == 0 AND there's at least one hunger 1
+function computeV5Outcome({ normal = [], hunger = [] }) {
+  const all = [...normal, ...hunger];
+  const baseSuccesses = all.filter(v => v >= 6).length;
+
+  const tens = all.filter(v => v === 10).length;
+  const crit_pairs = Math.floor(tens / 2);
+
+  const hungerTens = hunger.filter(v => v === 10).length;
+  const messy_crit = crit_pairs > 0 && hungerTens > 0;
+
+  const hungerOnes = hunger.filter(v => v === 1).length;
+  const successes = baseSuccesses + (crit_pairs * 2);
+  const bestial_failure = successes === 0 && hungerOnes > 0;
+
+  return { successes, crit_pairs, messy_crit, bestial_failure };
+}
+
 // Respect EmailJS rate limit: 1 request / second
 let __lastSendAt = 0;
 async function _respectEmailJsRateLimit() {
@@ -2046,23 +2068,40 @@ app.post('/api/admin/logs/clear', authRequired, requireAdmin, (req, res) => {
 // Admin: fetch ALL NPC chat messages (flat list)
 app.get('/api/admin/chat/npc/all', authRequired, requireAdmin, async (_req, res) => {
   try {
-    const [rows] = await pool.query(
-      `SELECT 
-         id, 
-         npc_id, 
-         user_id, 
-         from_side, 
-         body, 
-         created_at
-       FROM npc_messages
-       ORDER BY created_at ASC`
-    );
+    // 👇 START OF FIX: Use the UNION query to get messages from BOTH tables
+    const [rows] = await pool.query(`
+      SELECT m.id, m.npc_id, m.user_id, m.from_side, m.body, m.created_at
+      FROM (
+        SELECT id, npc_id, user_id, from_side, body, created_at FROM npc_messages
+        UNION ALL
+        SELECT id, npc_id, user_id, from_side, body, created_at FROM npc_chat_messages
+      ) m
+      ORDER BY m.created_at ASC
+    `);
 
     // Example shape:
     // { "messages": [ { id, npc_id, user_id, from_side, body, created_at }, ... ] }
     res.json({ messages: rows });
   } catch (e) {
     log.err('Admin fetch ALL NPC messages failed', { message: e.message, stack: e.stack });
+    res.status(500).json({ error: 'Failed to fetch NPC messages' });
+  }
+});
+
+// Court/Admin: fetch ALL NPC messages (normalized from both tables)
+app.get('/api/court/chat/npc/all', authRequired, requireCourt, async (_req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT m.id, m.npc_id, m.user_id, m.from_side, m.body, m.created_at
+      FROM (
+        SELECT id, npc_id, user_id, from_side, body, created_at FROM npc_messages
+        UNION ALL
+        SELECT id, npc_id, user_id, from_side, body, created_at FROM npc_chat_messages
+      ) m
+      ORDER BY m.created_at ASC
+    `);
+    res.json({ messages: rows });
+  } catch (e) {
     res.status(500).json({ error: 'Failed to fetch NPC messages' });
   }
 });
@@ -2180,6 +2219,38 @@ app.post('/api/push/unsubscribe', authRequired, async (req, res) => {
 app.use(attachRequestLogger({
   silentPaths: [/^\/api\/admin\/logs(?:\/.*)?$/] // don’t log when hitting the logs endpoints
 }));
+
+// --- DB Init Helpers ---
+let diceTableCreated = false;
+async function _ensureDiceTable() {
+  if (diceTableCreated) return;
+  try {
+    // Use the promise-based pool here
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS dice_rolls (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        character_id INT NULL,
+        pool INT NOT NULL,
+        hunger INT NOT NULL DEFAULT 0,
+        sides INT NOT NULL DEFAULT 10,
+        results_json JSON NOT NULL,
+        successes INT NOT NULL DEFAULT 0,
+        crit_pairs INT NOT NULL DEFAULT 0,
+        messy_crit TINYINT(1) NOT NULL DEFAULT 0,
+        bestial_failure TINYINT(1) NOT NULL DEFAULT 0,
+        note VARCHAR(255) NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_user (user_id),
+        INDEX idx_created (created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    diceTableCreated = true;
+    log.ok('Dice table verified/created.');
+  } catch (e) {
+    log.err('Failed to create dice_rolls table', { message: e.message });
+  }
+}
 
 // app.use(expressErrorHandler); // This was duplicated, removed one
 
@@ -2702,6 +2773,121 @@ app.get('/api/premonitions/media/:id', authRequired, async (req, res) => {
   } catch (e) {
     log.err('Failed to stream media', { message: e.message });
     res.status(500).json({ error: 'Failed to stream media' });
+  }
+});
+
+
+
+/* -------------------- Dice Rolls (V5) -------------------- */
+app.post('/api/dice/rolls', authRequired, async (req, res) => {
+  try {
+    await _ensureDiceTable();
+    const { pool: poolCount, hunger, sides = 10, results, difficulty, note } = req.body || {};
+    
+    if (!results || !Array.isArray(results.normal) || !Array.isArray(results.hunger)) {
+      return res.status(400).json({ error: 'Invalid results format' });
+    }
+
+    let charId = null;
+    try {
+      const [rows] = await pool.query('SELECT id FROM characters WHERE user_id=? LIMIT 1', [req.user.id]);
+      if (rows && rows.length > 0) charId = rows[0].id;
+    } catch {}
+
+    const outcome = computeV5Outcome({
+      normal: results.normal.map(Number),
+      hunger: results.hunger.map(Number),
+    });
+
+    const payload = {
+      normal: results.normal,
+      hunger: results.hunger,
+      difficulty: difficulty || null
+    };
+
+    const [ins] = await pool.query(
+      `INSERT INTO dice_rolls 
+       (user_id, character_id, pool, hunger, sides, results_json, successes, crit_pairs, messy_crit, bestial_failure, note)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [
+        req.user.id, charId, 
+        Number(poolCount) || (results.normal.length + results.hunger.length),
+        Number(hunger) || results.hunger.length,
+        sides,
+        JSON.stringify(payload),
+        outcome.successes,
+        outcome.crit_pairs,
+        outcome.messy_crit ? 1 : 0,
+        outcome.bestial_failure ? 1 : 0,
+        note ? String(note).slice(0, 255) : null
+      ]
+    );
+
+    log.ok('Dice roll logged', { user_id: req.user.id, roll_id: ins.insertId });
+    res.status(201).json({ id: ins.insertId, ...outcome });
+  } catch (e) {
+    log.err('Save dice roll failed', { message: e.message, stack: e.stack });
+    res.status(500).json({ error: 'Failed to save roll' });
+  }
+});
+
+app.get('/api/admin/dice/rolls', authRequired, requireAdmin, async (req, res) => {
+  try {
+    await _ensureDiceTable();
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+    
+    const [rows] = await pool.query(`
+      SELECT r.*, u.display_name AS user_name, c.name AS char_name, c.clan AS char_clan
+      FROM dice_rolls r
+      LEFT JOIN users u ON u.id = r.user_id
+      LEFT JOIN characters c ON c.id = r.character_id
+      ORDER BY r.created_at DESC
+      LIMIT ?
+    `, [limit]);
+
+    res.json({ rolls: rows });
+  } catch (e) {
+    log.err('Admin fetch dice rolls failed', { message: e.message, stack: e.stack });
+    res.status(500).json({ error: 'Failed to fetch rolls' });
+  }
+});
+
+// Admin: list recent rolls (with user + char info)
+// query: ?limit=200 (default 100), ?user_id=, ?since=ISO
+app.get('/api/admin/dice/rolls', authRequired, requireAdmin, async (req, res) => {
+  try {
+    await _ensureDiceTable();
+
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 1000);
+    const userId = Number(req.query.user_id) || null;
+    const since = req.query.since ? new Date(req.query.since) : null;
+
+    const where = [];
+    const vals = [];
+
+    if (userId) { where.push('r.user_id=?'); vals.push(userId); }
+    if (since && !isNaN(since.getTime())) { where.push('r.created_at >= ?'); vals.push(since); }
+
+    const sql = `
+      SELECT
+        r.id, r.user_id, r.character_id, r.pool, r.hunger, r.sides,
+        r.results_json, r.successes, r.crit_pairs, r.messial_crit AS messy_crit, r.bestial_failure,
+        r.note, r.created_at,
+        u.display_name AS user_name,
+        c.name AS char_name, c.clan AS char_clan
+      FROM dice_rolls r
+      LEFT JOIN users u ON u.id = r.user_id
+      LEFT JOIN characters c ON c.id = r.character_id
+      ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+      ORDER BY r.created_at DESC
+      LIMIT ${limit}
+    `.replace('messial_crit','messy_crit'); // typo guard if pastes get mangled
+
+    const [rows] = await pool.query(sql, vals);
+    res.json({ rolls: rows });
+  } catch (e) {
+    log.err('Admin fetch dice rolls failed', { message: e.message, stack: e.stack });
+    res.status(500).json({ error: 'Failed to fetch dice rolls' });
   }
 });
 
