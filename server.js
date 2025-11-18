@@ -1110,18 +1110,67 @@ app.post('/api/admin/chat/reply-as-npc/:npcId/:userId', authRequired, requireAdm
   }
 });
 
-// List all NPCs (public for logged-in players)
-app.get('/api/chat/npcs', authRequired, async (_req, res) => {
+// Player: get my recent conversations (NPCs AND Players)
+app.get('/api/chat/my-recent', authRequired, async (req, res) => {
   try {
-    const [rows] = await pool.query(
-      `SELECT id, name, clan
-       FROM npcs
-       ORDER BY name ASC`
+    const userId = req.user.id;
+    const limit = 10; // Fetch a bit more to allow for grouping
+
+    // 1. Get recent NPC messages
+    const [npcRows] = await pool.query(
+      `SELECT m.id, m.npc_id AS partner_id, n.name AS partner_name, 
+              m.body, m.created_at, 'npc' as type
+       FROM npc_messages m
+       JOIN npcs n ON n.id = m.npc_id
+       WHERE m.user_id = ?
+       ORDER BY m.created_at DESC LIMIT ?`,
+      [userId, limit]
     );
-    res.json({ npcs: rows });
+
+    // 2. Get recent Player messages (Sent or Received)
+    const [playerRows] = await pool.query(
+      `SELECT cm.id, 
+              CASE WHEN cm.sender_id = ? THEN cm.recipient_id ELSE cm.sender_id END as partner_id,
+              CASE WHEN cm.sender_id = ? THEN r.display_name ELSE s.display_name END as partner_name,
+              cm.body, cm.created_at, 'player' as type
+       FROM chat_messages cm
+       JOIN users s ON cm.sender_id = s.id
+       JOIN users r ON cm.recipient_id = r.id
+       WHERE cm.sender_id = ? OR cm.recipient_id = ?
+       ORDER BY cm.created_at DESC LIMIT ?`,
+      [userId, userId, userId, userId, limit]
+    );
+
+    // 3. Combine and Unique by Partner
+    const all = [...npcRows, ...playerRows];
+    
+    // Sort absolute latest first
+    all.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+    // Deduplicate: Keep only the most recent message per partner
+    const seenMap = new Map();
+    const uniqueConvos = [];
+
+    for (const msg of all) {
+      const key = `${msg.type}-${msg.partner_id}`;
+      if (!seenMap.has(key)) {
+        seenMap.set(key, true);
+        uniqueConvos.push({
+          id: msg.id,
+          partnerName: msg.partner_name,
+          lastMessage: msg.body,
+          timestamp: msg.created_at,
+          isNPC: msg.type === 'npc',
+          linkId: msg.partner_id // ID to open in comms
+        });
+      }
+      if (uniqueConvos.length >= 5) break; // Hard limit for dashboard
+    }
+
+    res.json({ conversations: uniqueConvos });
   } catch (e) {
-    log.err('Failed to list NPCs', { message: e.message });
-    res.status(500).json({ error: 'Failed to list NPCs' });
+    log.err('Failed to fetch my recent chats', { message: e.message });
+    res.status(500).json({ error: 'Failed to load recent chats' });
   }
 });
 
@@ -1469,9 +1518,15 @@ app.delete('/api/boons/:id', authRequired, requireCourt, async (req, res) => {
 
 /* -------------------- Chat -------------------- */
 // NOTE TO USER: You may need to add 'chat' to your logger configuration if it's a custom one.
-// Get list of users to chat with (all except me)
+
+// Get list of users to chat with (Sorted by Recency & Unread)
 app.get('/api/chat/users', authRequired, async (req, res) => {
   try {
+    const myId = req.user.id;
+    
+    // This query fetches users and calculates:
+    // 1. last_msg: The timestamp of the latest message (sent OR received)
+    // 2. unread: The count of messages sent BY this user TO me that are unread
     const [rows] = await pool.query(
       `
       SELECT
@@ -1479,29 +1534,71 @@ app.get('/api/chat/users', authRequired, async (req, res) => {
         u.display_name,
         u.role,
         CASE WHEN u.role = 'admin' THEN 1 ELSE 0 END AS is_admin,
-        /* collapse possible multiple characters to a single row */
         MAX(c.id)   AS char_id,
         MAX(c.name) AS char_name,
-        MAX(c.clan) AS clan
+        MAX(c.clan) AS clan,
+        (
+          SELECT created_at 
+          FROM chat_messages 
+          WHERE (sender_id = u.id AND recipient_id = ?) OR (sender_id = ? AND recipient_id = u.id)
+          ORDER BY created_at DESC LIMIT 1
+        ) as last_message_at,
+        (
+          SELECT COUNT(*) 
+          FROM chat_messages 
+          WHERE sender_id = u.id AND recipient_id = ? AND read_at IS NULL
+        ) as unread_count
       FROM users u
       LEFT JOIN characters c ON c.user_id = u.id
       WHERE u.id <> ?
       GROUP BY u.id, u.display_name, u.role
-      ORDER BY u.display_name ASC
+      ORDER BY 
+        unread_count DESC,   -- Unread first
+        last_message_at DESC, -- Then most recent
+        u.display_name ASC    -- Then alphabetical
       `,
-      [req.user.id]
+      [myId, myId, myId, myId]
     );
 
     const users = rows.map(r => ({
       ...r,
       is_admin: !!r.is_admin,
-      char_id: r.char_id ? Number(r.char_id) : null
+      char_id: r.char_id ? Number(r.char_id) : null,
+      unread_count: Number(r.unread_count || 0)
     }));
 
     res.json({ users });
   } catch (e) {
     log.err('Failed to get chat users', { message: e.message, stack: e.stack });
     res.status(500).json({ error: 'Failed to get users' });
+  }
+});
+
+// List all NPCs (Sorted by Recency)
+app.get('/api/chat/npcs', authRequired, async (req, res) => {
+  try {
+    const myId = req.user.id;
+
+    // Similar logic for NPCs
+    const [rows] = await pool.query(
+      `SELECT 
+        n.id, n.name, n.clan,
+        (
+          SELECT created_at 
+          FROM npc_messages 
+          WHERE npc_id = n.id AND user_id = ?
+          ORDER BY created_at DESC LIMIT 1
+        ) as last_message_at
+       FROM npcs n
+       ORDER BY 
+         last_message_at DESC, -- Recent NPCs first
+         n.name ASC`,
+       [myId]
+    );
+    res.json({ npcs: rows });
+  } catch (e) {
+    log.err('Failed to list NPCs', { message: e.message });
+    res.status(500).json({ error: 'Failed to list NPCs' });
   }
 });
 
@@ -2889,6 +2986,180 @@ app.get('/api/admin/dice/rolls', authRequired, requireAdmin, async (req, res) =>
     log.err('Admin fetch dice rolls failed', { message: e.message, stack: e.stack });
     res.status(500).json({ error: 'Failed to fetch dice rolls' });
   }
+});
+
+/* -------------------- NEWS & ANNOUNCEMENTS -------------------- */
+
+let newsTableCreated = false;
+async function _ensureNewsTables() {
+  if (newsTableCreated) return;
+  try {
+    // Main entries table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS news_entries (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        author_id INT NOT NULL,
+        type ENUM('news', 'announcement') NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        subtitle VARCHAR(255),
+        body TEXT NOT NULL,
+        theme VARCHAR(100),
+        journalist_name VARCHAR(100),
+        media_url VARCHAR(2048),
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Media table (storing blobs similarly to premonitions)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS news_media (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        filename VARCHAR(255),
+        mime VARCHAR(100) NOT NULL,
+        size INT UNSIGNED NOT NULL,
+        data MEDIUMBLOB NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB;
+    `);
+
+    newsTableCreated = true;
+    log.ok('News & Announcements tables ready');
+  } catch (e) {
+    log.err('Failed to create news tables', { message: e.message });
+  }
+}
+
+// Run init
+_ensureNewsTables();
+
+// GET /api/news (Public/Auth) - Fetch all items
+app.get('/api/news', authRequired, async (req, res) => {
+  try {
+    // Join with users to get the real name for Announcements
+    const [rows] = await pool.query(`
+      SELECT n.*, u.display_name as author_real_name
+      FROM news_entries n
+      LEFT JOIN users u ON n.author_id = u.id
+      ORDER BY n.created_at DESC
+      LIMIT 100
+    `);
+    res.json({ items: rows });
+  } catch (e) {
+    log.err('Fetch news failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to load news' });
+  }
+});
+
+// GET /api/news/recent (For Dashboard) - Lightweight headlines only
+app.get('/api/news/recent', authRequired, async (req, res) => {
+  try {
+    const limit = 5;
+    // Only fetch necessary fields, not the full body
+    const [rows] = await pool.query(`
+      SELECT id, type, title, theme, created_at
+      FROM news_entries
+      ORDER BY created_at DESC
+      LIMIT ?
+    `, [limit]);
+    res.json({ news: rows });
+  } catch (e) {
+    log.err('Fetch recent news headlines failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to load headlines' });
+  }
+});
+
+// ... app.listen ...
+
+// POST /api/news/upload (Admin/Court) - Upload media
+app.post('/api/news/upload', authRequired, memoryUpload.single('file'), async (req, res) => {
+  try {
+    // Check permissions: Admin or Court
+    if (req.user.role !== 'admin' && req.user.role !== 'courtuser') {
+        return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    if (!req.file) return res.status(400).json({ error: 'File required' });
+    
+    const { originalname, mimetype, size, buffer } = req.file;
+    const [ins] = await pool.query(
+      'INSERT INTO news_media (filename, mime, size, data) VALUES (?,?,?,?)',
+      [originalname || 'upload', mimetype, size, buffer]
+    );
+    
+    res.json({ url: `/api/news/media/${ins.insertId}` });
+  } catch (e) {
+    log.err('News upload failed', { message: e.message });
+    res.status(500).json({ error: 'Upload failed' });
+  }
+});
+
+// GET /api/news/media/:id - Stream media
+app.get('/api/news/media/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const [rows] = await pool.query('SELECT mime, size, data FROM news_media WHERE id=? LIMIT 1', [id]);
+    if (!rows.length) return res.status(404).send('Not found');
+
+    const { mime, size, data } = rows[0];
+    res.setHeader('Content-Type', mime || 'application/octet-stream');
+    res.setHeader('Content-Length', size);
+    res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
+    res.end(data);
+  } catch (e) {
+    res.status(404).end();
+  }
+});
+
+// POST /api/news (Admin/Court) - Create Entry
+app.post('/api/news', authRequired, async (req, res) => {
+  try {
+    const { type, title, subtitle, body, theme, journalist_name, media_url } = req.body;
+
+    // Permission Check
+    if (type === 'news') {
+        if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only Admins can post News' });
+    } else if (type === 'announcement') {
+        if (req.user.role !== 'admin' && req.user.role !== 'courtuser') {
+            return res.status(403).json({ error: 'Only Court/Admin can post Announcements' });
+        }
+    } else {
+        return res.status(400).json({ error: 'Invalid type' });
+    }
+
+    if (!title || !body) return res.status(400).json({ error: 'Title and Body are required' });
+
+    await pool.query(
+      `INSERT INTO news_entries 
+      (author_id, type, title, subtitle, body, theme, journalist_name, media_url)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        req.user.id,
+        type,
+        title,
+        subtitle || null,
+        body, // Stored as HTML
+        theme || 'Neutral',
+        journalist_name || null,
+        media_url || null
+      ]
+    );
+
+    log.ok('News entry created', { user_id: req.user.id, type, title });
+    res.json({ ok: true });
+  } catch (e) {
+    log.err('Create news failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to post' });
+  }
+});
+
+// DELETE /api/news/:id (Admin Only)
+app.delete('/api/news/:id', authRequired, requireAdmin, async (req, res) => {
+    try {
+        await pool.query('DELETE FROM news_entries WHERE id=?', [req.params.id]);
+        res.json({ ok: true });
+    } catch(e) {
+        res.status(500).json({ error: 'Delete failed' });
+    }
 });
 
 
