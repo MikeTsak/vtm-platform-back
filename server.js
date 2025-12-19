@@ -121,19 +121,7 @@ let discordClient = null;
 // Only initialize if token is present
 if (process.env.DISCORD_BOT_TOKEN) {
   discordClient = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
-  discordClient.login(token).catch((e) => {
-  log.err("Discord login failed", {
-    name: e?.name,
-    message: e?.message,
-    code: e?.code,
-    status: e?.status,
-    stack: e?.stack,
-    rawTokenLen: rawToken.length,
-    trimmedTokenLen: token.length,
-    startsWith: token.slice(0, 6), // safe-ish; remove if you prefer
-    endsWith: token.slice(-6),     // safe-ish; remove if you prefer
-    });
-  });
+  discordClient.login(process.env.DISCORD_BOT_TOKEN).catch(e => log.err('Discord login failed', e));
   discordClient.once('ready', () => {
     log.start(`Discord Bot logged in as ${discordClient.user.tag}`);
   });
@@ -360,6 +348,7 @@ async function _ensurePremonitionsTables() {
   }
 }
 
+// media table for premonitions
 
 let premonitionMediaTableCreated = false;
 async function _ensurePremonitionsMediaTables() {
