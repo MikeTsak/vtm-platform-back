@@ -576,14 +576,49 @@ app.get('/api/health', async (req, res) => {
 
 // Friendly HTML at "/" (quick glance in the browser)
 app.get('/', async (req, res) => {
-  // Optionally also check DB here; keep it light
-  let dbStatus = 'unknown';
+  const errors = [];
+  
+  // 1. Check DB
+  let dbStatus = 'UNKNOWN';
   try {
     const [rows] = await pool.query('SELECT 1 AS ok');
     dbStatus = rows?.[0]?.ok === 1 ? 'OK' : 'DOWN';
-  } catch {
+  } catch (e) {
     dbStatus = 'DOWN';
+    errors.push(`Database: ${e.message}`);
   }
+
+  // 2. Check Discord Bot
+  let discordStatus = 'DISABLED';
+  let discordClass = 'muted'; // Default for disabled
+  if (process.env.DISCORD_BOT_TOKEN) {
+    if (discordClient?.isReady()) {
+      discordStatus = `ONLINE (${discordClient.user.tag})`;
+      discordClass = 'ok';
+    } else {
+      discordStatus = 'DOWN / CONNECTING';
+      discordClass = 'bad';
+      errors.push('Discord: Bot token provided but client is not ready.');
+    }
+  }
+
+  // 3. Check Email Service (Configuration check)
+  let emailStatus = 'MISSING CONFIG';
+  let emailClass = 'bad';
+  if (
+    process.env.EMAILJS_SERVICE_ID && 
+    process.env.EMAILJS_TEMPLATE_ID && 
+    process.env.EMAILJS_PUBLIC_KEY
+  ) {
+    emailStatus = 'CONFIGURED';
+    emailClass = 'ok';
+  } else {
+    errors.push('Email: Missing EmailJS environment variables (SERVICE_ID, TEMPLATE_ID, or PUBLIC_KEY).');
+  }
+
+  // Determine overall system health
+  const systemStatus = (dbStatus === 'OK' && discordClass !== 'bad' && emailClass !== 'bad') ? 'OK' : 'DEGRADED';
+  const systemClass = systemStatus === 'OK' ? 'ok' : 'bad';
 
   res.set('Cache-Control', 'no-store').type('html').send(`<!doctype html>
 <html lang="en">
@@ -592,7 +627,7 @@ app.get('/', async (req, res) => {
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>API Status</title>
 <style>
-  :root { --bg:#0b0b0c; --card:#141418; --fg:#e8e8ea; --muted:#a3a3ad; --ok:#3ecf8e; --bad:#ff6b6b; --dim:#1f1f24; }
+  :root { --bg:#0b0b0c; --card:#141418; --fg:#e8e8ea; --muted:#a3a3ad; --ok:#3ecf8e; --bad:#ff6b6b; --dim:#1f1f24; --err-bg: #2a1215; }
   * { box-sizing:border-box; }
   body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Ubuntu,Helvetica,Arial,sans-serif; background:var(--bg); color:var(--fg); display:grid; place-items:center; min-height:100vh; }
   .card { background:var(--card); border:1px solid var(--dim); border-radius:14px; padding:20px 22px; width:min(680px,92vw); box-shadow:0 10px 30px rgba(0,0,0,.35); }
@@ -603,24 +638,49 @@ app.get('/', async (req, res) => {
   .v { font-weight:600; }
   .ok { color:var(--ok); }
   .bad { color:var(--bad); }
+  .muted-text { color:var(--muted); }
   code { background:var(--dim); padding:2px 6px; border-radius:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; }
   a { color:#8ab4f8; text-decoration:none; }
   a:hover { text-decoration:underline; }
+  
+  .error-section { margin-top: 20px; padding: 12px; border-radius: 8px; background: var(--err-bg); border: 1px solid var(--bad); }
+  .error-title { color: var(--bad); font-weight: bold; font-size: 14px; margin-bottom: 6px; }
+  .error-list { margin: 0; padding-left: 20px; color: #ffb8b8; font-size: 13px; }
+  .error-list li { margin-bottom: 4px; }
 </style>
 </head>
 <body>
   <main class="card" role="status" aria-live="polite">
-    <h1>Erebus🦇 API Status: <span class="${dbStatus === 'OK' ? 'ok' : 'bad'}">${dbStatus === 'OK' ? 'OK' : 'DEGRADED'}</span></h1>
+    <h1>Erebus🦇 API Status: <span class="${systemClass}">${systemStatus}</span></h1>
     <div class="muted">This page is served by the API process.</div>
+    
     <div class="grid">
       <div class="k">Environment</div><div class="v"><code>${process.env.NODE_ENV || 'stable'}</code></div>
       <div class="k">Node.js</div><div class="v"><code>${process.version}</code></div>
       <div class="k">Uptime</div><div class="v">${Math.floor(process.uptime())}s</div>
       <div class="k">Started</div><div class="v">${startedAt.toISOString()}</div>
       <div class="k">Now</div><div class="v">${new Date().toISOString()}</div>
-      <div class="k">DB</div><div class="v ${dbStatus === 'OK' ? 'ok' : 'bad'}">${dbStatus}</div>
+      
+      <div class="k" style="margin-top:10px">Database</div>
+      <div class="v ${dbStatus === 'OK' ? 'ok' : 'bad'}" style="margin-top:10px">${dbStatus}</div>
+      
+      <div class="k">Discord Bot</div>
+      <div class="v ${discordClass}">${discordStatus}</div>
+      
+      <div class="k">Email Service</div>
+      <div class="v ${emailClass}">${emailStatus}</div>
+      
       <div class="k">Health JSON</div><div class="v"><a href="/api/health">/api/health</a></div>
     </div>
+
+    ${errors.length > 0 ? `
+    <div class="error-section">
+      <div class="error-title">Active Errors detected:</div>
+      <ul class="error-list">
+        ${errors.map(e => `<li>${e}</li>`).join('')}
+      </ul>
+    </div>
+    ` : ''}
   </main>
 </body>
 </html>`);
