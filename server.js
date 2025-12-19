@@ -16,6 +16,7 @@ const webpush = require('web-push');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer'); // Import multer
+const { Client, GatewayIntentBits } = require('discord.js');
 
 // --- Setup ---
 
@@ -39,6 +40,12 @@ const app = express();
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 app.set('trust proxy', true);
+
+// Disable caching for all admin API routes to prevent 304 errors
+app.use('/api/admin', (req, res, next) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  next();
+});
 
 // Create a multer instance that stores files in memory as buffers
 const storage = multer.memoryStorage();
@@ -80,10 +87,6 @@ function _maskEmail(email) {
 }
 
 // V5 success math:
-// - 6..10 = 1 success
-// - Pairs of 10s (across all dice) add +2 successes per pair (on top of the 1-per-die)
-// - messy_crit if any of those tens are on hunger
-// - bestial_failure if total successes == 0 AND there's at least one hunger 1
 function computeV5Outcome({ normal = [], hunger = [] }) {
   const all = [...normal, ...hunger];
   const baseSuccesses = all.filter(v => v >= 6).length;
@@ -112,6 +115,131 @@ async function _respectEmailJsRateLimit() {
   __lastSendAt = Date.now();
 }
 
+// --- Discord Bot Setup ---
+let discordClient = null;
+
+// Only initialize if token is present
+if (process.env.DISCORD_BOT_TOKEN) {
+  discordClient = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
+  discordClient.login(process.env.DISCORD_BOT_TOKEN).catch(e => log.err('Discord login failed', e));
+  discordClient.once('ready', () => {
+    log.start(`Discord Bot logged in as ${discordClient.user.tag}`);
+  });
+} else {
+  log.warn('DISCORD_BOT_TOKEN not set. Discord bot disabled.');
+}
+
+// Global variable to prevent double-sending within the same minute
+let lastDailyCheckDate = '';
+
+// Daily Mail Check Scheduler
+function startDailyMailCheck() {
+  // Check every minute (60000ms)
+  setInterval(async () => {
+    if (!discordClient?.isReady()) return;
+
+    try {
+      // 1. Get Settings from DB
+      const targetTime = await getSetting('discord_schedule_time', '12:00'); // Default 12:00
+      
+      const now = new Date();
+      // Get current time string HH:MM (24h format)
+      const currentTime = now.toLocaleTimeString('en-GB', { 
+        hour: '2-digit', 
+        minute: '2-digit', 
+        timeZone: 'Europe/Athens' 
+      });
+      
+      // Get current date string YYYY-MM-DD to ensure we run only once per day
+      const currentDate = now.toISOString().split('T')[0];
+
+      // 2. Check if it's time AND we haven't run today yet
+      if (currentTime === targetTime && lastDailyCheckDate !== currentDate) {
+        log.ok(`Triggering daily Discord mail check at ${currentTime}`);
+        await sendDiscordMailNotifications();
+        lastDailyCheckDate = currentDate;
+      }
+    } catch (e) {
+      log.err('Daily Discord check error', { error: e.message });
+    }
+  }, 60000);
+}
+
+// Start the scheduler
+startDailyMailCheck();
+
+// Helper: Send Discord Notifications
+async function sendDiscordMailNotifications(isTest = false) {
+  if (!discordClient?.isReady()) return;
+  
+  try {
+    // 1. Get Channel ID from DB
+    const channelId = await getSetting('discord_channel_id', null);
+    if (!channelId) {
+      log.warn('Discord notification skipped: No channel ID configured in Admin Settings.');
+      return;
+    }
+
+    const channel = await discordClient.channels.fetch(channelId).catch(() => null);
+    if (!channel) {
+      log.warn('Discord notification skipped: Invalid Channel ID or Bot lacks permission.', { channelId });
+      return;
+    }
+
+    // --- TEST MODE MESSAGE ---
+    if (isTest) {
+      await channel.send("This is a Test message from the Erebus Portal.");
+    }
+    // -------------------------
+
+    // 2. Find users with unread Direct Messages AND a valid Discord ID
+    const [recipients] = await pool.query(`
+      SELECT DISTINCT u.discord_id
+      FROM chat_messages m
+      JOIN users u ON m.recipient_id = u.id
+      WHERE m.read_at IS NULL 
+        AND u.discord_id IS NOT NULL 
+        AND u.discord_id != ''
+    `);
+
+    if (recipients.length === 0 && !isTest) return;
+
+    // 3. Send messages
+    for (const r of recipients) {
+      try {
+        await channel.send(`<@${r.discord_id}> you have mail ✉`);
+        // Small delay to respect rate limits
+        await new Promise(res => setTimeout(res, 1000));
+      } catch (e) {
+        log.err('Failed to tag user on Discord', { discord_id: r.discord_id, error: e.message });
+      }
+    }
+    
+    if (recipients.length > 0) {
+      log.ok(`Sent Discord mail notifications to ${recipients.length} users`);
+    }
+  } catch (e) {
+    log.err('Discord mail notification process failed', { message: e.message });
+  }
+}
+
+
+/* ------------------ Discord Column Check ------------------ */
+let discordColChecked = false;
+async function _ensureDiscordColumn() {
+  if (discordColChecked) return;
+  try {
+    const [rows] = await pool.query("SHOW COLUMNS FROM users LIKE 'discord_id'");
+    if (rows.length === 0) {
+      await pool.query("ALTER TABLE users ADD COLUMN discord_id VARCHAR(50) NULL");
+      log.ok("Added discord_id column to users table.");
+    }
+    discordColChecked = true;
+  } catch (e) {
+    log.err("Discord column check failed", { message: e.message });
+  }
+}
+_ensureDiscordColumn();
 
 /* -------------------- Settings Helpers -------------------- */
 // server.js
@@ -249,6 +377,46 @@ _ensurePremonitionsTables().catch(err =>
 _ensurePremonitionsMediaTables().catch(err =>
   log.err('premonition media init failed', { message: err.message })
 );
+
+/* ------------------ Group Chat Tables (NEW) ------------------ */
+let groupChatTablesCreated = false;
+async function _ensureGroupChatTables() {
+  if (groupChatTablesCreated) return;
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_groups (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        created_by INT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_group_members (
+        group_id INT UNSIGNED NOT NULL,
+        user_id INT NOT NULL,
+        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (group_id, user_id),
+        CONSTRAINT fk_cgm_group FOREIGN KEY (group_id) REFERENCES chat_groups(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_group_messages (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        group_id INT UNSIGNED NOT NULL,
+        sender_id INT NOT NULL,
+        body TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT fk_cgms_group FOREIGN KEY (group_id) REFERENCES chat_groups(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    groupChatTablesCreated = true;
+    log.ok('Group chat tables ready');
+  } catch (e) {
+    log.err('Group chat tables init failed', { message: e.message });
+  }
+}
+_ensureGroupChatTables();
 
 
 /* ------------------ Start server Mail ------------------ */
@@ -1519,6 +1687,204 @@ app.delete('/api/boons/:id', authRequired, requireCourt, async (req, res) => {
 /* -------------------- Chat -------------------- */
 // NOTE TO USER: You may need to add 'chat' to your logger configuration if it's a custom one.
 
+/* -------------------- Group Chat Routes (NEW) -------------------- */
+
+// List groups for the current user (with metadata)
+app.get('/api/chat/groups', authRequired, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    // Get groups I am a member of, plus latest message details
+    const [rows] = await pool.query(`
+      SELECT 
+        g.id, g.name, g.created_by,
+        (
+          SELECT created_at 
+          FROM chat_group_messages 
+          WHERE group_id = g.id 
+          ORDER BY created_at DESC LIMIT 1
+        ) as last_message_at
+      FROM chat_groups g
+      JOIN chat_group_members m ON m.group_id = g.id
+      WHERE m.user_id = ?
+      ORDER BY last_message_at DESC
+    `, [userId]);
+
+    res.json({ groups: rows });
+  } catch (e) {
+    log.err('Failed to get chat groups', { message: e.message });
+    res.status(500).json({ error: 'Failed to get groups' });
+  }
+});
+
+// Create a new group
+app.post('/api/chat/groups', authRequired, async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const { name, members = [] } = req.body; // members is array of user_ids
+    if (!name || !members.length) {
+      return res.status(400).json({ error: 'Name and at least one other member required' });
+    }
+
+    await conn.beginTransaction();
+
+    // 1. Create Group
+    const [g] = await conn.query('INSERT INTO chat_groups (name, created_by) VALUES (?, ?)', [name.trim(), req.user.id]);
+    const groupId = g.insertId;
+
+    // 2. Add Creator to Members
+    const allMembers = [req.user.id, ...members.map(Number)].filter((v, i, a) => a.indexOf(v) === i && !isNaN(v));
+    const values = allMembers.map(uid => [groupId, uid]);
+    
+    await conn.query('INSERT INTO chat_group_members (group_id, user_id) VALUES ?', [values]);
+
+    await conn.commit();
+    
+    // Fetch and return the new group object
+    const [rows] = await pool.query('SELECT * FROM chat_groups WHERE id=?', [groupId]);
+    log.ok('Group created', { user_id: req.user.id, group_id: groupId, name });
+    res.status(201).json({ group: rows[0] });
+
+  } catch (e) {
+    await conn.rollback();
+    log.err('Failed to create group', { message: e.message });
+    res.status(500).json({ error: 'Failed to create group' });
+  } finally {
+    conn.release();
+  }
+});
+
+// Get history for a specific group
+app.get('/api/chat/groups/:id/history', authRequired, async (req, res) => {
+  try {
+    const groupId = Number(req.params.id);
+    const userId = req.user.id;
+
+    // 1. Verify Membership
+    const [m] = await pool.query('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?', [groupId, userId]);
+    if (!m.length) return res.status(403).json({ error: 'Not a member of this group' });
+
+    // 2. Fetch Messages
+    const [messages] = await pool.query(`
+      SELECT m.id, m.sender_id, m.body, m.created_at, 
+             u.display_name, c.name as char_name, c.clan
+      FROM chat_group_messages m
+      LEFT JOIN users u ON m.sender_id = u.id
+      LEFT JOIN characters c ON c.user_id = u.id
+      WHERE m.group_id = ?
+      ORDER BY m.created_at ASC
+    `, [groupId]);
+
+    res.json({ messages });
+  } catch (e) {
+    log.err('Failed to get group history', { message: e.message });
+    res.status(500).json({ error: 'Failed to get history' });
+  }
+});
+
+// Send a message to a group
+app.post('/api/chat/groups/:id/messages', authRequired, async (req, res) => {
+  try {
+    const groupId = Number(req.params.id);
+    const { body } = req.body;
+    if (!body || !body.trim()) return res.status(400).json({ error: 'Body required' });
+
+    // 1. Verify Membership
+    const [m] = await pool.query('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?', [groupId, req.user.id]);
+    if (!m.length) return res.status(403).json({ error: 'Not a member' });
+
+    // 2. Insert Message
+    const [r] = await pool.query('INSERT INTO chat_group_messages (group_id, sender_id, body) VALUES (?,?,?)', 
+      [groupId, req.user.id, body.trim()]);
+
+    // 3. Return Message
+    const [[message]] = await pool.query(`
+      SELECT m.id, m.sender_id, m.body, m.created_at, 
+             u.display_name, c.name as char_name, c.clan
+      FROM chat_group_messages m
+      LEFT JOIN users u ON m.sender_id = u.id
+      LEFT JOIN characters c ON c.user_id = u.id
+      WHERE m.id = ?
+    `, [r.insertId]);
+
+    // --- PUSH NOTIFICATION FOR GROUP ---
+    try {
+      // Get all other members
+      const [members] = await pool.query('SELECT user_id FROM chat_group_members WHERE group_id=? AND user_id <> ?', [groupId, req.user.id]);
+      const memberIds = members.map(x => x.user_id);
+
+      if (memberIds.length > 0) {
+        // Find subscriptions
+        const [subs] = await pool.query('SELECT * FROM push_subscriptions WHERE user_id IN (?)', [memberIds]);
+        
+        // Find group name for notification title
+        const [[groupInfo]] = await pool.query('SELECT name FROM chat_groups WHERE id=?', [groupId]);
+        const groupName = groupInfo?.name || 'Group Chat';
+        const senderName = message.char_name || message.display_name || 'Someone';
+
+        const payload = JSON.stringify({
+          title: `${groupName}: ${senderName}`,
+          body: body.trim(),
+          data: { url: '/comms', tag: `group-${groupId}` }
+        });
+
+        // Send
+        subs.forEach(row => {
+          try {
+            const subscription = JSON.parse(row.subscription_json);
+            webpush.sendNotification(subscription, payload).catch(err => {
+              if (err.statusCode === 410) {
+                pool.query('DELETE FROM push_subscriptions WHERE id = ?', [row.id]).catch(()=>{});
+              }
+            });
+          } catch {}
+        });
+      }
+    } catch (e) { log.err('Group push failed', {error: e.message}); }
+    // --- END PUSH ---
+
+    res.status(201).json({ message });
+  } catch (e) {
+    log.err('Failed to send group message', { message: e.message });
+    res.status(500).json({ error: 'Failed to send' });
+  }
+});
+
+// Admin: List all groups
+app.get('/api/admin/chat/groups', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const [groups] = await pool.query(`
+      SELECT g.*, u.display_name as creator_name,
+      (SELECT COUNT(*) FROM chat_group_members WHERE group_id = g.id) as member_count,
+      (SELECT MAX(created_at) FROM chat_group_messages WHERE group_id = g.id) as last_active
+      FROM chat_groups g
+      LEFT JOIN users u ON g.created_by = u.id
+      ORDER BY last_active DESC
+    `);
+    res.json({ groups });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+// Admin: Get group history
+app.get('/api/admin/chat/groups/:id/history', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const groupId = Number(req.params.id);
+    const [messages] = await pool.query(`
+      SELECT m.id, m.sender_id, m.body, m.created_at, 
+             u.display_name, c.name as char_name, c.clan
+      FROM chat_group_messages m
+      LEFT JOIN users u ON m.sender_id = u.id
+      LEFT JOIN characters c ON c.user_id = u.id
+      WHERE m.group_id = ?
+      ORDER BY m.created_at ASC
+    `, [groupId]);
+    res.json({ messages });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
 // Get list of users to chat with (Sorted by Recency & Unread)
 app.get('/api/chat/users', authRequired, async (req, res) => {
   try {
@@ -1716,6 +2082,62 @@ app.post('/api/chat/read', authRequired, async (req, res) => {
     }
 });
 
+/* -------------------- ADMIN DISCORD SETTINGS -------------------- */
+
+// Get current Discord settings
+app.get('/api/admin/discord/config', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const channelId = await getSetting('discord_channel_id', '');
+    const scheduleTime = await getSetting('discord_schedule_time', '12:00');
+    res.json({
+      discord_channel_id: channelId,
+      discord_schedule_time: scheduleTime,
+      bot_status: discordClient?.isReady() ? 'Online' : 'Offline',
+      bot_name: discordClient?.user?.tag || 'N/A'
+    });
+  } catch (e) {
+    log.err('Get discord config failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to fetch settings' });
+  }
+});
+
+// Update Discord settings
+app.post('/api/admin/discord/config', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const { discord_channel_id, discord_schedule_time } = req.body;
+    
+    if (discord_channel_id !== undefined) {
+      await setSetting('discord_channel_id', discord_channel_id.trim());
+    }
+    
+    if (discord_schedule_time !== undefined) {
+      // Basic validation for HH:MM format
+      if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(discord_schedule_time)) {
+        return res.status(400).json({ error: 'Invalid time format. Use HH:MM (24h).' });
+      }
+      await setSetting('discord_schedule_time', discord_schedule_time);
+    }
+
+    log.adm('Updated Discord settings', { admin_id: req.user.id, channel: discord_channel_id, time: discord_schedule_time });
+    res.json({ ok: true });
+  } catch (e) {
+    log.err('Update discord config failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to save settings' });
+  }
+});
+
+// Trigger manual test notification
+app.post('/api/admin/discord/test', authRequired, requireAdmin, async (req, res) => {
+  try {
+    log.adm('Triggering manual Discord mail test', { admin_id: req.user.id });
+    await sendDiscordMailNotifications(true); // Pass true to enable test mode
+    res.json({ ok: true, message: 'Test procedure initiated.' });
+  } catch (e) {
+    log.err('Manual Discord test failed', { message: e.message });
+    res.status(500).json({ error: 'Test failed' });
+  }
+});
+
 // ADMIN: Get all chat messages
 app.get('/api/admin/chat/all', authRequired, requireAdmin, async (req, res) => {
     try {
@@ -1736,81 +2158,25 @@ app.get('/api/admin/chat/all', authRequired, requireAdmin, async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch messages' });
     }
 });
-// Admin: list recent conversations with one NPC
-app.get('/api/admin/chat/npc/conversations', authRequired, requireAdmin, async (req, res) => {
-  const npcId = Number(req.query.npc_id);
-  if (!npcId) return res.status(400).json({ error: 'npc_id required' });
-  try {
-    const [rows] = await pool.query(`
-      SELECT 
-        u.id AS user_id,
-        u.display_name,
-        c.name AS char_name,
-        MAX(m.created_at) AS last_message_at
-      FROM npc_messages m
-      JOIN users u ON m.user_id = u.id
-      LEFT JOIN characters c ON c.user_id = u.id
-      WHERE m.npc_id = ?
-      GROUP BY u.id, u.display_name, c.name
-      ORDER BY last_message_at DESC
-    `, [npcId]);
-    res.json({ conversations: rows });
-  } catch (e) {
-    log.err('Admin get NPC conversations failed', { message: e.message, stack: e.stack });
-    res.status(500).json({ error: 'Failed to fetch NPC conversations' });
-  }
-});
-
-// Alias (path params)
-app.get('/api/admin/chat/npc-conversations/:npcId', authRequired, requireAdmin, async (req, res) => {
-  req.query.npc_id = req.params.npcId;
-  return app._router.handle(req, res, () => {});
-});
-
-// Admin: history between NPC and specific user
-app.get('/api/admin/chat/npc/history', authRequired, requireAdmin, async (req, res) => {
-  const npcId  = Number(req.query.npc_id);
-  const userId = Number(req.query.user_id);
-  if (!npcId || !userId) return res.status(400).json({ error: 'npc_id and user_id required' });
-
-  try {
-    const [messages] = await pool.query(
-      `SELECT id, npc_id, user_id, from_side, body, created_at
-         FROM npc_messages
-        WHERE npc_id=? AND user_id=?
-        ORDER BY created_at ASC`,
-      [npcId, userId]
-    );
-    res.json({ messages });
-  } catch (e) {
-    log.err('Admin fetch NPC chat history failed', { message: e.message, stack: e.stack });
-    res.status(500).json({ error: 'Failed to fetch chat history' });
-  }
-});
-
-// Alias (path params)
-app.get('/api/admin/chat/npc-history/:npcId/:userId', authRequired, requireAdmin, async (req, res) => {
-  req.query.npc_id  = req.params.npcId;
-  req.query.user_id = req.params.userId;
-  return app._router.handle(req, res, () => {});
-});
-
 
 
 /* -------------------- Admin views -------------------- */
 app.get('/api/admin/users', authRequired, requireAdmin, async (_req, res) => {
+  // We added u.discord_id to the SELECT list here
   const [rows] = await pool.query(
-    `SELECT u.id, u.email, u.display_name, u.role,
+    `SELECT u.id, u.email, u.display_name, u.role, u.discord_id,
             c.id AS character_id, c.name AS char_name, c.clan, c.sheet, c.xp
      FROM users u
      LEFT JOIN characters c ON c.user_id=u.id
      ORDER BY u.created_at DESC`
   );
+  
   rows.forEach(r => {
     if (r.sheet && typeof r.sheet === 'string') {
       try { r.sheet = JSON.parse(r.sheet); } catch {}
     }
   });
+  
   log.adm('Admin users list', { count: rows.length });
   res.json({ users: rows });
 });
@@ -1861,11 +2227,11 @@ app.patch('/api/admin/users/:id', authRequired, requireAdmin, async (req, res) =
       return res.status(400).json({ error: 'Invalid user id' });
     }
 
-    const { display_name, email, role } = req.body || {};
+    const { display_name, email, role, discord_id } = req.body || {};
     const fields = [];
     const vals = [];
 
-    // Validate role if provided
+    // 1. Handle Role
     const validRoles = new Set(['user', 'courtuser', 'admin']);
     let roleChanged = false;
     if (role !== undefined) {
@@ -1873,40 +2239,53 @@ app.patch('/api/admin/users/:id', authRequired, requireAdmin, async (req, res) =
       if (!validRoles.has(r)) {
         return res.status(400).json({ error: 'Invalid role' });
       }
-      fields.push('role=?'); vals.push(r);
+      fields.push('role=?'); // FIXED: Ensure this is single =
+      vals.push(r);
       roleChanged = true;
     }
 
-    // Validate display_name if provided
+    // 2. Handle Display Name
     let nameChanged = false;
     if (display_name !== undefined) {
       const name = String(display_name).trim();
       if (!name) return res.status(400).json({ error: 'Display name cannot be empty' });
-      fields.push('display_name=?'); vals.push(name);
+      fields.push('display_name=?'); 
+      vals.push(name);
       nameChanged = true;
     }
 
-    // Validate email if provided (and ensure uniqueness)
+    // 3. Handle Email
     let emailChanged = false;
     if (email !== undefined) {
       const normEmail = String(email).trim().toLowerCase();
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normEmail)) {
         return res.status(400).json({ error: 'Invalid email' });
       }
+      // Check for duplicates
       const [dup] = await pool.query('SELECT id FROM users WHERE email=? AND id<>?', [normEmail, id]);
       if (dup.length) return res.status(409).json({ error: 'Email already in use' });
-      fields.push('email=?'); vals.push(normEmail);
+      
+      fields.push('email=?'); 
+      vals.push(normEmail);
       emailChanged = true;
+    }
+
+    // 4. Handle Discord ID (New Logic)
+    if (discord_id !== undefined) {
+      const did = String(discord_id).trim();
+      fields.push('discord_id=?');
+      vals.push(did);
     }
 
     if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
 
+    // Perform Update
     vals.push(id);
     await pool.query(`UPDATE users SET ${fields.join(', ')} WHERE id=?`, vals);
 
-    // Return the updated user row (+ basic character info for admin table)
+    // Return updated row (Include discord_id in select)
     const [[row]] = await pool.query(
-      `SELECT u.id, u.email, u.display_name, u.role,
+      `SELECT u.id, u.email, u.display_name, u.role, u.discord_id,
               c.id AS character_id, c.name AS char_name, c.clan, c.xp
        FROM users u
        LEFT JOIN characters c ON c.user_id = u.id
@@ -1916,23 +2295,23 @@ app.patch('/api/admin/users/:id', authRequired, requireAdmin, async (req, res) =
 
     if (!row) return res.status(404).json({ error: 'User not found after update' });
 
+    // Refresh token if self-edit
     const selfEdit = id === req.user.id;
     if (selfEdit && (roleChanged || nameChanged || emailChanged)) {
-      // Re-issue token so /api/auth/me reflects the new role/name/email
       const freshToken = issueToken({
         id: row.id,
         email: row.email,
         display_name: row.display_name,
         role: row.role,
       });
-      log?.adm?.('Admin self-updated user and refreshed token', { admin_id: req.user.id, user_id: id, fields });
       return res.json({ user: row, token: freshToken });
     }
 
-    log?.adm?.('Admin updated user', { admin_id: req.user.id, user_id: id, fields });
+    log.adm('Admin updated user', { admin_id: req.user.id, user_id: id, fields });
     res.json({ user: row });
+
   } catch (e) {
-    log?.err?.('Admin update user failed', { message: e.message, stack: e.stack });
+    log.err('Admin update user failed', { message: e.message, stack: e.stack });
     res.status(500).json({ error: 'Failed to update user' });
   }
 });
