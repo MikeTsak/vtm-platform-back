@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "nodemon server.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "postinstall": "npm uninstall zlib-sync bufferutil utf-8-validate erlpack --no-save"
   },
   "dependencies": {
     "axios": "^1.12.2",
