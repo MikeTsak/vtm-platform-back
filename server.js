@@ -117,12 +117,20 @@ async function _respectEmailJsRateLimit() {
 
 // --- Discord Bot Setup ---
 let discordClient = null;
+let discordLoginError = null; // <--- 1. New variable to hold the specific error
 
 // Only initialize if token is present
 if (process.env.DISCORD_BOT_TOKEN) {
   discordClient = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
-  discordClient.login(process.env.DISCORD_BOT_TOKEN).catch(e => log.err('Discord login failed', e));
+  
+  // 2. Capture the error message here
+  discordClient.login(process.env.DISCORD_BOT_TOKEN).catch(e => {
+    discordLoginError = e.message; 
+    log.err('Discord login failed', e);
+  });
+
   discordClient.once('ready', () => {
+    discordLoginError = null; // 3. Clear error if it eventually succeeds
     log.start(`Discord Bot logged in as ${discordClient.user.tag}`);
   });
 } else {
@@ -589,7 +597,7 @@ app.get('/', async (req, res) => {
     errors.push(`Database: ${e.message}`);
   }
 
-  // 2. Check Discord Bot
+// 2. Check Discord Bot
   let discordStatus = 'DISABLED';
   let discordClass = 'muted'; // Default for disabled
   if (process.env.DISCORD_BOT_TOKEN) {
@@ -597,9 +605,14 @@ app.get('/', async (req, res) => {
       discordStatus = `ONLINE (${discordClient.user.tag})`;
       discordClass = 'ok';
     } else {
-      discordStatus = 'DOWN / CONNECTING';
+      discordStatus = 'DOWN / ERROR';
       discordClass = 'bad';
-      errors.push('Discord: Bot token provided but client is not ready.');
+      // 4. Display the specific error if we have one
+      if (discordLoginError) {
+        errors.push(`Discord Error: ${discordLoginError}`);
+      } else {
+        errors.push('Discord: Bot token provided but client is not ready (Connecting...).');
+      }
     }
   }
 
