@@ -121,7 +121,16 @@ let discordLoginError = null; // <--- 1. New variable to hold the specific error
 
 // Only initialize if token is present
 if (process.env.DISCORD_BOT_TOKEN) {
-  discordClient = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
+  discordClient = new Client({ 
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
+  // This tells Discord.js to rely less on heavy compression parsing
+  rest: {
+    timeout: 15000
+  },
+  ws: {
+    compress: false 
+  }
+});
   
   // 2. Capture the error message here
   discordClient.login(process.env.DISCORD_BOT_TOKEN).catch(e => {
@@ -583,6 +592,18 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+function formatDate(d) {
+  return d.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+
 // Friendly HTML at "/" (quick glance in the browser)
 app.get('/', async (req, res) => {
   const errors = [];
@@ -671,10 +692,32 @@ app.get('/', async (req, res) => {
     <div class="grid">
       <div class="k">Environment</div><div class="v"><code>${process.env.NODE_ENV || 'stable'}</code></div>
       <div class="k">Node.js</div><div class="v"><code>${process.version}</code></div>
-      <div class="k">Uptime</div><div class="v">${Math.floor(process.uptime())}s</div>
-      <div class="k">Started</div><div class="v">${startedAt.toISOString()}</div>
-      <div class="k">Now</div><div class="v">${new Date().toISOString()}</div>
-      
+      ${(() => {
+        const total = Math.floor(process.uptime());
+
+        const days = Math.floor(total / 86400);
+        const hours = Math.floor((total % 86400) / 3600);
+        const minutes = Math.floor((total % 3600) / 60);
+        const seconds = total % 60;
+
+        const parts = [];
+        if (days) parts.push(`${days}d`);
+        if (hours) parts.push(`${hours}h`);
+        if (minutes) parts.push(`${minutes}m`);
+        parts.push(`${seconds}s`);
+
+        return `
+          <div class="k">Uptime</div>
+          <div class="v">${parts.join(" ")}</div>
+        `;
+      })()}
+
+      <div class="k">Started</div>
+      <div class="v">${formatDate(startedAt)}</div>
+
+      <div class="k">Now</div>
+      <div class="v">${formatDate(new Date())}</div>
+
       <div class="k" style="margin-top:10px">Database</div>
       <div class="v ${dbStatus === 'OK' ? 'ok' : 'bad'}" style="margin-top:10px">${dbStatus}</div>
       
