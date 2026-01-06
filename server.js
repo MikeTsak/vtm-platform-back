@@ -121,16 +121,11 @@ let discordLoginError = null; // <--- 1. New variable to hold the specific error
 
 // Only initialize if token is present
 if (process.env.DISCORD_BOT_TOKEN) {
-  discordClient = new Client({ 
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
-  // This tells Discord.js to rely less on heavy compression parsing
-  rest: {
-    timeout: 15000
-  },
-  ws: {
-    compress: false 
-  }
-});
+  discordClient = new Client({
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
+    ws: { compress: false },
+    rest: { timeout: 15000 },
+  });
   
   // 2. Capture the error message here
   discordClient.login(process.env.DISCORD_BOT_TOKEN).catch(e => {
@@ -435,6 +430,59 @@ async function _ensureGroupChatTables() {
   }
 }
 _ensureGroupChatTables();
+
+
+/* ------------------ Email System Tables (FIX FOR YOUR ERROR) ------------------ */
+let emailTablesCreated = false;
+async function _ensureEmailTables() {
+  if (emailTablesCreated) return;
+  try {
+    // 1. Identities (The "NPC" addresses)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS email_identities (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        email_address VARCHAR(150) NOT NULL UNIQUE,
+        display_name VARCHAR(150),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // 2. Threads (The conversations)
+    // NOTE: This table includes 'identity_id' which was missing in your error log
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS email_threads (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        identity_id INT UNSIGNED NOT NULL,
+        subject VARCHAR(255),
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (identity_id) REFERENCES email_identities(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // 3. Messages (The actual content)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS email_messages (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        thread_id INT UNSIGNED NOT NULL,
+        sender_type ENUM('user', 'identity') NOT NULL,
+        body TEXT,
+        is_read TINYINT DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (thread_id) REFERENCES email_threads(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    emailTablesCreated = true;
+    log.ok('Email system tables ready');
+  } catch (e) {
+    log.err('Email tables init failed', { message: e.message });
+  }
+}
+// Initialize the email tables!
+_ensureEmailTables();
+
 
 
 /* ------------------ Start server Mail ------------------ */
@@ -1456,6 +1504,210 @@ app.get('/api/chat/my-recent', authRequired, async (req, res) => {
   } catch (e) {
     log.err('Failed to fetch my recent chats', { message: e.message });
     res.status(500).json({ error: 'Failed to load recent chats' });
+  }
+});
+
+/* -------------------- SIMULATED EMAIL SYSTEM (HUMAN COMMS) -------------------- */
+
+// --- ADMIN ROUTES ---
+
+// 1. List all "Allowed" Email Identities
+app.get('/api/admin/emails/identities', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const [rows] = await pool.query(`SELECT * FROM email_identities ORDER BY email_address ASC`);
+    res.json({ identities: rows });
+  } catch (e) {
+    log.err('Admin list identities failed', { message: e.message });
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+// 2. Create a new "Human" Email Identity (Standalone)
+app.post('/api/admin/emails/identities', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const { email_address, display_name } = req.body;
+    if (!display_name || !email_address) return res.status(400).json({ error: 'Missing fields' });
+    
+    const email = email_address.trim().toLowerCase();
+    if (!email.includes('@')) return res.status(400).json({ error: 'Invalid email format' });
+
+    await pool.query(`
+      INSERT INTO email_identities (email_address, display_name)
+      VALUES (?, ?)
+    `, [email, display_name]);
+    
+    log.adm('Created human email identity', { admin: req.user.id, email });
+    res.json({ ok: true });
+  } catch (e) {
+    if (e.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Email already exists' });
+    log.err('Create identity failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to create identity' });
+  }
+});
+
+// 3. Delete an identity
+app.delete('/api/admin/emails/identities/:id', authRequired, requireAdmin, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM email_identities WHERE id=?', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+// 4. Admin Inbox (View all threads sent to any identity)
+app.get('/api/admin/emails/threads', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const [threads] = await pool.query(`
+      SELECT t.id, t.subject, t.updated_at,
+             u.display_name as user_name, c.name as char_name,
+             i.email_address, i.display_name as identity_name,
+             (SELECT COUNT(*) FROM email_messages WHERE thread_id=t.id AND sender_type='user' AND is_read=0) as unread_count
+      FROM email_threads t
+      JOIN users u ON u.id = t.user_id
+      LEFT JOIN characters c ON c.user_id = u.id
+      JOIN email_identities i ON i.id = t.identity_id
+      ORDER BY t.updated_at DESC
+    `);
+    res.json({ threads });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch threads' });
+  }
+});
+
+// 5. Get Messages (Admin View)
+app.get('/api/admin/emails/threads/:id', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const [messages] = await pool.query(`
+      SELECT m.* FROM email_messages m
+      WHERE m.thread_id = ?
+      ORDER BY m.created_at ASC
+    `, [req.params.id]);
+    
+    // Mark user messages as read
+    await pool.query(`UPDATE email_messages SET is_read=1 WHERE thread_id=? AND sender_type='user'`, [req.params.id]);
+    
+    res.json({ messages });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+// 6. Reply as the Identity
+app.post('/api/admin/emails/reply', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const { thread_id, body } = req.body;
+    if (!body || !thread_id) return res.status(400).json({ error: 'Missing body' });
+    
+    await pool.query(`
+      INSERT INTO email_messages (thread_id, sender_type, body, is_read)
+      VALUES (?, 'identity', ?, 0)
+    `, [thread_id, body]);
+    
+    await pool.query(`UPDATE email_threads SET updated_at=NOW() WHERE id=?`, [thread_id]);
+    
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to reply' });
+  }
+});
+
+// --- USER ROUTES ---
+
+// 1. Player Inbox
+app.get('/api/emails/my-inbox', authRequired, async (req, res) => {
+  try {
+    const [threads] = await pool.query(`
+      SELECT t.id, t.subject, t.updated_at,
+             i.email_address as from_email, i.display_name as from_name,
+             (SELECT body FROM email_messages WHERE thread_id=t.id ORDER BY created_at DESC LIMIT 1) as snippet,
+             (SELECT COUNT(*) FROM email_messages WHERE thread_id=t.id AND sender_type='identity' AND is_read=0) as unread_count
+      FROM email_threads t
+      JOIN email_identities i ON i.id = t.identity_id
+      WHERE t.user_id = ?
+      ORDER BY t.updated_at DESC
+    `, [req.user.id]);
+    res.json({ threads });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to load inbox' });
+  }
+});
+
+// 2. Read Thread
+app.get('/api/emails/thread/:id', authRequired, async (req, res) => {
+  try {
+    const [check] = await pool.query('SELECT 1 FROM email_threads WHERE id=? AND user_id=?', [req.params.id, req.user.id]);
+    if (!check.length) return res.status(403).json({ error: 'Forbidden' });
+
+    const [messages] = await pool.query(`
+      SELECT * FROM email_messages WHERE thread_id=? ORDER BY created_at ASC
+    `, [req.params.id]);
+
+    await pool.query(`UPDATE email_messages SET is_read=1 WHERE thread_id=? AND sender_type='identity'`, [req.params.id]);
+
+    res.json({ messages });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to load email' });
+  }
+});
+
+// 3. Send Email (Validation Logic)
+app.post('/api/emails/send', authRequired, async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const { to_email, subject, body, thread_id } = req.body;
+    
+    if (thread_id) {
+      // REPLY to existing thread
+      const [check] = await conn.query('SELECT 1 FROM email_threads WHERE id=? AND user_id=?', [thread_id, req.user.id]);
+      if (!check.length) return res.status(403).json({ error: 'Thread not found' });
+      
+      await conn.query(`
+        INSERT INTO email_messages (thread_id, sender_type, body, is_read)
+        VALUES (?, 'user', ?, 0)
+      `, [thread_id, body]);
+      
+      await conn.query(`UPDATE email_threads SET updated_at=NOW() WHERE id=?`, [thread_id]);
+      await conn.commit();
+      return res.json({ ok: true });
+      
+    } else {
+      // NEW THREAD - Validates against 'email_identities'
+      if (!to_email || !subject || !body) return res.status(400).json({ error: 'Missing fields' });
+
+      const emailLower = to_email.trim().toLowerCase();
+      
+      // STRICT CHECK: Is this a valid admin-set email?
+      const [identity] = await conn.query('SELECT id FROM email_identities WHERE email_address = ?', [emailLower]);
+      
+      if (identity.length === 0) {
+        // ERROR: Player tried to email someone not in the system
+        return res.status(404).json({ error: 'Delivery Status Notification (Failure): Address not found.' });
+      }
+      
+      const identityId = identity[0].id;
+      
+      await conn.beginTransaction();
+      
+      const [t] = await conn.query(`
+        INSERT INTO email_threads (user_id, identity_id, subject)
+        VALUES (?, ?, ?)
+      `, [req.user.id, identityId, subject]);
+      
+      await conn.query(`
+        INSERT INTO email_messages (thread_id, sender_type, body, is_read)
+        VALUES (?, 'user', ?, 0)
+      `, [t.insertId, body]);
+      
+      await conn.commit();
+      res.json({ ok: true, thread_id: t.insertId });
+    }
+  } catch (e) {
+    await conn.rollback();
+    log.err('Email send failed', { message: e.message });
+    res.status(500).json({ error: 'Send failed' });
+  } finally {
+    conn.release();
   }
 });
 
@@ -3293,9 +3545,11 @@ app.get('/api/premonitions/mine', authRequired, async (req, res) => {
     await _ensurePremonitionsTables();
 
     const [rows] = await pool.query(`
-      SELECT p.*
+      SELECT p.id, p.sender_id, u.display_name AS sender_name,
+             p.content_type, p.content_text, p.content_url, p.created_at
       FROM premonitions p
       JOIN premonition_recipients pr ON p.id = pr.premonition_id
+      LEFT JOIN users u ON u.id = p.sender_id
       WHERE pr.user_id = ?
       ORDER BY p.created_at DESC
     `, [req.user.id]);
