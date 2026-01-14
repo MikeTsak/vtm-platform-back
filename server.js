@@ -1386,14 +1386,14 @@ app.post('/api/admin/npcs/:id/xp/spend', authRequired, requireAdmin, async (req,
 app.get('/api/admin/chat/npc-conversations/:npcId', authRequired, requireAdmin, async (req, res) => {
   const npcId = Number(req.params.npcId);
   try {
-    // Query to get distinct users who have messaged this NPC, ordered by last message time.
+    // FIX: Changed table from 'npc_chat_messages' to 'npc_messages'
     const [rows] = await pool.query(`
       SELECT 
         u.id AS user_id, 
         u.display_name, 
         c.name AS char_name, 
         MAX(m.created_at) AS last_message_at
-      FROM npc_chat_messages m
+      FROM npc_messages m
       JOIN users u ON m.user_id = u.id
       LEFT JOIN characters c ON u.character_id = c.id
       WHERE m.npc_id = ?
@@ -1414,8 +1414,9 @@ app.get('/api/admin/chat/npc-history/:npcId/:userId', authRequired, requireAdmin
   const userId = Number(req.params.userId);
 
   try {
+    // FIX: Changed to npc_messages
     const [messages] = await pool.query(
-      `SELECT id, body, from_side, created_at FROM npc_chat_messages 
+      `SELECT id, body, from_side, created_at FROM npc_messages 
        WHERE npc_id = ? AND user_id = ? 
        ORDER BY created_at ASC`,
       [npcId, userId]
