@@ -198,13 +198,7 @@ async function sendDiscordMailNotifications(isTest = false) {
       return;
     }
 
-    // --- TEST MODE MESSAGE ---
-    if (isTest) {
-      await channel.send("This is a Test message from the Erebus Portal.");
-    }
-    // -------------------------
-
-    // 2. Find users with unread Direct Messages AND a valid Discord ID
+    // 2. Find users with unread Direct Messages (Player-to-Player)
     const [recipients] = await pool.query(`
       SELECT DISTINCT u.discord_id
       FROM chat_messages m
@@ -214,9 +208,26 @@ async function sendDiscordMailNotifications(isTest = false) {
         AND u.discord_id != ''
     `);
 
-    if (recipients.length === 0 && !isTest) return;
+    // 3. Check for recent NPC messages (Player-to-NPC)
+    // We check for messages sent by users in the last 25 hours (daily cycle buffer)
+    const [npcMessages] = await pool.query(`
+      SELECT 1 
+      FROM npc_messages 
+      WHERE from_side = 'user' 
+      AND created_at > (NOW() - INTERVAL 25 HOUR) 
+      LIMIT 1
+    `);
+    const hasNpcMail = npcMessages.length > 0;
 
-    // 3. Send messages
+    // If no mail for anyone and not a test, stop here.
+    if (recipients.length === 0 && !hasNpcMail && !isTest) return;
+
+    // --- SENDING NOTIFICATIONS ---
+
+    // A. Intro Message
+    await channel.send("Dear Kindred of Athens, i am here to remind you of your mail");
+
+    // B. Tag Players with Unread Mail
     for (const r of recipients) {
       try {
         await channel.send(`<@${r.discord_id}> you have mail ✉`);
@@ -226,10 +237,19 @@ async function sendDiscordMailNotifications(isTest = false) {
         log.err('Failed to tag user on Discord', { discord_id: r.discord_id, error: e.message });
       }
     }
-    
-    if (recipients.length > 0) {
-      log.ok(`Sent Discord mail notifications to ${recipients.length} users`);
+
+    // C. Tag Storytellers (Role) if there is NPC mail
+    // Role ID: 1421503116871991490
+    if (hasNpcMail || isTest) {
+      try {
+        await channel.send("And dear <@&1421503116871991490> there are npc messages to attend to");
+      } catch (e) {
+        log.err('Failed to tag role on Discord', { error: e.message });
+      }
     }
+    
+    log.ok(`Discord notification run complete. Players: ${recipients.length}, NPC Mail: ${hasNpcMail}`);
+
   } catch (e) {
     log.err('Discord mail notification process failed', { message: e.message });
   }
