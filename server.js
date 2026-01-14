@@ -209,7 +209,6 @@ async function sendDiscordMailNotifications(isTest = false) {
     `);
 
     // 3. Check for recent NPC messages (Player-to-NPC)
-    // We check for messages sent by users in the last 25 hours (daily cycle buffer)
     const [npcMessages] = await pool.query(`
       SELECT 1 
       FROM npc_messages 
@@ -219,36 +218,75 @@ async function sendDiscordMailNotifications(isTest = false) {
     `);
     const hasNpcMail = npcMessages.length > 0;
 
-    // If no mail for anyone and not a test, stop here.
-    if (recipients.length === 0 && !hasNpcMail && !isTest) return;
+    // 4. Get News (Logic: Recent 3 Days OR Last 3 Total)
+    let [newsRows] = await pool.query(`
+      SELECT title, created_at 
+      FROM news_entries 
+      WHERE created_at > (NOW() - INTERVAL 3 DAY) 
+      ORDER BY created_at DESC
+    `);
+    
+    let newsTitle = "🔥 **Fresh Off the Press**";
+
+    // Fallback: If no recent news, get the absolute last 3
+    if (newsRows.length === 0) {
+      [newsRows] = await pool.query(`
+        SELECT title, created_at 
+        FROM news_entries 
+        ORDER BY created_at DESC 
+        LIMIT 3
+      `);
+      newsTitle = "📜 **Previous Headlines**";
+    }
+
+    // Guard: If nothing at all to report (no mail, no npc, no news), stop.
+    if (recipients.length === 0 && !hasNpcMail && newsRows.length === 0 && !isTest) return;
 
     // --- SENDING NOTIFICATIONS ---
 
+    const todayStr = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+
     // A. Intro Message
-    await channel.send("Dear Kindred of Athens, i am here to remind you of your mail");
+    await channel.send(`🦇 **Good Evening Kindred of Athens**, as of today **${todayStr}**, I would like to remind you of the following:`);
 
     // B. Tag Players with Unread Mail
-    for (const r of recipients) {
-      try {
-        await channel.send(`<@${r.discord_id}> you have mail ✉`);
-        // Small delay to respect rate limits
-        await new Promise(res => setTimeout(res, 1000));
-      } catch (e) {
-        log.err('Failed to tag user on Discord', { discord_id: r.discord_id, error: e.message });
+    if (recipients.length > 0) {
+      for (const r of recipients) {
+        try {
+          await channel.send(`📩 <@${r.discord_id}> you have mail!`);
+          await new Promise(res => setTimeout(res, 1000)); // Rate limit safety
+        } catch (e) {
+          log.err('Failed to tag user on Discord', { discord_id: r.discord_id, error: e.message });
+        }
       }
+    } else {
+       // Optional: Message if no player mail exists (you can remove this line if you prefer silence)
+       // await channel.send("> *No unread letters for our Kindred tonight.*");
     }
 
     // C. Tag Storytellers (Role) if there is NPC mail
-    // Role ID: 1421503116871991490
     if (hasNpcMail || isTest) {
       try {
-        await channel.send("And dear <@&1421503116871991490> there are npc messages to attend to");
+        await channel.send(`🎭 And dear <@&1421503116871991490>, there are **NPC messages** to attend to.`);
       } catch (e) {
         log.err('Failed to tag role on Discord', { error: e.message });
       }
     }
+
+    // D. News Flash
+    if (newsRows.length > 0) {
+      // Build the news message block
+      let newsMsg = `\n━━━━━━━━━━━━━━━━━━━━\n📢  **EREBUS NEWS FLASH**\n${newsTitle}\n━━━━━━━━━━━━━━━━━━━━\n`;
+      
+      newsRows.forEach(n => {
+        const d = new Date(n.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' });
+        newsMsg += `🔹 **${n.title}** — _${d}_\n`;
+      });
+
+      await channel.send(newsMsg);
+    }
     
-    log.ok(`Discord notification run complete. Players: ${recipients.length}, NPC Mail: ${hasNpcMail}`);
+    log.ok(`Discord notification run complete. Players: ${recipients.length}, NPC Mail: ${hasNpcMail}, News: ${newsRows.length}`);
 
   } catch (e) {
     log.err('Discord mail notification process failed', { message: e.message });
