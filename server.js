@@ -276,7 +276,7 @@ async function sendDiscordMailNotifications(isTest = false) {
     // D. News Flash
     if (newsRows.length > 0) {
       // Build the news message block
-      let newsMsg = `\n━━━━━━━━━━━━━━━━━━━━\n📢  **ATHENS NEWS **\n${newsTitle}\n━━━━━━━━━━━━━━━━━━━━\n`;
+      let newsMsg = `\n━━━━━━━━━━━━━━━━━━━━\n📢  **ATHENS NEWS FLASH**\n${newsTitle}\n━━━━━━━━━━━━━━━━━━━━\n`;
       
       newsRows.forEach(n => {
         const d = new Date(n.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' });
