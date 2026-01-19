@@ -180,7 +180,7 @@ function startDailyMailCheck() {
 // Start the scheduler
 startDailyMailCheck();
 
-// Helper: Send Discord Notifications
+// Helper: Send Discord Notifications (Consolidated Single Message)
 async function sendDiscordMailNotifications(isTest = false) {
   if (!discordClient?.isReady()) return;
   
@@ -198,7 +198,7 @@ async function sendDiscordMailNotifications(isTest = false) {
       return;
     }
 
-    // 2. Find users with unread Direct Messages (Player-to-Player)
+    // 2. Find users with unread Direct Messages
     const [recipients] = await pool.query(`
       SELECT DISTINCT u.discord_id
       FROM chat_messages m
@@ -208,7 +208,7 @@ async function sendDiscordMailNotifications(isTest = false) {
         AND u.discord_id != ''
     `);
 
-    // 3. Check for recent NPC messages (Player-to-NPC)
+    // 3. Check for recent NPC messages
     const [npcMessages] = await pool.query(`
       SELECT 1 
       FROM npc_messages 
@@ -228,7 +228,6 @@ async function sendDiscordMailNotifications(isTest = false) {
     
     let newsTitle = "🔥 **Fresh Off the Press**";
 
-    // Fallback: If no recent news, get the absolute last 3
     if (newsRows.length === 0) {
       [newsRows] = await pool.query(`
         SELECT title, created_at 
@@ -239,54 +238,42 @@ async function sendDiscordMailNotifications(isTest = false) {
       newsTitle = "📜 **Previous Headlines**";
     }
 
-    // Guard: If nothing at all to report (no mail, no npc, no news), stop.
+    // Guard: If nothing to report, stop.
     if (recipients.length === 0 && !hasNpcMail && newsRows.length === 0 && !isTest) return;
 
-    // --- SENDING NOTIFICATIONS ---
-
+    // --- CONSTRUCTING THE SINGLE MESSAGE ---
     const todayStr = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+    
+    // Start with Intro
+    let msg = `🦇 **Good Evening Kindred of Athens**, as of today **${todayStr}**, I would like to remind you of the following:\n\n`;
 
-    // A. Intro Message
-    await channel.send(`🦇 **Good Evening Kindred of Athens**, as of today **${todayStr}**, I would like to remind you of the following:`);
-
-    // B. Tag Players with Unread Mail
+    // Add Player Tags (One line)
     if (recipients.length > 0) {
-      for (const r of recipients) {
-        try {
-          await channel.send(`📩 <@${r.discord_id}> you have mail!`);
-          await new Promise(res => setTimeout(res, 1000)); // Rate limit safety
-        } catch (e) {
-          log.err('Failed to tag user on Discord', { discord_id: r.discord_id, error: e.message });
-        }
-      }
-    } else {
-       // Optional: Message if no player mail exists (you can remove this line if you prefer silence)
-       // await channel.send("> *No unread letters for our Kindred tonight.*");
+      // Create a comma-separated list of mentions: <@123>, <@456>
+      const mentions = recipients.map(r => `<@${r.discord_id}>`).join(', ');
+      msg += `📩 **Unread Mail:** ${mentions}, please check your inbox.\n`;
     }
 
-    // C. Tag Storytellers (Role) if there is NPC mail
+    // Add ST Tag
     if (hasNpcMail || isTest) {
-      try {
-        await channel.send(`🎭 And dear <@&1421503116871991490>, there are **NPC messages** to attend to.`);
-      } catch (e) {
-        log.err('Failed to tag role on Discord', { error: e.message });
-      }
+      msg += `🎭 **Storytellers** <@&1421503116871991490>, there are **NPC messages** to attend to.\n`;
     }
 
-    // D. News Flash
+    // Add News
     if (newsRows.length > 0) {
-      // Build the news message block
-      let newsMsg = `\n━━━━━━━━━━━━━━━━━━━━\n📢  **ATHENS NEWS FLASH**\n${newsTitle}\n━━━━━━━━━━━━━━━━━━━━\n`;
-      
+      msg += `\n━━━━━━━━━━━━━━━━━━━━\n📢  **EREBUS NEWS FLASH**\n${newsTitle}\n━━━━━━━━━━━━━━━━━━━━\n`;
       newsRows.forEach(n => {
         const d = new Date(n.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' });
-        newsMsg += `🔹 **${n.title}** — _${d}_\n`;
+        msg += `🔹 **${n.title}** — _${d}_\n`;
       });
-
-      await channel.send(newsMsg);
     }
+
+    // --- SENDING ---
+    // We send 'msg' as one single block.
+    // Discord has a 2000 char limit, but this should fit unless you have 50+ recipients.
+    await channel.send(msg);
     
-    log.ok(`Discord notification run complete. Players: ${recipients.length}, NPC Mail: ${hasNpcMail}, News: ${newsRows.length}`);
+    log.ok(`Discord notification sent. Players: ${recipients.length}, NPC Mail: ${hasNpcMail}, News: ${newsRows.length}`);
 
   } catch (e) {
     log.err('Discord mail notification process failed', { message: e.message });
