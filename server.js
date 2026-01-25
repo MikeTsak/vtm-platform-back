@@ -2030,14 +2030,15 @@ app.get('/api/boons', authRequired, async (req, res) => {
 // POST /api/boons (Court/Admin only)
 app.post('/api/boons', authRequired, requireCourt, async (req, res) => {
   try {
-    // FIX: Removed from_id and to_id
+    // We destructure from_id/to_id from body but DO NOT use them in the query
+    // because the database table 'boons' does not have these columns.
     const { from_name, to_name, level, status, description } = req.body;
 
     if (!from_name || !to_name || !level || !status) {
       return res.status(400).json({ error: 'From, To, Level, and Status are required' });
     }
     
-    // FIX: Removed from_id and to_id from query
+    // Insert ONLY the fields that exist in your database
     const [r] = await pool.query(
       `INSERT INTO boons (from_name, to_name, level, status, description, created_at) 
        VALUES (?, ?, ?, ?, ?, NOW())`,
@@ -2058,10 +2059,10 @@ app.post('/api/boons', authRequired, requireCourt, async (req, res) => {
 app.patch('/api/boons/:id', authRequired, requireCourt, async (req, res) => {
   try {
     const { id } = req.params;
-    // FIX: Removed from_id and to_id
     const { from_name, to_name, level, status, description } = req.body;
     
     const fields = [], vals = [];
+    // Only update fields that exist in the DB
     if (from_name !== undefined) { fields.push('from_name=?'); vals.push(from_name); }
     if (to_name !== undefined) { fields.push('to_name=?'); vals.push(to_name); }
     if (level !== undefined) { fields.push('level=?'); vals.push(level); }
