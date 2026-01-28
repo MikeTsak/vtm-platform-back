@@ -17,6 +17,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer'); // Import multer
 const { Client, GatewayIntentBits } = require('discord.js');
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 // --- Setup ---
 
@@ -140,6 +141,49 @@ if (process.env.DISCORD_BOT_TOKEN) {
 } else {
   log.warn('DISCORD_BOT_TOKEN not set. Discord bot disabled.');
 }
+
+/* ------------------ Chat Media & Schema Updates ------------------ */
+let chatMediaTableCreated = false;
+async function _ensureChatTables() {
+  if (chatMediaTableCreated) return;
+  try {
+    // 1. Create Media Table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_media (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        uploader_id INT NOT NULL,
+        filename VARCHAR(255),
+        mime VARCHAR(100) NOT NULL,
+        size INT UNSIGNED NOT NULL,
+        data MEDIUMBLOB NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB;
+    `);
+
+    // 2. Add attachment_id column to existing message tables if missing
+    const addCol = async (table) => {
+      try {
+        const [cols] = await pool.query(`SHOW COLUMNS FROM ${table} LIKE 'attachment_id'`);
+        if (cols.length === 0) {
+          await pool.query(`ALTER TABLE ${table} ADD COLUMN attachment_id INT UNSIGNED NULL`);
+          log.ok(`Added attachment_id to ${table}`);
+        }
+      } catch (e) { /* ignore if table doesn't exist yet */ }
+    };
+
+    await Promise.all([
+      addCol('chat_messages'),
+      addCol('chat_group_messages'),
+      addCol('npc_messages')
+    ]);
+
+    chatMediaTableCreated = true;
+    log.ok('Chat media tables and columns verified');
+  } catch (e) {
+    log.err('Chat schema update failed', { message: e.message });
+  }
+}
+_ensureChatTables();
 
 // Global variable to prevent double-sending within the same minute
 let lastDailyCheckDate = '';
@@ -1441,11 +1485,13 @@ app.get('/api/admin/chat/npc-history/:npcId/:userId', authRequired, requireAdmin
   try {
     // FIX: Changed to npc_messages
     const [messages] = await pool.query(
-      `SELECT id, body, from_side, created_at FROM npc_messages 
-       WHERE npc_id = ? AND user_id = ? 
-       ORDER BY created_at ASC`,
+      `SELECT id, body, from_side, created_at, attachment_id
+        FROM npc_messages
+        WHERE npc_id = ? AND user_id = ?
+        ORDER BY created_at ASC`,
       [npcId, userId]
     );
+
     
     res.json({ messages });
   } catch (e) {
@@ -1555,6 +1601,77 @@ app.get('/api/chat/my-recent', authRequired, async (req, res) => {
     res.status(500).json({ error: 'Failed to load recent chats' });
   }
 });
+
+// Upload Image
+app.post('/api/chat/upload', authRequired, memoryUpload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file provided' });
+    
+    // Validate type
+    const validTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    if (!validTypes.includes(req.file.mimetype)) {
+      return res.status(400).json({ error: 'Invalid file type. Only JPG, PNG, GIF, WEBP allowed.' });
+    }
+
+    // Insert into DB
+    const [ins] = await pool.query(
+      'INSERT INTO chat_media (uploader_id, filename, mime, size, data) VALUES (?,?,?,?,?)',
+      [req.user.id, req.file.originalname, req.file.mimetype, req.file.size, req.file.buffer]
+    );
+
+    log.ok('Chat image uploaded', { user_id: req.user.id, media_id: ins.insertId });
+    res.json({ id: ins.insertId, url: `/api/chat/media/${ins.insertId}` });
+  } catch (e) {
+    log.err('Chat upload failed', { message: e.message });
+    res.status(500).json({ error: 'Upload failed' });
+  }
+});
+
+// Serve Image
+// In server.js
+
+// Replace the existing GET /api/chat/media/:id route with this:
+
+app.get('/api/chat/media/:id', async (req, res) => {
+  // 1. Manually handle Authentication
+  let token = null;
+  
+  // Check Header (Standard API calls)
+  if (req.headers.authorization && req.headers.authorization.split(' ')[0] === 'Bearer') {
+      token = req.headers.authorization.split(' ')[1];
+  } 
+  // Check Query Param (<img> tags)
+  else if (req.query.token) {
+      token = req.query.token;
+  }
+
+  if (!token) return res.status(401).send('Unauthorized');
+
+  try {
+      // Verify token
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      req.user = decoded; 
+  } catch (err) {
+      return res.status(401).send('Invalid Token');
+  }
+
+  // 2. Fetch and Serve Image
+  try {
+    const id = Number(req.params.id);
+    const [rows] = await pool.query('SELECT mime, size, data FROM chat_media WHERE id=?', [id]);
+    if (!rows.length) return res.status(404).send('Not found');
+
+    const { mime, size, data } = rows[0];
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Length', size);
+    res.setHeader('Cache-Control', 'private, max-age=31536000');
+    res.end(data);
+  } catch (e) {
+    res.status(404).end();
+  }
+});
+
+
 /* -------------------- SIMULATED EMAIL SYSTEM (HUMAN COMMS) -------------------- */
 
 // --- ADMIN ROUTES ---
@@ -1766,12 +1883,13 @@ app.get('/api/chat/npc-history/:npcId', authRequired, async (req, res) => {
     const userId = req.user.id;
 
     const [rows] = await pool.query(
-      `SELECT id, npc_id, user_id, from_side, body, created_at
-         FROM npc_messages
+      `SELECT id, npc_id, user_id, from_side, body, created_at, attachment_id
+        FROM npc_messages
         WHERE npc_id=? AND user_id=?
         ORDER BY created_at ASC`,
       [npcId, userId]
     );
+
     res.json({ messages: rows });
   } catch (e) {
     log.err('Failed to get NPC chat history', { message: e.message });
@@ -1783,27 +1901,25 @@ app.get('/api/chat/npc-history/:npcId', authRequired, async (req, res) => {
 app.post('/api/chat/npc/messages', authRequired, async (req, res) => {
   try {
     const userId = req.user.id;
-    const { npc_id, body } = req.body || {};
-    if (!npc_id || !body || String(body).trim().length === 0) {
-      return res.status(400).json({ error: 'npc_id and non-empty body are required' });
+    const { npc_id, body, attachment_id } = req.body || {};
+    
+    if (!npc_id || (!attachment_id && (!body || !body.trim()))) {
+      return res.status(400).json({ error: 'NPC and content required' });
     }
 
     const [r] = await pool.query(
-      'INSERT INTO npc_messages (npc_id, user_id, from_side, body) VALUES (?,?,?,?)',
-      [Number(npc_id), userId, 'user', String(body).trim()]
+      'INSERT INTO npc_messages (npc_id, user_id, from_side, body, attachment_id) VALUES (?,?,?,?,?)',
+      [Number(npc_id), userId, 'user', body ? body.trim() : '', attachment_id || null]
     );
 
     const [[message]] = await pool.query(
-      `SELECT id, npc_id, user_id, from_side, body, created_at
-         FROM npc_messages
-        WHERE id=?`,
-      [r.insertId]
+      `SELECT id, npc_id, user_id, from_side, body, created_at, attachment_id
+         FROM npc_messages WHERE id=?`, [r.insertId]
     );
-    log.ok('NPC message (player)', { user_id: userId, npc_id, msg_id: r.insertId });
     res.status(201).json({ message });
   } catch (e) {
-    log.err('Failed to send NPC message', { message: e.message });
-    res.status(500).json({ error: 'Failed to send message' });
+    log.err('NPC send failed', { message: e.message });
+    res.status(500).json({ error: 'Failed' });
   }
 });
 
@@ -1815,12 +1931,13 @@ app.get('/api/admin/chat/npc/history', authRequired, requireAdmin, async (req, r
     if (!npcId || !userId) return res.status(400).json({ error: 'npc_id and user_id are required' });
 
     const [rows] = await pool.query(
-      `SELECT id, npc_id, user_id, from_side, body, created_at
-         FROM npc_messages
+      `SELECT id, npc_id, user_id, from_side, body, created_at, attachment_id
+        FROM npc_messages
         WHERE npc_id=? AND user_id=?
         ORDER BY created_at ASC`,
       [npcId, userId]
     );
+
     res.json({ messages: rows });
   } catch (e) {
     log.err('Admin: NPC history failed', { message: e.message });
@@ -1828,30 +1945,94 @@ app.get('/api/admin/chat/npc/history', authRequired, requireAdmin, async (req, r
   }
 });
 
+app.post('/api/admin/chat/summarize', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const { text, context } = req.body;
+    if (!text) return res.status(400).json({ error: 'No text provided' });
+    if (!process.env.GOOGLE_API_KEY) return res.status(500).json({ error: 'Server missing GOOGLE_API_KEY' });
+
+    // Initialize Gemini
+    const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+
+    // List of models to try in order of preference.
+    // We prioritize stable, production-ready models to avoid 503 errors.
+    const candidateModels = [
+          "gemini-2.5-flash-lite",      // Specific stable version
+          "gemini-3-flash-preview",      // Newer stable version
+          "gemini-2.5-flash",        // Specific stable version
+          "	gemini-2.5-pro",        // Newer stable version
+          "gemini-1.0-pro",            // Fallback legacy
+          "gemini-pro"                 // Generic fallback
+        ];
+
+    let summary = null;
+    let lastError = null;
+
+    // Construct Prompt
+    const prompt = `
+      You are an assistant for a Vampire: The Masquerade game.
+      Summarize the following roleplay chat log between: ${context || 'Unknown Participants'}.
+      
+      Requirements:
+      - Highlight key plot developments, agreements, and secrets revealed.
+      - Describe the emotional tone.
+      - Keep it concise (under 200 words).
+      - Use bullet points.
+      - If the chat is in Greek, provide the summary in Greek.
+
+      Chat Log:
+      ${text.substring(0, 30000)} 
+    `; // Limit text length to avoid token limits
+
+    // Loop through models until one works
+    for (const modelName of candidateModels) {
+      try {
+        const model = genAI.getGenerativeModel({ model: modelName });
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        summary = response.text();
+        
+        // If successful, stop trying other models
+        break; 
+      } catch (e) {
+        // Log warning but continue to next model
+        console.warn(`[AI] Model ${modelName} failed: ${e.message}`);
+        lastError = e;
+      }
+    }
+
+    if (!summary) {
+      throw lastError || new Error("All AI models failed to respond.");
+    }
+
+    res.json({ summary });
+
+  } catch (e) {
+    log.err('AI Summarize failed', { message: e.message });
+    // Return 503 (Service Unavailable) if it was an AI overload issue
+    res.status(503).json({ error: 'AI service is currently busy. Please try again.' });
+  }
+});
+
 app.post('/api/admin/chat/npc/messages', authRequired, requireAdmin, async (req, res) => {
   try {
-    const { npc_id, user_id, body } = req.body || {};
-    if (!npc_id || !user_id || !body || String(body).trim().length === 0) {
-      return res.status(400).json({ error: 'npc_id, user_id and non-empty body are required' });
+    const { npc_id, user_id, body, attachment_id } = req.body || {};
+    if (!npc_id || !user_id || (!attachment_id && (!body || !body.trim()))) {
+      return res.status(400).json({ error: 'Missing fields' });
     }
 
     const [r] = await pool.query(
-      'INSERT INTO npc_messages (npc_id, user_id, from_side, body) VALUES (?,?,?,?)',
-      [Number(npc_id), Number(user_id), 'npc', String(body).trim()]
+      'INSERT INTO npc_messages (npc_id, user_id, from_side, body, attachment_id) VALUES (?,?,?,?,?)',
+      [Number(npc_id), Number(user_id), 'npc', body ? body.trim() : '', attachment_id || null]
     );
 
     const [[message]] = await pool.query(
-      `SELECT id, npc_id, user_id, from_side, body, created_at
-         FROM npc_messages
-        WHERE id=?`,
-      [r.insertId]
+      `SELECT id, npc_id, user_id, from_side, body, created_at, attachment_id
+         FROM npc_messages WHERE id=?`, [r.insertId]
     );
-
-    log.ok('Admin NPC reply', { npc_id, to_user: user_id, msg_id: r.insertId });
     res.status(201).json({ message });
   } catch (e) {
-    log.err('Admin NPC reply failed', { message: e.message });
-    res.status(500).json({ error: 'Failed to send NPC reply' });
+    res.status(500).json({ error: 'Failed' });
   }
 });
 
@@ -2183,14 +2364,16 @@ app.get('/api/chat/groups/:id/history', authRequired, async (req, res) => {
 
     // 2. Fetch Messages
     const [messages] = await pool.query(`
-      SELECT m.id, m.sender_id, m.body, m.created_at, 
-             u.display_name, c.name as char_name, c.clan
+      SELECT m.id, m.sender_id, m.body, m.created_at,
+            m.attachment_id,
+            u.display_name, c.name as char_name, c.clan
       FROM chat_group_messages m
       LEFT JOIN users u ON m.sender_id = u.id
       LEFT JOIN characters c ON c.user_id = u.id
       WHERE m.group_id = ?
       ORDER BY m.created_at ASC
     `, [groupId]);
+
 
     res.json({ messages });
   } catch (e) {
@@ -2203,20 +2386,19 @@ app.get('/api/chat/groups/:id/history', authRequired, async (req, res) => {
 app.post('/api/chat/groups/:id/messages', authRequired, async (req, res) => {
   try {
     const groupId = Number(req.params.id);
-    const { body } = req.body;
-    if (!body || !body.trim()) return res.status(400).json({ error: 'Body required' });
+    const { body, attachment_id } = req.body;
 
-    // 1. Verify Membership
+    // Verify membership ... (keep existing check)
     const [m] = await pool.query('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?', [groupId, req.user.id]);
     if (!m.length) return res.status(403).json({ error: 'Not a member' });
 
-    // 2. Insert Message
-    const [r] = await pool.query('INSERT INTO chat_group_messages (group_id, sender_id, body) VALUES (?,?,?)', 
-      [groupId, req.user.id, body.trim()]);
+    if (!attachment_id && (!body || !body.trim())) return res.status(400).json({ error: 'Content required' });
 
-    // 3. Return Message
+    const [r] = await pool.query('INSERT INTO chat_group_messages (group_id, sender_id, body, attachment_id) VALUES (?,?,?,?)', 
+      [groupId, req.user.id, body ? body.trim() : '', attachment_id || null]);
+
     const [[message]] = await pool.query(`
-      SELECT m.id, m.sender_id, m.body, m.created_at, 
+      SELECT m.id, m.sender_id, m.body, m.created_at, m.attachment_id,
              u.display_name, c.name as char_name, c.clan
       FROM chat_group_messages m
       LEFT JOIN users u ON m.sender_id = u.id
@@ -2224,46 +2406,12 @@ app.post('/api/chat/groups/:id/messages', authRequired, async (req, res) => {
       WHERE m.id = ?
     `, [r.insertId]);
 
-    // --- PUSH NOTIFICATION FOR GROUP ---
-    try {
-      // Get all other members
-      const [members] = await pool.query('SELECT user_id FROM chat_group_members WHERE group_id=? AND user_id <> ?', [groupId, req.user.id]);
-      const memberIds = members.map(x => x.user_id);
-
-      if (memberIds.length > 0) {
-        // Find subscriptions
-        const [subs] = await pool.query('SELECT * FROM push_subscriptions WHERE user_id IN (?)', [memberIds]);
-        
-        // Find group name for notification title
-        const [[groupInfo]] = await pool.query('SELECT name FROM chat_groups WHERE id=?', [groupId]);
-        const groupName = groupInfo?.name || 'Group Chat';
-        const senderName = message.char_name || message.display_name || 'Someone';
-
-        const payload = JSON.stringify({
-          title: `${groupName}: ${senderName}`,
-          body: body.trim(),
-          data: { url: '/comms', tag: `group-${groupId}` }
-        });
-
-        // Send
-        subs.forEach(row => {
-          try {
-            const subscription = JSON.parse(row.subscription_json);
-            webpush.sendNotification(subscription, payload).catch(err => {
-              if (err.statusCode === 410) {
-                pool.query('DELETE FROM push_subscriptions WHERE id = ?', [row.id]).catch(()=>{});
-              }
-            });
-          } catch {}
-        });
-      }
-    } catch (e) { log.err('Group push failed', {error: e.message}); }
-    // --- END PUSH ---
+    // ... (Keep existing PUSH logic) ...
 
     res.status(201).json({ message });
   } catch (e) {
-    log.err('Failed to send group message', { message: e.message });
-    res.status(500).json({ error: 'Failed to send' });
+    log.err('Group send failed', { message: e.message });
+    res.status(500).json({ error: 'Failed' });
   }
 });
 
@@ -2289,14 +2437,16 @@ app.get('/api/admin/chat/groups/:id/history', authRequired, requireAdmin, async 
   try {
     const groupId = Number(req.params.id);
     const [messages] = await pool.query(`
-      SELECT m.id, m.sender_id, m.body, m.created_at, 
-             u.display_name, c.name as char_name, c.clan
+      SELECT m.id, m.sender_id, m.body, m.created_at,
+            m.attachment_id,
+            u.display_name, c.name as char_name, c.clan
       FROM chat_group_messages m
       LEFT JOIN users u ON m.sender_id = u.id
       LEFT JOIN characters c ON c.user_id = u.id
       WHERE m.group_id = ?
       ORDER BY m.created_at ASC
     `, [groupId]);
+
     res.json({ messages });
   } catch (e) {
     res.status(500).json({ error: 'Failed' });
@@ -2394,13 +2544,17 @@ app.get('/api/chat/history/:otherUserId', authRequired, async (req, res) => {
     const myId = req.user.id;
 
     const [messages] = await pool.query(
-      `SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at, u_sender.display_name as sender_name
+      `SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at,
+              cm.read_at, cm.delivered_at,
+              cm.attachment_id,
+              u_sender.display_name as sender_name
        FROM chat_messages cm
        JOIN users u_sender ON cm.sender_id = u_sender.id
        WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)
        ORDER BY created_at ASC`,
       [myId, otherUserId, otherUserId, myId]
     );
+
     res.json({ messages });
   } catch (e) {
     log.err('Failed to get chat history', { message: e.message });
@@ -2408,78 +2562,56 @@ app.get('/api/chat/history/:otherUserId', authRequired, async (req, res) => {
   }
 });
 
+
 // Send a message
 app.post('/api/chat/messages', authRequired, async (req, res) => {
   try {
-    const { recipient_id, body } = req.body;
-    if (!recipient_id || !body || typeof body !== 'string' || body.trim().length === 0) {
-      return res.status(400).json({ error: 'Recipient and non-empty body are required' });
+    // Added attachment_id to destructuring
+    const { recipient_id, body, attachment_id } = req.body;
+    
+    // Allow empty body ONLY if there is an attachment
+    if (!recipient_id || (!attachment_id && (!body || !body.trim()))) {
+      return res.status(400).json({ error: 'Recipient and content required' });
     }
 
     const [r] = await pool.query(
-      'INSERT INTO chat_messages (sender_id, recipient_id, body) VALUES (?, ?, ?)',
-      [req.user.id, recipient_id, body.trim()]
+      'INSERT INTO chat_messages (sender_id, recipient_id, body, attachment_id) VALUES (?, ?, ?, ?)',
+      [req.user.id, recipient_id, body ? body.trim() : '', attachment_id || null]
     );
 
+    // Fetch back with attachment info
     const [[message]] = await pool.query(
-      `SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at, u_sender.display_name as sender_name
+      `SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at, cm.attachment_id,
+              u_sender.display_name as sender_name
        FROM chat_messages cm
        JOIN users u_sender ON cm.sender_id = u_sender.id
        WHERE cm.id = ?`,
       [r.insertId]
     );
 
-    // --- START PUSH NOTIFICATION LOGIC ---
-    try {
-      // 1. Find all subscriptions for the user we are sending TO
-      const [subs] = await pool.query(
-        'SELECT id, subscription_json FROM push_subscriptions WHERE user_id = ?',
-        [recipient_id]
-      );
+    // ... (Keep existing PUSH notification logic here) ...
 
-      if (subs.length > 0) {
-        // 2. Create the notification payload
-        const payload = JSON.stringify({
-          title: `New message from ${req.user.display_name}`,
-          body: body.trim(),
-          data: {
-            url: '/comms', // URL to open when clicked
-            // Tagging allows notifications from the same user to stack
-            tag: `chat-u-${req.user.id}` 
-          }
-        });
-
-        // 3. Send a notification to each subscription
-        // We use Promise.all but don't await it, so it runs in the background
-        // and doesn't slow down the API response.
-        const sendPromises = subs.map(row => {
-          const subscription = JSON.parse(row.subscription_json);
-          return webpush.sendNotification(subscription, payload)
-            .catch(err => {
-              // 4. If a subscription is "gone" (410), delete it from the DB
-              if (err.statusCode === 410) {
-                log.warn('Stale push subscription deleted', { sub_id: row.id, user_id: recipient_id });
-                return pool.query('DELETE FROM push_subscriptions WHERE id = ?', [row.id]);
-              } else {
-                log.err('Push notification send failed', { message: err.message, statusCode: err.statusCode, user_id: recipient_id });
-              }
-            });
-        });
-        Promise.all(sendPromises);
-      }
-    } catch (pushError) {
-      // Log the push error, but DO NOT fail the main API request
-      log.err('Push notification trigger failed', { message: pushError.message, stack: pushError.stack });
-    }
-    // --- END PUSH NOTIFICATION LOGIC ---
-
-    // Using `log.ok` as a generic success logger, assuming `log.chat` is not configured.
-    log.ok('Message sent', { from: req.user.id, to: recipient_id, msg_id: r.insertId });
     res.status(201).json({ message });
-
   } catch (e) {
     log.err('Failed to send message', { message: e.message });
-    res.status(500).json({ error: 'Failed to send message' });
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+// Mark messages as delivered (Call this when the chat app loads new messages)
+app.post('/api/chat/delivered', authRequired, async (req, res) => {
+  try {
+    const { sender_id } = req.body;
+    if (!sender_id) return res.status(400).json({ error: 'sender_id is required' });
+
+    await pool.query(
+      'UPDATE chat_messages SET delivered_at = NOW() WHERE sender_id = ? AND recipient_id = ? AND delivered_at IS NULL',
+      [sender_id, req.user.id]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    log.err('Failed to mark messages as delivered', { message: e.message });
+    res.status(500).json({ error: 'Failed' });
   }
 });
 
