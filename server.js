@@ -1493,17 +1493,20 @@ app.post('/api/admin/chat/reply-as-npc/:npcId/:userId', authRequired, requireAdm
 app.get('/api/chat/my-recent', authRequired, async (req, res) => {
   try {
     const userId = req.user.id;
-    const limit = 10; // Fetch a bit more to allow for grouping
+    const limit = 10; 
 
-    // 1. Get recent NPC messages
+    // 1. FIX: Get recent NPC messages from BOTH tables (npc_messages AND npc_chat_messages)
     const [npcRows] = await pool.query(
       `SELECT m.id, m.npc_id AS partner_id, n.name AS partner_name, 
               m.body, m.created_at, 'npc' as type
-       FROM npc_messages m
+       FROM (
+          SELECT id, npc_id, body, created_at FROM npc_messages WHERE user_id = ?
+          UNION ALL
+          SELECT id, npc_id, body, created_at FROM npc_chat_messages WHERE user_id = ?
+       ) m
        JOIN npcs n ON n.id = m.npc_id
-       WHERE m.user_id = ?
        ORDER BY m.created_at DESC LIMIT ?`,
-      [userId, limit]
+      [userId, userId, limit]
     );
 
     // 2. Get recent Player messages (Sent or Received)
@@ -1543,7 +1546,7 @@ app.get('/api/chat/my-recent', authRequired, async (req, res) => {
           linkId: msg.partner_id // ID to open in comms
         });
       }
-      if (uniqueConvos.length >= 5) break; // Hard limit for dashboard
+      if (uniqueConvos.length >= 10) break; // Limit result
     }
 
     res.json({ conversations: uniqueConvos });
@@ -1552,7 +1555,6 @@ app.get('/api/chat/my-recent', authRequired, async (req, res) => {
     res.status(500).json({ error: 'Failed to load recent chats' });
   }
 });
-
 /* -------------------- SIMULATED EMAIL SYSTEM (HUMAN COMMS) -------------------- */
 
 // --- ADMIN ROUTES ---
@@ -2597,42 +2599,6 @@ app.get('/api/admin/users', authRequired, requireAdmin, async (_req, res) => {
   res.json({ users: rows });
 });
 
-// Player: get my recent NPC conversations (latest messages first)
-app.get('/api/chat/my-recent', authRequired, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const limit = Math.min(Number(req.query.limit) || 5, 10);
-
-    // Last messages with any NPC for this user
-    const [rows] = await pool.query(
-      `
-      SELECT m.npc_id,
-             n.name   AS npc_name,
-             m.body   AS last_message,
-             m.created_at
-      FROM npc_messages m
-      JOIN npcs n ON n.id = m.npc_id
-      WHERE m.user_id = ?
-      ORDER BY m.created_at DESC
-      LIMIT ?
-      `,
-      [userId, limit]
-    );
-
-    const conversations = rows.map(r => ({
-      id: `npc-${r.npc_id}`,
-      partnerName: r.npc_name,
-      lastMessage: r.last_message,
-      timestamp: r.created_at,
-      isNPC: true,
-    }));
-
-    res.json({ conversations });
-  } catch (e) {
-    log.err('Failed to fetch my recent chats', { message: e.message });
-    res.status(500).json({ error: 'Failed to load recent chats' });
-  }
-});
 
 // Update a user (admin only)
 
