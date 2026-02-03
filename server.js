@@ -2036,6 +2036,71 @@ app.post('/api/admin/chat/npc/messages', authRequired, requireAdmin, async (req,
   }
 });
 
+/* --- Camarilla Hierarchy API --- */
+
+// 1. Fetch combined roster
+app.get('/api/admin/camarilla/roster', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const [players] = await pool.query(
+      "SELECT id, name, clan, camarilla_titles as titles, status, 'player' as type FROM characters"
+    );
+    const [npcs] = await pool.query(
+      "SELECT id, name, clan, camarilla_titles as titles, status, 'npc' as type FROM npcs"
+    );
+    
+    // Parse JSON strings back to arrays if necessary
+    const format = (list) => list.map(item => ({
+      ...item,
+      titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || [])
+    }));
+
+    res.json({ roster: [...format(players), ...format(npcs)] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/* --- Public Camarilla Hierarchy API --- */
+
+// GET: Publicly accessible roster for all logged-in users
+app.get('/api/camarilla/roster', authRequired, async (req, res) => {
+  try {
+    // Selects basic info from players and NPCs
+    const [players] = await pool.query(
+      "SELECT id, name, clan, camarilla_titles as titles, status, 'player' as type FROM characters"
+    );
+    const [npcs] = await pool.query(
+      "SELECT id, name, clan, camarilla_titles as titles, status, 'npc' as type FROM npcs"
+    );
+    
+    // Format helper to handle JSON strings for titles
+    const format = (list) => list.map(item => ({
+      ...item,
+      titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || [])
+    }));
+
+    res.json({ roster: [...format(players), ...format(npcs)] });
+  } catch (e) {
+    log.err('Public roster fetch failed', { message: e.message });
+    res.status(500).json({ error: "Failed to load the Court hierarchy." });
+  }
+});
+
+// 2. Update status or titles
+app.patch('/api/admin/camarilla/update', authRequired, requireAdmin, async (req, res) => {
+  const { id, type, field, value } = req.body;
+  const table = type === 'player' ? 'characters' : 'npcs';
+  const dbField = field === 'titles' ? 'camarilla_titles' : 'status';
+  const dbValue = field === 'titles' ? JSON.stringify(value) : value;
+
+  try {
+    await pool.query(`UPDATE ${table} SET ${dbField} = ? WHERE id = ?`, [dbValue, id]);
+    log.adm(`Updated Camarilla ${field}`, { type, id, value });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: "Database update failed" });
+  }
+});
 
 /* -------------------- Downtimes -------------------- */
 // My quota this month
