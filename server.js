@@ -2199,12 +2199,10 @@ app.get('/api/downtimes/mine', authRequired, async (req, res) => {
   // Get character IDs for all user's characters
   const characterIds = chars.map(c => c.id);
   
-  // Generate placeholders for IN clause
-  const placeholders = characterIds.map(() => '?').join(',');
-  
+  // mysql2 supports arrays in IN clauses with a single placeholder
   const [rows] = await pool.query(
-    `SELECT * FROM downtimes WHERE character_id IN (${placeholders}) ORDER BY created_at DESC`,
-    characterIds
+    'SELECT * FROM downtimes WHERE character_id IN (?) ORDER BY created_at DESC',
+    [characterIds]
   );
   log.dt('List mine', { user_id: req.user.id, count: rows.length, characterCount: characterIds.length });
   res.json({ downtimes: rows });
