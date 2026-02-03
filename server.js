@@ -1147,7 +1147,6 @@ app.get('/api/characters/me', authRequired, async (req, res) => {
   log.char('Fetch my characters', { user_id: req.user.id, count: characters.length });
   
   // Return all characters, or single character for backward compatibility
-  // If there's only one character, return it as before for backward compatibility
   if (characters.length === 1) {
     res.json({ character: characters[0] });
   } else {
@@ -1628,8 +1627,8 @@ app.get('/api/chat/my-recent', authRequired, async (req, res) => {
               CASE WHEN cm.sender_id = ? THEN r.display_name ELSE s.display_name END as partner_name,
               cm.body, cm.created_at, 'player' as type
        FROM chat_messages cm
-       JOIN users s ON cm.sender_id = s.id
-       JOIN users r ON cm.recipient_id = r.id
+       LEFT JOIN users s ON cm.sender_id = s.id
+       LEFT JOIN users r ON cm.recipient_id = r.id
        WHERE cm.sender_id = ? OR cm.recipient_id = ?
        ORDER BY cm.created_at DESC LIMIT ?`,
       [userId, userId, userId, userId, limit]
@@ -2190,9 +2189,8 @@ app.get('/api/downtimes/quota', authRequired, async (req, res) => {
 
 // List my downtimes
 app.get('/api/downtimes/mine', authRequired, async (req, res) => {
-  const [[chars]] = await Promise.all([
-    pool.query('SELECT * FROM characters WHERE user_id=?', [req.user.id]),
-  ]);
+  const [chars] = await pool.query('SELECT * FROM characters WHERE user_id=?', [req.user.id]);
+  
   if (!chars || chars.length === 0) {
     log.dt('List mine (no character)', { user_id: req.user.id });
     return res.json({ downtimes: [] });
@@ -2201,9 +2199,12 @@ app.get('/api/downtimes/mine', authRequired, async (req, res) => {
   // Get character IDs for all user's characters
   const characterIds = chars.map(c => c.id);
   
+  // Generate placeholders for IN clause
+  const placeholders = characterIds.map(() => '?').join(',');
+  
   const [rows] = await pool.query(
-    'SELECT * FROM downtimes WHERE character_id IN (?) ORDER BY created_at DESC',
-    [characterIds]
+    `SELECT * FROM downtimes WHERE character_id IN (${placeholders}) ORDER BY created_at DESC`,
+    characterIds
   );
   log.dt('List mine', { user_id: req.user.id, count: rows.length, characterCount: characterIds.length });
   res.json({ downtimes: rows });
@@ -2683,7 +2684,7 @@ app.get('/api/chat/history/:otherUserId', authRequired, async (req, res) => {
               cm.attachment_id,
               u_sender.display_name as sender_name
        FROM chat_messages cm
-       JOIN users u_sender ON cm.sender_id = u_sender.id
+       LEFT JOIN users u_sender ON cm.sender_id = u_sender.id
        WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)
        ORDER BY created_at ASC`,
       [myId, otherUserId, otherUserId, myId]
@@ -2718,7 +2719,7 @@ app.post('/api/chat/messages', authRequired, async (req, res) => {
       `SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at, cm.attachment_id,
               u_sender.display_name as sender_name
        FROM chat_messages cm
-       JOIN users u_sender ON cm.sender_id = u_sender.id
+       LEFT JOIN users u_sender ON cm.sender_id = u_sender.id
        WHERE cm.id = ?`,
       [r.insertId]
     );
@@ -2831,8 +2832,8 @@ app.get('/api/admin/chat/all', authRequired, requireAdmin, async (req, res) => {
                 s.id as sender_id, s.display_name as sender_name,
                 r.id as recipient_id, r.display_name as recipient_name
             FROM chat_messages cm
-            JOIN users s ON cm.sender_id = s.id
-            JOIN users r ON cm.recipient_id = r.id
+            LEFT JOIN users s ON cm.sender_id = s.id
+            LEFT JOIN users r ON cm.recipient_id = r.id
             ORDER BY cm.created_at DESC`
         );
         log.adm('Admin fetched all chat messages', { count: messages.length });
