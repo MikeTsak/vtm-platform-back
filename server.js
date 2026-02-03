@@ -20,7 +20,7 @@ const { Client, GatewayIntentBits } = require('discord.js');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 // --- Swagger Imports ---
 const swaggerUi = require('swagger-ui-express');
-const swaggerJsdoc = require('swagger-jsdoc');
+const swaggerSpec = require('./swagger.config');
 
 // --- Setup ---
 
@@ -908,6 +908,72 @@ app.get('/', async (req, res) => {
 
 
 /* -------------------- Auth Routes -------------------- */
+
+/**
+ * @swagger
+ * /api/auth/register:
+ *   post:
+ *     summary: Register a new user
+ *     description: Creates a new user account with email, display name, and password
+ *     tags: [Authentication]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *               - display_name
+ *               - password
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 description: User's email address
+ *                 example: user@example.com
+ *               display_name:
+ *                 type: string
+ *                 minLength: 2
+ *                 maxLength: 190
+ *                 description: User's display name
+ *                 example: John Doe
+ *               password:
+ *                 type: string
+ *                 minLength: 8
+ *                 description: User's password (minimum 8 characters)
+ *                 example: SecurePass123!
+ *     responses:
+ *       200:
+ *         description: User successfully registered
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 token:
+ *                   type: string
+ *                   description: JWT authentication token
+ *       400:
+ *         description: Invalid input (missing fields, invalid email, weak password, or invalid display name)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       409:
+ *         description: Email already in use
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { email, display_name, password } = req.body;
@@ -950,6 +1016,63 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /api/auth/login:
+ *   post:
+ *     summary: Login user
+ *     description: Authenticate a user with email and password
+ *     tags: [Authentication]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *               - password
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 description: User's email address
+ *                 example: user@example.com
+ *               password:
+ *                 type: string
+ *                 description: User's password
+ *                 example: SecurePass123!
+ *     responses:
+ *       200:
+ *         description: Successfully logged in
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 token:
+ *                   type: string
+ *                   description: JWT authentication token
+ *       400:
+ *         description: Missing required fields
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Invalid credentials
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 app.post('/api/auth/login', async (req, res) => {
   // best-effort client IP (works with proxies/CDNs)
   const ip =
@@ -998,6 +1121,49 @@ app.get('/api/auth/me', authRequired, async (req, res) => {
   res.json({ user: req.user });
 });
 
+/**
+ * @swagger
+ * /api/auth/forgot:
+ *   post:
+ *     summary: Request password reset
+ *     description: Sends a password reset link to the user's email if the account exists
+ *     tags: [Authentication]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 description: User's email address
+ *                 example: user@example.com
+ *     responses:
+ *       200:
+ *         description: Success response (sent regardless of whether email exists for security)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 ok:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: If the email exists, a reset link has been sent.
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 // --- COMPLETE /api/auth/forgot ---
 app.post('/api/auth/forgot', async (req, res) => {
   const { email } = req.body || {};
@@ -1142,6 +1308,72 @@ app.get('/api/characters/me', authRequired, async (req, res) => {
   res.json({ character: ch });
 });
 
+/**
+ * @swagger
+ * /api/characters:
+ *   post:
+ *     summary: Create a new character
+ *     description: Creates a new character for the authenticated user with starting XP of 50
+ *     tags: [Characters]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - clan
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: Character name
+ *                 example: Marcus Valerius
+ *               clan:
+ *                 type: string
+ *                 description: Vampire clan
+ *                 example: Ventrue
+ *               sheet:
+ *                 type: object
+ *                 description: Character sheet data (optional)
+ *                 example: { "strength": 3, "dexterity": 2 }
+ *     responses:
+ *       200:
+ *         description: Character successfully created
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 character:
+ *                   $ref: '#/components/schemas/Character'
+ *       400:
+ *         description: Missing required fields
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Unauthorized - Missing or invalid token
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       409:
+ *         description: Character already exists for this user
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 // Create character (stores sheet JSON and xp=50)
 app.post('/api/characters', authRequired, async (req, res) => {
   const { name, clan, sheet } = req.body;
@@ -1173,6 +1405,69 @@ app.post('/api/characters', authRequired, async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /api/characters:
+ *   put:
+ *     summary: Update character
+ *     description: Updates the authenticated user's character information
+ *     tags: [Characters]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: Character name (optional)
+ *                 example: Marcus Valerius
+ *               clan:
+ *                 type: string
+ *                 description: Vampire clan (optional)
+ *                 example: Ventrue
+ *               sheet:
+ *                 type: object
+ *                 description: Character sheet data (optional)
+ *                 example: { "strength": 4, "dexterity": 3 }
+ *     responses:
+ *       200:
+ *         description: Character successfully updated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 character:
+ *                   $ref: '#/components/schemas/Character'
+ *       400:
+ *         description: No fields to update
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Unauthorized - Missing or invalid token
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       404:
+ *         description: Character not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 // Update my character (optional)
 app.put('/api/characters', authRequired, async (req, res) => {
   const { name, clan, sheet } = req.body;
@@ -4191,49 +4486,9 @@ app.use((err, req, res, next) => {
 app.use(expressErrorHandler);
 
 // --- Swagger Configuration ---
-const swaggerOptions = {
-  definition: {
-    openapi: '3.0.0',
-    info: {
-      title: 'Erebus Portal API',
-      version: '1.0.0',
-      description: 'API documentation for the Vampire: The Masquerade RPG portal.',
-    },
-    servers: [
-      {
-        url: 'http://localhost:3001', // Change this to your production URL in deployment
-        description: 'Development Server',
-
-      },
-      {
-        url: 'https://vtm.back.miketsak.gr', // Change this to your production URL in deployment
-        description: 'Production Server',
-      },
-    ],
-    components: {
-      securitySchemes: {
-        bearerAuth: {
-          type: 'http',
-          scheme: 'bearer',
-          bearerFormat: 'JWT',
-        },
-      },
-    },
-    security: [
-      {
-        bearerAuth: [], // Applies bearer auth globally (optional, or apply per route)
-      },
-    ],
-  },
-  // This looks for @swagger comments in your server.js
-  apis: ['./server.js'], 
-};
-
-const swaggerSpec = swaggerJsdoc(swaggerOptions);
-
-// Serve the Swagger UI
-app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
-log.start('Swagger UI available at /api/docs');
+// Serve the Swagger UI at /api-docs endpoint
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+log.start('Swagger UI available at /api-docs');
 
 /* -------------------- Start Server -------------------- */
 const PORT = process.env.PORT || 3001;
