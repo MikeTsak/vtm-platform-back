@@ -53,8 +53,14 @@ app.use('/api/admin', (req, res, next) => {
 });
 
 // Create a multer instance that stores files in memory as buffers
+// Limit file size to 5MB
 const storage = multer.memoryStorage();
-const memoryUpload = multer({ storage: storage });
+const memoryUpload = multer({ 
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB
+  }
+});
 
 // Add the request logger middleware. It will log every incoming request and its response.
 // Place it right after express.json() to ensure it can log request bodies.
@@ -675,6 +681,19 @@ const issueToken = (user) =>
     { expiresIn: '7d' }
   );
 
+// Input validation helpers
+const isValidEmail = (email) => {
+  if (!email || typeof email !== 'string') return false;
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email) && email.length <= 255;
+};
+
+const isValidPassword = (password) => {
+  if (!password || typeof password !== 'string') return false;
+  // At least 8 characters
+  return password.length >= 8;
+};
+
 function startOfMonth(d = new Date()) { return new Date(d.getFullYear(), d.getMonth(), 1); }
 function endOfMonth(d = new Date()) { return new Date(d.getFullYear(), d.getMonth() + 1, 1); }
 function feedingFromPredator(pred) {
@@ -893,6 +912,25 @@ app.post('/api/auth/register', async (req, res) => {
       log.warn('Register missing fields', { email, display_name });
       return res.status(400).json({ error: 'Missing fields' });
     }
+    
+    // Validate email format
+    if (!isValidEmail(email)) {
+      log.warn('Register invalid email format', { email: maskEmail(email) });
+      return res.status(400).json({ error: 'Invalid email format' });
+    }
+    
+    // Validate password strength
+    if (!isValidPassword(password)) {
+      log.warn('Register weak password', { email: maskEmail(email) });
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+    
+    // Validate display_name length
+    if (typeof display_name !== 'string' || display_name.trim().length < 2 || display_name.length > 190) {
+      log.warn('Register invalid display_name', { email: maskEmail(email) });
+      return res.status(400).json({ error: 'Display name must be between 2 and 190 characters' });
+    }
+    
     const [exists] = await pool.query('SELECT id FROM users WHERE email=?', [email]);
     if (exists.length) {
       log.warn('Register email in use', { email });
@@ -922,6 +960,13 @@ app.post('/api/auth/login', async (req, res) => {
 
   try {
     const { email, password } = req.body || {};
+    
+    // Basic validation
+    if (!email || !password) {
+      log.warn('Login missing credentials', { ip, ua, req_id: req.id });
+      return res.status(400).json({ error: 'Missing email or password', req_id: req.id });
+    }
+    
     const [rows] = await pool.query('SELECT * FROM users WHERE email=?', [email]);
     const user = rows[0];
 
@@ -4130,6 +4175,17 @@ app.delete('/api/news/:id', authRequired, requireAdmin, async (req, res) => {
 /* -------------------- Start Server -------------------- */
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => log.start(`API server started`, { port: PORT, env: process.env.NODE_ENV || 'stable' }));
+
+// Multer error handler (must be before general error handler)
+app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: 'File too large. Maximum size is 5MB.' });
+    }
+    return res.status(400).json({ error: `Upload error: ${err.message}` });
+  }
+  next(err);
+});
 
 // Add the global error handler middleware *last*
 app.use(expressErrorHandler);
