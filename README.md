@@ -221,6 +221,43 @@ module.exports = { authRequired, requireAdmin };
 
 ---
 
+## API Documentation (Swagger)
+
+This backend includes interactive API documentation powered by Swagger/OpenAPI. Once the server is running, you can:
+
+* **View API Documentation**: Navigate to `http://localhost:3001/api-docs` in your browser
+* **Try API Endpoints**: Use the Swagger UI to test endpoints directly from the browser
+* **Explore Schemas**: See detailed request/response models and authentication requirements
+
+### Accessing Swagger UI
+
+1. Start the server: `npm start` or `npm run dev`
+2. Open your browser and go to: `http://localhost:3001/api-docs`
+3. For production, access via: `https://vtm.back.miketsak.gr/api-docs`
+
+### Authentication in Swagger
+
+For endpoints that require authentication:
+
+1. First, use the `/api/auth/register` or `/api/auth/login` endpoint to get a JWT token
+2. Click the "Authorize" button at the top of the Swagger UI
+3. Enter your token in the format: `Bearer <your-token-here>`
+4. Click "Authorize" to apply the token to all protected endpoints
+
+### Swagger Configuration
+
+The Swagger configuration is located in `swagger.config.js` and includes:
+
+* API metadata (title, version, description)
+* Server URLs (development and production)
+* Security schemes (JWT Bearer authentication)
+* Schema definitions for common models (User, Character, Error)
+* Endpoint documentation with request/response examples
+
+To add documentation for new endpoints, use JSDoc-style comments with `@swagger` tags in `server.js`.
+
+---
+
 ## API Overview
 
 Base URL defaults to: `http://localhost:3001/api`
