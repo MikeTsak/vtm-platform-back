@@ -38,7 +38,11 @@ const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
 
 
 const app = express();
-app.use(cors({ origin: true, credentials: true }));
+// CORS: In production, set CORS_ORIGIN env var to your frontend URL
+const corsOrigin = process.env.CORS_ORIGIN 
+  ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
+  : true; // Development: allow all origins
+app.use(cors({ origin: corsOrigin, credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 app.set('trust proxy', true);
 
@@ -49,8 +53,14 @@ app.use('/api/admin', (req, res, next) => {
 });
 
 // Create a multer instance that stores files in memory as buffers
+// Limit file size to 5MB
 const storage = multer.memoryStorage();
-const memoryUpload = multer({ storage: storage });
+const memoryUpload = multer({ 
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB
+  }
+});
 
 // Add the request logger middleware. It will log every incoming request and its response.
 // Place it right after express.json() to ensure it can log request bodies.
@@ -671,6 +681,19 @@ const issueToken = (user) =>
     { expiresIn: '7d' }
   );
 
+// Input validation helpers
+const isValidEmail = (email) => {
+  if (!email || typeof email !== 'string') return false;
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email) && email.length <= 255;
+};
+
+const isValidPassword = (password) => {
+  if (!password || typeof password !== 'string') return false;
+  // At least 8 characters
+  return password.length >= 8;
+};
+
 function startOfMonth(d = new Date()) { return new Date(d.getFullYear(), d.getMonth(), 1); }
 function endOfMonth(d = new Date()) { return new Date(d.getFullYear(), d.getMonth() + 1, 1); }
 function feedingFromPredator(pred) {
@@ -889,6 +912,25 @@ app.post('/api/auth/register', async (req, res) => {
       log.warn('Register missing fields', { email, display_name });
       return res.status(400).json({ error: 'Missing fields' });
     }
+    
+    // Validate email format
+    if (!isValidEmail(email)) {
+      log.warn('Register invalid email format', { email: maskEmail(email) });
+      return res.status(400).json({ error: 'Invalid email format' });
+    }
+    
+    // Validate password strength
+    if (!isValidPassword(password)) {
+      log.warn('Register weak password', { email: maskEmail(email) });
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+    
+    // Validate display_name length
+    if (typeof display_name !== 'string' || display_name.trim().length < 2 || display_name.length > 190) {
+      log.warn('Register invalid display_name', { email: maskEmail(email) });
+      return res.status(400).json({ error: 'Display name must be between 2 and 190 characters' });
+    }
+    
     const [exists] = await pool.query('SELECT id FROM users WHERE email=?', [email]);
     if (exists.length) {
       log.warn('Register email in use', { email });
@@ -918,6 +960,13 @@ app.post('/api/auth/login', async (req, res) => {
 
   try {
     const { email, password } = req.body || {};
+    
+    // Basic validation
+    if (!email || !password) {
+      log.warn('Login missing credentials', { ip, ua, req_id: req.id });
+      return res.status(400).json({ error: 'Missing email or password', req_id: req.id });
+    }
+    
     const [rows] = await pool.query('SELECT * FROM users WHERE email=?', [email]);
     const user = rows[0];
 
@@ -1354,7 +1403,7 @@ app.get('/api/admin/npcs', authRequired, requireAdmin, async (req, res) => {
   // DEBUG: confirm DB and count to diagnose “empty” responses
   try {
     const [[db]] = await pool.query('SELECT DATABASE() AS db');
-    console.log('🛡️ NPC list', { db: db.db, count: rows.length });
+    log.adm('NPC list', { db: db.db, count: rows.length });
   } catch {}
 
   res.json({ npcs: rows });
@@ -1996,7 +2045,7 @@ app.post('/api/admin/chat/summarize', authRequired, requireAdmin, async (req, re
         break; 
       } catch (e) {
         // Log warning but continue to next model
-        console.warn(`[AI] Model ${modelName} failed: ${e.message}`);
+        log.warn(`AI Model ${modelName} failed`, { message: e.message });
         lastError = e;
       }
     }
@@ -3541,7 +3590,7 @@ app.get('/api/downtimes/config', authRequired, async (req, res) => {
       downtime_opening: opening  || null,
     });
   } catch (e) {
-    console.error('Fetch downtime config failed:', e);
+    log.err('Fetch downtime config failed', { message: e.message });
     res.status(500).json({ error: 'Failed to fetch downtime config' });
   }
 });
@@ -3574,7 +3623,7 @@ app.post('/api/admin/downtimes/config', authRequired, requireAdmin, async (req, 
       downtime_opening: opening  || null,
     });
   } catch (e) {
-    console.error('Update downtime config failed:', e);
+    log.err('Update downtime config failed', { message: e.message });
     res.status(500).json({ error: 'Failed to update downtime config' });
   }
 });
@@ -4123,9 +4172,21 @@ app.delete('/api/news/:id', authRequired, requireAdmin, async (req, res) => {
 });
 
 
-/* -------------------- Start Server -------------------- */
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => log.start(`API server started`, { port: PORT, env: process.env.NODE_ENV || 'stable' }));
+/* -------------------- Error Handlers -------------------- */
+// Multer error handler (must be before general error handler)
+app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: 'File too large. Maximum size is 5MB.' });
+    }
+    return res.status(400).json({ error: `Upload error: ${err.message}` });
+  }
+  next(err);
+});
 
 // Add the global error handler middleware *last*
 app.use(expressErrorHandler);
+
+/* -------------------- Start Server -------------------- */
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => log.start(`API server started`, { port: PORT, env: process.env.NODE_ENV || 'stable' }));
