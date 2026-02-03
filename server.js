@@ -38,7 +38,11 @@ const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
 
 
 const app = express();
-app.use(cors({ origin: true, credentials: true }));
+// CORS: In production, set CORS_ORIGIN env var to your frontend URL
+const corsOrigin = process.env.CORS_ORIGIN 
+  ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
+  : true; // Development: allow all origins
+app.use(cors({ origin: corsOrigin, credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 app.set('trust proxy', true);
 
@@ -1354,7 +1358,7 @@ app.get('/api/admin/npcs', authRequired, requireAdmin, async (req, res) => {
   // DEBUG: confirm DB and count to diagnose “empty” responses
   try {
     const [[db]] = await pool.query('SELECT DATABASE() AS db');
-    console.log('🛡️ NPC list', { db: db.db, count: rows.length });
+    log.adm('NPC list', { db: db.db, count: rows.length });
   } catch {}
 
   res.json({ npcs: rows });
@@ -1996,7 +2000,7 @@ app.post('/api/admin/chat/summarize', authRequired, requireAdmin, async (req, re
         break; 
       } catch (e) {
         // Log warning but continue to next model
-        console.warn(`[AI] Model ${modelName} failed: ${e.message}`);
+        log.warn(`AI Model ${modelName} failed`, { message: e.message });
         lastError = e;
       }
     }
@@ -3541,7 +3545,7 @@ app.get('/api/downtimes/config', authRequired, async (req, res) => {
       downtime_opening: opening  || null,
     });
   } catch (e) {
-    console.error('Fetch downtime config failed:', e);
+    log.err('Fetch downtime config failed', { message: e.message });
     res.status(500).json({ error: 'Failed to fetch downtime config' });
   }
 });
@@ -3574,7 +3578,7 @@ app.post('/api/admin/downtimes/config', authRequired, requireAdmin, async (req, 
       downtime_opening: opening  || null,
     });
   } catch (e) {
-    console.error('Update downtime config failed:', e);
+    log.err('Update downtime config failed', { message: e.message });
     res.status(500).json({ error: 'Failed to update downtime config' });
   }
 });
