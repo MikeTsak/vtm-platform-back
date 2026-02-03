@@ -4172,10 +4172,7 @@ app.delete('/api/news/:id', authRequired, requireAdmin, async (req, res) => {
 });
 
 
-/* -------------------- Start Server -------------------- */
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => log.start(`API server started`, { port: PORT, env: process.env.NODE_ENV || 'stable' }));
-
+/* -------------------- Error Handlers -------------------- */
 // Multer error handler (must be before general error handler)
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
@@ -4189,3 +4186,7 @@ app.use((err, req, res, next) => {
 
 // Add the global error handler middleware *last*
 app.use(expressErrorHandler);
+
+/* -------------------- Start Server -------------------- */
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => log.start(`API server started`, { port: PORT, env: process.env.NODE_ENV || 'stable' }));

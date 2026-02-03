@@ -16,6 +16,7 @@ const pool = mysql.createPool({
 });
 
 // Handle pool errors gracefully
+// Note: Using console.error here to avoid circular dependency with logger module
 pool.on('connection', (connection) => {
   connection.on('error', (err) => {
     console.error('Database connection error:', err.message);
