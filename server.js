@@ -18,6 +18,9 @@ const fs = require('fs');
 const multer = require('multer'); // Import multer
 const { Client, GatewayIntentBits } = require('discord.js');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+// --- Swagger Imports ---
+const swaggerUi = require('swagger-ui-express');
+const swaggerJsdoc = require('swagger-jsdoc');
 
 // --- Setup ---
 
@@ -4186,6 +4189,51 @@ app.use((err, req, res, next) => {
 
 // Add the global error handler middleware *last*
 app.use(expressErrorHandler);
+
+// --- Swagger Configuration ---
+const swaggerOptions = {
+  definition: {
+    openapi: '3.0.0',
+    info: {
+      title: 'Erebus Portal API',
+      version: '1.0.0',
+      description: 'API documentation for the Vampire: The Masquerade RPG portal.',
+    },
+    servers: [
+      {
+        url: 'http://localhost:3001', // Change this to your production URL in deployment
+        description: 'Development Server',
+
+      },
+      {
+        url: 'https://vtm.back.miketsak.gr', // Change this to your production URL in deployment
+        description: 'Production Server',
+      },
+    ],
+    components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+        },
+      },
+    },
+    security: [
+      {
+        bearerAuth: [], // Applies bearer auth globally (optional, or apply per route)
+      },
+    ],
+  },
+  // This looks for @swagger comments in your server.js
+  apis: ['./server.js'], 
+};
+
+const swaggerSpec = swaggerJsdoc(swaggerOptions);
+
+// Serve the Swagger UI
+app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+log.start('Swagger UI available at /api/docs');
 
 /* -------------------- Start Server -------------------- */
 const PORT = process.env.PORT || 3001;
