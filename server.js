@@ -1131,12 +1131,29 @@ app.post('/api/auth/reset', async (req, res) => {
 // Get my character (parse sheet if string)
 app.get('/api/characters/me', authRequired, async (req, res) => {
   const [rows] = await pool.query('SELECT * FROM characters WHERE user_id=?', [req.user.id]);
-  const ch = rows[0] || null;
-  if (ch && ch.sheet && typeof ch.sheet === 'string') {
-    try { ch.sheet = JSON.parse(ch.sheet); } catch {}
+  
+  // Parse sheet JSON for all characters
+  const characters = rows.map(ch => {
+    if (ch && ch.sheet && typeof ch.sheet === 'string') {
+      try { 
+        return { ...ch, sheet: JSON.parse(ch.sheet) };
+      } catch {
+        return ch;
+      }
+    }
+    return ch;
+  });
+  
+  log.char('Fetch my characters', { user_id: req.user.id, count: characters.length });
+  
+  // Return all characters, or single character for backward compatibility
+  // If there's only one character, return it as before for backward compatibility
+  if (characters.length === 1) {
+    res.json({ character: characters[0] });
+  } else {
+    // Return all characters when there are multiple
+    res.json({ character: characters[0] || null, characters });
   }
-  log.char('Fetch my character', { user_id: req.user.id, hasCharacter: !!ch });
-  res.json({ character: ch });
 });
 
 // Create character (stores sheet JSON and xp=50)
@@ -2173,19 +2190,22 @@ app.get('/api/downtimes/quota', authRequired, async (req, res) => {
 
 // List my downtimes
 app.get('/api/downtimes/mine', authRequired, async (req, res) => {
-  const [[char]] = await Promise.all([
+  const [[chars]] = await Promise.all([
     pool.query('SELECT * FROM characters WHERE user_id=?', [req.user.id]),
   ]);
-  if (!char?.[0]) {
+  if (!chars || chars.length === 0) {
     log.dt('List mine (no character)', { user_id: req.user.id });
     return res.json({ downtimes: [] });
   }
 
+  // Get character IDs for all user's characters
+  const characterIds = chars.map(c => c.id);
+  
   const [rows] = await pool.query(
-    'SELECT * FROM downtimes WHERE character_id=? ORDER BY created_at DESC',
-    [char[0].id]
+    'SELECT * FROM downtimes WHERE character_id IN (?) ORDER BY created_at DESC',
+    [characterIds]
   );
-  log.dt('List mine', { user_id: req.user.id, count: rows.length });
+  log.dt('List mine', { user_id: req.user.id, count: rows.length, characterCount: characterIds.length });
   res.json({ downtimes: rows });
 });
 
@@ -2966,7 +2986,7 @@ app.get('/api/admin/downtimes', authRequired, requireAdmin, async (_req, res) =>
     `SELECT d.*, c.name AS char_name, c.clan, u.display_name AS player_name, u.email
      FROM downtimes d
      JOIN characters c ON c.id=d.character_id
-     JOIN users u ON u.id=c.user_id
+     LEFT JOIN users u ON u.id=c.user_id
      ORDER BY d.created_at DESC`
   );
   log.adm('Admin downtimes list', { count: rows.length });
