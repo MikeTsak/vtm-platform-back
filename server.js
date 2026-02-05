@@ -22,6 +22,8 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const swaggerUi = require('swagger-ui-express');
 const swaggerSpec = require('./swagger.config');
 
+const LOG_CHANNEL_ID = '1469033259806625874';
+
 // --- Setup ---
 
 // Optional mapping of template variable names via env
@@ -80,7 +82,28 @@ if (vapidPublicKey && vapidPrivateKey) {
   log.warn('VAPID keys not set. Push notifications will be disabled.');
 }
 
+// Helper: Report errors to the defined Discord channel
+async function reportErrorToDiscord(source, error) {
+  // 1. Check if bot is connected
+  if (!discordClient?.isReady()) return;
 
+  // 2. CHECK: Only send error logs if we are in PRODUCTION
+  // If we are in 'staging' or 'development', this function stops here.
+  if (process.env.NODE_ENV !== 'production') return; 
+  
+  try {
+    const channel = await discordClient.channels.fetch(LOG_CHANNEL_ID);
+    if (!channel) return;
+
+    // Truncate stack trace to avoid Discord 2000 char limit
+    const errString = (error.stack || error.message || String(error)).slice(0, 1000);
+    
+    await channel.send(`🚨 **Error Detected: ${source}**\n\`\`\`js\n${errString}\n\`\`\``);
+  } catch (e) {
+    // Fail silently so we don't cause an infinite error loop
+    console.error('Failed to report error to Discord:', e.message);
+  }
+}
 
 // Human-friendly masking
 const maskEmail = (email) => {
@@ -141,20 +164,34 @@ if (process.env.DISCORD_BOT_TOKEN) {
     rest: { timeout: 15000 },
   });
   
-  // 2. Capture the error message here
+  // Capture login errors
   discordClient.login(process.env.DISCORD_BOT_TOKEN).catch(e => {
     discordLoginError = e.message; 
     log.err('Discord login failed', e);
   });
 
-  discordClient.once('ready', () => {
-    discordLoginError = null; // 3. Clear error if it eventually succeeds
+  // When ready: Clear errors and Send Startup Message
+  discordClient.once('ready', async () => {
+    discordLoginError = null;
     log.start(`Discord Bot logged in as ${discordClient.user.tag}`);
+
+    // --- Send "System Online" Message ---
+    try {
+      const channel = await discordClient.channels.fetch(LOG_CHANNEL_ID);
+      if (channel) {
+        const env = process.env.NODE_ENV || 'development';
+        const now = new Date().toLocaleString('en-GB', { timeZone: 'Europe/Athens' });
+        
+        // Announces the environment (Production/Staging/Dev)
+        await channel.send(`🦇 **System Online [${env.toUpperCase()}]**\nErebus API started at: \`${now}\``);
+      }
+    } catch (e) {
+      log.err('Failed to send startup message to Discord', { error: e.message });
+    }
   });
 } else {
   log.warn('DISCORD_BOT_TOKEN not set. Discord bot disabled.');
 }
-
 /* ------------------ Chat Media & Schema Updates ------------------ */
 let chatMediaTableCreated = false;
 async function _ensureChatTables() {
@@ -4474,6 +4511,7 @@ app.delete('/api/news/:id', authRequired, requireAdmin, async (req, res) => {
 // Multer error handler (must be before general error handler)
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
+    reportErrorToDiscord(`Multer Upload Error: ${err.code}`, err);
     if (err.code === 'LIMIT_FILE_SIZE') {
       return res.status(413).json({ error: 'File too large. Maximum size is 5MB.' });
     }
