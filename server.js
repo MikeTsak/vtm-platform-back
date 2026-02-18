@@ -2426,10 +2426,10 @@ app.post('/api/admin/chat/npc/messages', authRequired, requireAdmin, async (req,
 app.get('/api/admin/camarilla/roster', authRequired, requireAdmin, async (req, res) => {
   try {
     const [players] = await pool.query(
-      "SELECT id, name, clan, camarilla_titles as titles, status, 'player' as type FROM characters"
+      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, 'player' as type FROM characters"
     );
     const [npcs] = await pool.query(
-      "SELECT id, name, clan, camarilla_titles as titles, status, 'npc' as type FROM npcs"
+      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, 'npc' as type FROM npcs"
     );
     
     // Parse JSON strings back to arrays if necessary
@@ -2438,7 +2438,12 @@ app.get('/api/admin/camarilla/roster', authRequired, requireAdmin, async (req, r
       titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || [])
     }));
 
-    res.json({ roster: [...format(players), ...format(npcs)] });
+    const combined = [...format(players), ...format(npcs)];
+    
+    // Sort alphabetically by status (handling nulls safely)
+    combined.sort((a, b) => (a.status || '').localeCompare(b.status || ''));
+
+    res.json({ roster: combined });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -2449,12 +2454,12 @@ app.get('/api/admin/camarilla/roster', authRequired, requireAdmin, async (req, r
 // GET: Publicly accessible roster for all logged-in users
 app.get('/api/camarilla/roster', authRequired, async (req, res) => {
   try {
-    // Selects basic info from players and NPCs
+    // Selects basic info from players and NPCs, including image_url
     const [players] = await pool.query(
-      "SELECT id, name, clan, camarilla_titles as titles, status, 'player' as type FROM characters"
+      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, 'player' as type FROM characters"
     );
     const [npcs] = await pool.query(
-      "SELECT id, name, clan, camarilla_titles as titles, status, 'npc' as type FROM npcs"
+      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, 'npc' as type FROM npcs"
     );
     
     // Format helper to handle JSON strings for titles
@@ -2463,19 +2468,35 @@ app.get('/api/camarilla/roster', authRequired, async (req, res) => {
       titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || [])
     }));
 
-    res.json({ roster: [...format(players), ...format(npcs)] });
+    const combined = [...format(players), ...format(npcs)];
+    
+    // Sort alphabetically by status (handling nulls safely)
+    combined.sort((a, b) => (a.status || '').localeCompare(b.status || ''));
+
+    res.json({ roster: combined });
   } catch (e) {
     log.err('Public roster fetch failed', { message: e.message });
     res.status(500).json({ error: "Failed to load the Court hierarchy." });
   }
 });
 
-// 2. Update status or titles
+// 2. Update status, titles, or image_url
 app.patch('/api/admin/camarilla/update', authRequired, requireAdmin, async (req, res) => {
   const { id, type, field, value } = req.body;
   const table = type === 'player' ? 'characters' : 'npcs';
-  const dbField = field === 'titles' ? 'camarilla_titles' : 'status';
-  const dbValue = field === 'titles' ? JSON.stringify(value) : value;
+  
+  // Determine which DB field to update based on the requested field
+  let dbField, dbValue;
+  if (field === 'titles') {
+    dbField = 'camarilla_titles';
+    dbValue = JSON.stringify(value);
+  } else if (field === 'image_url') {
+    dbField = 'image_url';
+    dbValue = value;
+  } else {
+    dbField = 'status';
+    dbValue = value;
+  }
 
   try {
     await pool.query(`UPDATE ${table} SET ${dbField} = ? WHERE id = ?`, [dbValue, id]);
