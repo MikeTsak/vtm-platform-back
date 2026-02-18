@@ -2440,11 +2440,12 @@ app.get('/api/admin/camarilla/roster', authRequired, requireAdmin, async (req, r
 
     const combined = [...format(players), ...format(npcs)];
     
-    // Sort alphabetically by status (handling nulls safely)
-    combined.sort((a, b) => (a.status || '').localeCompare(b.status || ''));
+    // Sort NUMERICALLY by status (highest number first, nulls become 0)
+    combined.sort((a, b) => (b.status || 0) - (a.status || 0));
 
     res.json({ roster: combined });
   } catch (e) {
+    log.err('Admin roster fetch failed', { message: e.message });
     res.status(500).json({ error: e.message });
   }
 });
@@ -2470,8 +2471,8 @@ app.get('/api/camarilla/roster', authRequired, async (req, res) => {
 
     const combined = [...format(players), ...format(npcs)];
     
-    // Sort alphabetically by status (handling nulls safely)
-    combined.sort((a, b) => (a.status || '').localeCompare(b.status || ''));
+    // Sort NUMERICALLY by status (highest number first, nulls become 0)
+    combined.sort((a, b) => (b.status || 0) - (a.status || 0));
 
     res.json({ roster: combined });
   } catch (e) {
@@ -2503,6 +2504,7 @@ app.patch('/api/admin/camarilla/update', authRequired, requireAdmin, async (req,
     log.adm(`Updated Camarilla ${field}`, { type, id, value });
     res.json({ ok: true });
   } catch (e) {
+    log.err('Camarilla update failed', { message: e.message });
     res.status(500).json({ error: "Database update failed" });
   }
 });
