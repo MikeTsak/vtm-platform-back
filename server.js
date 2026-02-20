@@ -2691,11 +2691,11 @@ app.post('/api/boons', authRequired, requireCourt, async (req, res) => {
       return res.status(400).json({ error: 'From, To, Level, and Status are required' });
     }
     
-    const [r] = await pool.query(
-      `INSERT INTO boons (from_name, to_name, level, status, description, created_at) 
-       VALUES (?, ?, ?, ?, ?, NOW())`,
-      [from_name, to_name, level, status, description || null]
-    );
+  const [r] = await pool.query(
+    `INSERT INTO boons (from_name, to_name, level, status, description, created_at, date_incurred) 
+    VALUES (?, ?, ?, ?, ?, NOW(), NOW())`,
+    [from_name, to_name, level, status, description || null]
+  );
     
     const [[boon]] = await pool.query('SELECT * FROM boons WHERE id=?', [r.insertId]);
     log.adm('Boon created', { id: r.insertId, by_user_id: req.user.id });
