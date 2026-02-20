@@ -2685,15 +2685,12 @@ app.get('/api/boons', authRequired, async (req, res) => {
 // POST /api/boons (Court/Admin only)
 app.post('/api/boons', authRequired, requireCourt, async (req, res) => {
   try {
-    // We destructure from_id/to_id from body but DO NOT use them in the query
-    // because the database table 'boons' does not have these columns.
     const { from_name, to_name, level, status, description } = req.body;
 
     if (!from_name || !to_name || !level || !status) {
       return res.status(400).json({ error: 'From, To, Level, and Status are required' });
     }
     
-    // Insert ONLY the fields that exist in your database
     const [r] = await pool.query(
       `INSERT INTO boons (from_name, to_name, level, status, description, created_at) 
        VALUES (?, ?, ?, ?, ?, NOW())`,
@@ -2706,7 +2703,19 @@ app.post('/api/boons', authRequired, requireCourt, async (req, res) => {
     
   } catch (e) {
     log.err('Failed to create boon', { message: e.message, stack: e.stack });
-    res.status(500).json({ error: 'Failed to create boon' });
+    
+    // Make the error explanatory for the frontend
+    let errorMessage = 'Failed to create boon.';
+    if (e.code === 'ER_NO_SUCH_TABLE') {
+      errorMessage = 'Database error: The "boons" table does not exist yet.';
+    } else if (e.code === 'ER_DATA_TOO_LONG') {
+      errorMessage = 'Input error: One of the names or descriptions is too long.';
+    } else {
+      // Pass the raw database error message so you can see exactly what failed
+      errorMessage = `Server Error: ${e.message}`; 
+    }
+
+    res.status(500).json({ error: errorMessage });
   }
 });
 
@@ -2717,7 +2726,6 @@ app.patch('/api/boons/:id', authRequired, requireCourt, async (req, res) => {
     const { from_name, to_name, level, status, description } = req.body;
     
     const fields = [], vals = [];
-    // Only update fields that exist in the DB
     if (from_name !== undefined) { fields.push('from_name=?'); vals.push(from_name); }
     if (to_name !== undefined) { fields.push('to_name=?'); vals.push(to_name); }
     if (level !== undefined) { fields.push('level=?'); vals.push(level); }
@@ -2737,7 +2745,7 @@ app.patch('/api/boons/:id', authRequired, requireCourt, async (req, res) => {
     
   } catch (e) {
     log.err('Failed to update boon', { message: e.message });
-    res.status(500).json({ error: 'Failed to update boon' });
+    res.status(500).json({ error: `Failed to update boon: ${e.message}` });
   }
 });
 
