@@ -62,9 +62,6 @@ app.use('/api/admin', (req, res, next) => {
 const storage = multer.memoryStorage();
 const memoryUpload = multer({ 
   storage: storage,
-  limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB
-  }
 });
 
 // Add the request logger middleware. It will log every incoming request and its response.
