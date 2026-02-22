@@ -2772,15 +2772,19 @@ app.delete('/api/boons/:id', authRequired, requireCourt, async (req, res) => {
 app.get('/api/chat/groups', authRequired, async (req, res) => {
   try {
     const userId = req.user.id;
-    // Get groups I am a member of, plus latest message details
+    // Χρήση COALESCE για να μπαίνει η ημερομηνία δημιουργίας αν δεν υπάρχει μήνυμα
+    // και ταξινόμηση ώστε τα πιο πρόσφατα (μηνύματα ή νέα groups) να είναι πάνω.
     const [rows] = await pool.query(`
       SELECT 
-        g.id, g.name, g.created_by,
-        (
-          SELECT created_at 
-          FROM chat_group_messages 
-          WHERE group_id = g.id 
-          ORDER BY created_at DESC LIMIT 1
+        g.id, g.name, g.created_by, g.created_at as group_created_at,
+        COALESCE(
+          (
+            SELECT created_at 
+            FROM chat_group_messages 
+            WHERE group_id = g.id 
+            ORDER BY created_at DESC LIMIT 1
+          ), 
+          g.created_at
         ) as last_message_at
       FROM chat_groups g
       JOIN chat_group_members m ON m.group_id = g.id
