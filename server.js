@@ -2668,6 +2668,9 @@ app.get('/api/boons/entities', authRequired, requireCourt, async (req, res) => {
 // GET /api/boons (All logged-in users)
 app.get('/api/boons', authRequired, async (req, res) => {
   try {
+    // Αποτροπή caching για να βλέπουν οι χρήστες τα edits κατευθείαν
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+
     // Assuming a 'boons' table exists
     const [boons] = await pool.query(
       `SELECT * FROM boons ORDER BY created_at DESC`
