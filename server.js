@@ -2507,7 +2507,7 @@ app.patch('/api/admin/camarilla/update', authRequired, requireAdmin, async (req,
 });
 
 /* -------------------- Downtimes -------------------- */
-// My quota this month
+// My quota this cycle
 app.get('/api/downtimes/quota', authRequired, async (req, res) => {
   const [chars] = await pool.query('SELECT id FROM characters WHERE user_id=?', [req.user.id]);
   const ch = chars[0];
@@ -2516,8 +2516,22 @@ app.get('/api/downtimes/quota', authRequired, async (req, res) => {
     return res.json({ used: 0, limit: 3 });
   }
 
-  const from = startOfMonth();
-  const to = endOfMonth();
+  let from = startOfMonth();
+  let to = endOfMonth();
+  
+  // FIX: Tie the quota to the current cycle (Opening Date) instead of a strict calendar month
+  try {
+    const openingStr = await getSetting('downtime_opening', null);
+    if (openingStr) {
+      const parsed = new Date(openingStr);
+      if (!isNaN(parsed.getTime())) {
+        from = parsed;
+        // Give the cycle a generous safe upper bound (e.g., 90 days) until the next opening overrides it
+        to = new Date(parsed.getTime() + 90 * 24 * 60 * 60 * 1000); 
+      }
+    }
+  } catch (e) {}
+
   const [rows] = await pool.query(
     'SELECT COUNT(*) AS c FROM downtimes WHERE character_id=? AND created_at >= ? AND created_at < ?',
     [ch.id, from, to]
@@ -2544,7 +2558,7 @@ app.get('/api/downtimes/mine', authRequired, async (req, res) => {
   res.json({ downtimes: rows });
 });
 
-// Create downtime (3 per calendar month; auto feeding type)
+// Create downtime (3 per cycle; auto feeding type)
 app.post('/api/downtimes', authRequired, async (req, res) => {
   const { title, body, feeding_type } = req.body;
   if (!title || !body) {
@@ -2559,15 +2573,28 @@ app.post('/api/downtimes', authRequired, async (req, res) => {
     return res.status(400).json({ error: 'Create a character first' });
   }
 
-  const from = startOfMonth();
-  const to = endOfMonth();
+  let from = startOfMonth();
+  let to = endOfMonth();
+  
+  // FIX: Tie the limit check to the current cycle
+  try {
+    const openingStr = await getSetting('downtime_opening', null);
+    if (openingStr) {
+      const parsed = new Date(openingStr);
+      if (!isNaN(parsed.getTime())) {
+        from = parsed;
+        to = new Date(parsed.getTime() + 90 * 24 * 60 * 60 * 1000); 
+      }
+    }
+  } catch (e) {}
+
   const [cnt] = await pool.query(
     'SELECT COUNT(*) AS c FROM downtimes WHERE character_id=? AND created_at >= ? AND created_at < ?',
     [ch.id, from, to]
   );
   if (cnt[0].c >= 3) {
     log.warn('Downtime limit reached', { user_id: req.user.id, count: cnt[0].c });
-    return res.status(400).json({ error: 'Downtime limit reached for this month (3).' });
+    return res.status(400).json({ error: 'Downtime limit reached for this cycle (3).' });
   }
 
   let defaultFeed = feeding_type;
@@ -3953,6 +3980,9 @@ app.delete('/api/coteries/:id', authRequired, requireAdmin, async (req, res) => 
 // READ: players (and admins) can read the two dates
 app.get('/api/downtimes/config', authRequired, async (req, res) => {
   try {
+    // FIX: Prevent browser caching so new deadlines appear immediately for players
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    
     const deadline = await getSetting('downtime_deadline', null);
     const opening  = await getSetting('downtime_opening', null);
     res.json({
