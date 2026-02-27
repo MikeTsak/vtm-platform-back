@@ -120,6 +120,56 @@ function _maskEmail(email) {
   return `${maskedUser}@${d}`;
 }
 
+// --- UNIVERSAL PUSH HELPER ---
+async function sendPushNotification(userId, title, body, data = {}) {
+  try {
+    const [subs] = await pool.query('SELECT id, subscription_json FROM push_subscriptions WHERE user_id=?', [userId]);
+    if (!subs.length) return;
+
+    const expoTokens = [];
+    const webSubs =[];
+
+    // Separate mobile tokens from browser tokens
+    for (const row of subs) {
+      try {
+        const sub = JSON.parse(row.subscription_json);
+        if (sub.expoPushToken) expoTokens.push(sub.expoPushToken);
+        else webSubs.push({ id: row.id, sub });
+      } catch (e) {}
+    }
+
+    // 1. Send to Mobile Devices (Expo)
+    if (expoTokens.length > 0) {
+      const expoMessages = expoTokens.map(token => ({
+        to: token,
+        sound: 'default',
+        title: title,
+        body: body,
+        data: data,
+      }));
+      await axios.post('https://exp.host/--/api/v2/push/send', expoMessages, {
+        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' }
+      }).catch(err => log.err('Expo push failed', { err: err.message }));
+    }
+
+    // 2. Send to Web Browsers (Web-Push)
+    if (vapidPublicKey && vapidPrivateKey && webSubs.length > 0) {
+      const payload = JSON.stringify({ title, body, data });
+      for (const { id, sub } of webSubs) {
+        try {
+          await webpush.sendNotification(sub, payload);
+        } catch (err) {
+          if (err.statusCode === 410) { // Token expired/unsubscribed
+            await pool.query('DELETE FROM push_subscriptions WHERE id=?', [id]);
+          }
+        }
+      }
+    }
+  } catch (e) {
+    log.err('Failed to execute push notification', { error: e.message });
+  }
+}
+
 // V5 success math:
 function computeV5Outcome({ normal = [], hunger = [] }) {
   const all = [...normal, ...hunger];
@@ -3100,7 +3150,11 @@ app.post('/api/chat/messages', authRequired, async (req, res) => {
       [r.insertId]
     );
 
-    // ... (Keep existing PUSH notification logic here) ...
+    sendPushNotification(
+      recipient_id, 
+      message.sender_name, 
+      message.attachment_id ? '📷 Image Attachment' : message.body
+    )
 
     res.status(201).json({ message });
   } catch (e) {
