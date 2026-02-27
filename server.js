@@ -2343,10 +2343,35 @@ app.post('/api/chat/npc/messages', authRequired, async (req, res) => {
       [Number(npc_id), userId, 'user', body ? body.trim() : '', attachment_id || null]
     );
 
-    const [[message]] = await pool.query(
-      `SELECT id, npc_id, user_id, from_side, body, created_at, attachment_id
-         FROM npc_messages WHERE id=?`, [r.insertId]
-    );
+    // --- NEW: PUSH NOTIFICATIONS FOR ALL ADMINS ---
+    try {
+      // 1. Get NPC name and Player name for the notification title
+      const [[npcInfo]] = await pool.query('SELECT name FROM npcs WHERE id=?', [npc_id]);
+      const [[playerInfo]] = await pool.query('SELECT display_name FROM users WHERE id=?', [userId]);
+      const [[charInfo]] = await pool.query('SELECT name FROM characters WHERE user_id=?', [userId]);
+
+      const npcName = npcInfo?.name || 'NPC';
+      const playerName = charInfo?.name || playerInfo?.display_name || 'Player';
+      
+      const notifTitle = `💬 ${npcName} (from ${playerName})`;
+      const notifBody = message.attachment_id ? '📷 Image Attachment' : message.body;
+
+      // 2. Find all admins in the system
+      const [admins] = await pool.query("SELECT id FROM users WHERE role = 'admin' OR permission_level = 'admin'");
+
+      // 3. Send a push to each admin
+      for (const admin of admins) {
+        // Prevent sending a push to the admin if the admin is the one testing/playing as a user
+        if (admin.id !== userId) {
+          await sendPushNotification(admin.id, notifTitle, notifBody).catch(() => {});
+        }
+      }
+    } catch (pushErr) {
+      log.err('Failed to notify admins of NPC message', { error: pushErr.message });
+    }
+    // ----------------------------------------------
+    
+
     res.status(201).json({ message });
   } catch (e) {
     log.err('NPC send failed', { message: e.message });
@@ -2457,10 +2482,21 @@ app.post('/api/admin/chat/npc/messages', authRequired, requireAdmin, async (req,
       [Number(npc_id), Number(user_id), 'npc', body ? body.trim() : '', attachment_id || null]
     );
 
-    const [[message]] = await pool.query(
-      `SELECT id, npc_id, user_id, from_side, body, created_at, attachment_id
-         FROM npc_messages WHERE id=?`, [r.insertId]
-    );
+    // --- NEW: PUSH NOTIFICATION TO PLAYER ---
+    try {
+      // Find the NPC name so the player knows who is replying
+      const [[npcInfo]] = await pool.query('SELECT name FROM npcs WHERE id=?', [npc_id]);
+      const npcName = npcInfo?.name || 'NPC';
+      const notifBody = message.attachment_id ? '📷 Image Attachment' : message.body;
+
+      // Send push directly to the player
+      await sendPushNotification(user_id, npcName, notifBody).catch(() => {});
+    } catch (pushErr) {
+      log.err('Failed to notify player of NPC reply', { error: pushErr.message });
+    }
+    // ----------------------------------------
+    
+
     res.status(201).json({ message });
   } catch (e) {
     res.status(500).json({ error: 'Failed' });
