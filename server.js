@@ -2350,6 +2350,17 @@ app.post('/api/chat/npc/messages', authRequired, async (req, res) => {
       [Number(npc_id), userId, 'user', body ? body.trim() : '', attachment_id || null]
     );
 
+    // FIX: Define the message object so notifications and the response don't crash
+    const message = {
+      id: r.insertId,
+      npc_id: Number(npc_id),
+      user_id: userId,
+      from_side: 'user',
+      body: body ? body.trim() : '',
+      attachment_id: attachment_id || null,
+      created_at: new Date()
+    };
+
     // --- NEW: PUSH NOTIFICATIONS FOR ALL ADMINS ---
     try {
       // 1. Get NPC name and Player name for the notification title
@@ -2378,14 +2389,12 @@ app.post('/api/chat/npc/messages', authRequired, async (req, res) => {
     }
     // ----------------------------------------------
     
-
     res.status(201).json({ message });
   } catch (e) {
     log.err('NPC send failed', { message: e.message });
     res.status(500).json({ error: 'Failed' });
   }
 });
-
 // --- Admin: reply as NPC to a specific player ---
 app.get('/api/admin/chat/npc/history', authRequired, requireAdmin, async (req, res) => {
   try {
@@ -2489,6 +2498,17 @@ app.post('/api/admin/chat/npc/messages', authRequired, requireAdmin, async (req,
       [Number(npc_id), Number(user_id), 'npc', body ? body.trim() : '', attachment_id || null]
     );
 
+    // FIX: Define the message object so notifications and the response don't crash
+    const message = {
+      id: r.insertId,
+      npc_id: Number(npc_id),
+      user_id: Number(user_id),
+      from_side: 'npc',
+      body: body ? body.trim() : '',
+      attachment_id: attachment_id || null,
+      created_at: new Date()
+    };
+
     // --- NEW: PUSH NOTIFICATION TO PLAYER ---
     try {
       // Find the NPC name so the player knows who is replying
@@ -2503,7 +2523,6 @@ app.post('/api/admin/chat/npc/messages', authRequired, requireAdmin, async (req,
     }
     // ----------------------------------------
     
-
     res.status(201).json({ message });
   } catch (e) {
     res.status(500).json({ error: 'Failed' });
