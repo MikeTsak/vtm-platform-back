@@ -3135,10 +3135,29 @@ app.get('/api/chat/users', authRequired, async (req, res) => {
 app.get('/api/chat/npcs', authRequired, async (req, res) => {
   try {
     const myId = req.user.id;
+    const isAdmin = req.user.role === 'admin' || req.user.permission_level === 'admin';
 
-    // Similar logic for NPCs
-    const [rows] = await pool.query(
-      `SELECT 
+    let query;
+    let params;
+
+    if (isAdmin) {
+      // 👑 ADMIN VIEW: See the absolute latest message sent to/from this NPC across ALL players
+      query = `SELECT 
+        n.id, n.name, n.clan,
+        (
+          SELECT created_at 
+          FROM npc_messages 
+          WHERE npc_id = n.id
+          ORDER BY created_at DESC LIMIT 1
+        ) as last_message_at
+       FROM npcs n
+       ORDER BY 
+         last_message_at DESC, -- Recent NPCs first
+         n.name ASC`;
+      params = [];
+    } else {
+      // 👤 PLAYER VIEW: Only see their own recent messages with the NPC
+      query = `SELECT 
         n.id, n.name, n.clan,
         (
           SELECT created_at 
@@ -3148,10 +3167,12 @@ app.get('/api/chat/npcs', authRequired, async (req, res) => {
         ) as last_message_at
        FROM npcs n
        ORDER BY 
-         last_message_at DESC, -- Recent NPCs first
-         n.name ASC`,
-       [myId]
-    );
+         last_message_at DESC,
+         n.name ASC`;
+      params = [myId];
+    }
+
+    const [rows] = await pool.query(query, params);
     res.json({ npcs: rows });
   } catch (e) {
     log.err('Failed to list NPCs', { message: e.message });
