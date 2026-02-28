@@ -2189,19 +2189,27 @@ app.get('/api/admin/emails/threads/:id', authRequired, requireAdmin, async (req,
   }
 });
 
-// 6. Reply as the Identity
+// 6. Reply as the Identity (Admin View & Player Push)
 app.post('/api/admin/emails/reply', authRequired, requireAdmin, async (req, res) => {
   try {
     const { thread_id, body } = req.body;
     if (!body || !thread_id) return res.status(400).json({ error: 'Missing body' });
     
-    await pool.query(`
-      INSERT INTO email_messages (thread_id, sender_type, body, is_read)
-      VALUES (?, 'identity', ?, 0)
-    `, [thread_id, body]);
-    
+    await pool.query(`INSERT INTO email_messages (thread_id, sender_type, body, is_read) VALUES (?, 'identity', ?, 0)`, [thread_id, body]);
     await pool.query(`UPDATE email_threads SET updated_at=NOW() WHERE id=?`, [thread_id]);
     
+    // --- NEW: SEND PUSH TO PLAYER ---
+    try {
+      const [[thread]] = await pool.query('SELECT user_id, identity_id, subject FROM email_threads WHERE id=?', [thread_id]);
+      const [[identity]] = await pool.query('SELECT display_name FROM email_identities WHERE id=?', [thread.identity_id]);
+      
+      const pushTitle = `📧 Reply from ${identity?.display_name || 'NPC'}`;
+      const pushBody = `Re: ${thread.subject}`;
+      
+      await sendPushNotification(thread.user_id, pushTitle, pushBody).catch(()=>{});
+    } catch (e) { log.err('Email push to player failed', { error: e.message }); }
+    // --------------------------------
+
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: 'Failed to reply' });
@@ -2247,57 +2255,56 @@ app.get('/api/emails/thread/:id', authRequired, async (req, res) => {
   }
 });
 
-// 3. Send Email (Validation Logic)
+// 3. Send Email (Validation Logic & Admin Push)
 app.post('/api/emails/send', authRequired, async (req, res) => {
   const conn = await pool.getConnection();
   try {
     const { to_email, subject, body, thread_id } = req.body;
-    
+    let finalThreadId = thread_id;
+    let identityId = null;
+    let identityName = 'NPC';
+
     if (thread_id) {
       // REPLY to existing thread
-      const [check] = await conn.query('SELECT 1 FROM email_threads WHERE id=? AND user_id=?', [thread_id, req.user.id]);
+      const [check] = await conn.query('SELECT identity_id FROM email_threads WHERE id=? AND user_id=?', [thread_id, req.user.id]);
       if (!check.length) return res.status(403).json({ error: 'Thread not found' });
+      identityId = check[0].identity_id;
       
-      await conn.query(`
-        INSERT INTO email_messages (thread_id, sender_type, body, is_read)
-        VALUES (?, 'user', ?, 0)
-      `, [thread_id, body]);
-      
+      await conn.query(`INSERT INTO email_messages (thread_id, sender_type, body, is_read) VALUES (?, 'user', ?, 0)`, [thread_id, body]);
       await conn.query(`UPDATE email_threads SET updated_at=NOW() WHERE id=?`, [thread_id]);
-      await conn.commit();
-      return res.json({ ok: true });
-      
     } else {
-      // NEW THREAD - Validates against 'email_identities'
+      // NEW THREAD
       if (!to_email || !subject || !body) return res.status(400).json({ error: 'Missing fields' });
-
       const emailLower = to_email.trim().toLowerCase();
+      const [identity] = await conn.query('SELECT id, display_name FROM email_identities WHERE email_address = ?', [emailLower]);
       
-      // STRICT CHECK: Is this a valid admin-set email?
-      const [identity] = await conn.query('SELECT id FROM email_identities WHERE email_address = ?', [emailLower]);
-      
-      if (identity.length === 0) {
-        // ERROR: Player tried to email someone not in the system
-        return res.status(404).json({ error: 'Delivery Status Notification (Failure): Address not found.' });
-      }
-      
-      const identityId = identity[0].id;
+      if (identity.length === 0) return res.status(404).json({ error: 'Delivery Status Notification (Failure): Address not found.' });
+      identityId = identity[0].id;
+      identityName = identity[0].display_name;
       
       await conn.beginTransaction();
-      
-      const [t] = await conn.query(`
-        INSERT INTO email_threads (user_id, identity_id, subject)
-        VALUES (?, ?, ?)
-      `, [req.user.id, identityId, subject]);
-      
-      await conn.query(`
-        INSERT INTO email_messages (thread_id, sender_type, body, is_read)
-        VALUES (?, 'user', ?, 0)
-      `, [t.insertId, body]);
-      
+      const [t] = await conn.query(`INSERT INTO email_threads (user_id, identity_id, subject) VALUES (?, ?, ?)`, [req.user.id, identityId, subject]);
+      finalThreadId = t.insertId;
+      await conn.query(`INSERT INTO email_messages (thread_id, sender_type, body, is_read) VALUES (?, 'user', ?, 0)`, [finalThreadId, body]);
       await conn.commit();
-      res.json({ ok: true, thread_id: t.insertId });
     }
+
+    // --- NEW: SEND PUSH TO ADMINS ---
+    try {
+      const [[idRow]] = await pool.query('SELECT display_name FROM email_identities WHERE id=?', [identityId]);
+      const [[player]] = await pool.query('SELECT display_name FROM users WHERE id=?', [req.user.id]);
+      const [admins] = await pool.query("SELECT id FROM users WHERE role = 'admin' OR permission_level = 'admin'");
+      
+      const pushTitle = `📧 Email to ${idRow?.display_name || identityName}`;
+      const pushBody = `From ${player?.display_name}: ${subject || 'New Reply'}`;
+      
+      for (const admin of admins) {
+        if (admin.id !== req.user.id) await sendPushNotification(admin.id, pushTitle, pushBody).catch(()=>{});
+      }
+    } catch (e) { log.err('Email push to admin failed', { error: e.message }); }
+    // --------------------------------
+
+    res.json({ ok: true, thread_id: finalThreadId });
   } catch (e) {
     await conn.rollback();
     log.err('Email send failed', { message: e.message });
