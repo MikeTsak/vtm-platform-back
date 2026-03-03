@@ -348,13 +348,18 @@ async function sendDiscordMailNotifications(isTest = false) {
         AND u.discord_id IS NOT NULL 
         AND u.discord_id != ''
     `);
-// 3. Check for ALL NPC messages AND get the NPC names
-    const [npcMessages] = await pool.query(`
-      SELECT DISTINCT n.name 
-      FROM npc_messages m
-      JOIN npcs n ON m.npc_id = n.id
-      WHERE m.from_side = 'user'
-    `);
+    // 3. Check for UNANSWERED NPC messages AND get the NPC names
+        const [npcMessages] = await pool.query(`
+          SELECT DISTINCT n.name 
+          FROM npc_messages m1
+          JOIN npcs n ON m1.npc_id = n.id
+          WHERE m1.from_side = 'user'
+          AND m1.created_at = (
+              SELECT MAX(created_at) 
+              FROM npc_messages m2 
+              WHERE m2.npc_id = m1.npc_id AND m2.user_id = m1.user_id
+          )
+        `);
     
     const hasNpcMail = npcMessages.length > 0;
     const npcNames = npcMessages.map(npc => npc.name).join(', ');
