@@ -354,7 +354,7 @@ async function sendDiscordMailNotifications(isTest = false) {
       FROM npc_messages m
       JOIN npcs n ON m.npc_id = n.id
       WHERE m.from_side = 'user' 
-      AND m.created_at > (NOW() - INTERVAL 25 HOUR) 
+      AND m.created_at > (NOW() - INTERVAL 5 DAY) 
     `);
     
     const hasNpcMail = npcMessages.length > 0;
