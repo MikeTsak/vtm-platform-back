@@ -348,17 +348,16 @@ async function sendDiscordMailNotifications(isTest = false) {
         AND u.discord_id IS NOT NULL 
         AND u.discord_id != ''
     `);
+// 3. Check for ALL NPC messages AND get the NPC names
+    const [npcMessages] = await pool.query(`
+      SELECT DISTINCT n.name 
+      FROM npc_messages m
+      JOIN npcs n ON m.npc_id = n.id
+      WHERE m.from_side = 'user'
+    `);
     
-  // 3. Check for ALL NPC messages AND get the NPC names
-      const [npcMessages] = await pool.query(`
-        SELECT DISTINCT n.name 
-        FROM npc_messages m
-        JOIN npcs n ON m.npc_id = n.id
-        WHERE m.from_side = 'user'
-      `);
-      
-      const hasNpcMail = npcMessages.length > 0;
-      const npcNames = npcMessages.map(npc => npc.name).join(', ');
+    const hasNpcMail = npcMessages.length > 0;
+    const npcNames = npcMessages.map(npc => npc.name).join(', ');
 
     // 4. Get News (Logic: Recent 3 Days OR Last 3 Total)
     let [newsRows] = await pool.query(`
