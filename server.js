@@ -349,15 +349,16 @@ async function sendDiscordMailNotifications(isTest = false) {
         AND u.discord_id != ''
     `);
 
-    // 3. Check for recent NPC messages
+    // 3. Check for recent NPC messages AND get the NPC names
     const [npcMessages] = await pool.query(`
-      SELECT 1 
-      FROM npc_messages 
-      WHERE from_side = 'user' 
-      AND created_at > (NOW() - INTERVAL 25 HOUR) 
-      LIMIT 1
+      SELECT DISTINCT n.name 
+      FROM npc_messages m
+      JOIN npcs n ON m.npc_id = n.id
+      WHERE m.from_side = 'user' 
+      AND m.created_at > (NOW() - INTERVAL 25 HOUR) 
     `);
     const hasNpcMail = npcMessages.length > 0;
+    const npcNames = npcMessages.map(npc => npc.name).join(', ');
 
     // 4. Get News (Logic: Recent 3 Days OR Last 3 Total)
     let [newsRows] = await pool.query(`
@@ -395,9 +396,14 @@ async function sendDiscordMailNotifications(isTest = false) {
       msg += `📩 **Unread Mail:** ${mentions}, please check your inbox.\n`;
     }
 
-    // Add ST Tag
+    // Add ST Tag with NPC Names
     if (hasNpcMail || isTest) {
-      msg += `🎭 **Storytellers** <@&1421503116871991490>, there are **NPC messages** to attend to.\n`;
+      msg += `🎭 **Storytellers** <@&1421503116871991490>, there are **NPC messages** to attend to`;
+      if (hasNpcMail) {
+        msg += ` for: **${npcNames}**.\n`;
+      } else {
+        msg += `.\n`; // Fallback for manual test mode when no actual mail exists
+      }
     }
 
     // Add News
@@ -411,7 +417,6 @@ async function sendDiscordMailNotifications(isTest = false) {
 
     // --- SENDING ---
     // We send 'msg' as one single block.
-    // Discord has a 2000 char limit, but this should fit unless you have 50+ recipients.
     await channel.send(msg);
     
     log.ok(`Discord notification sent. Players: ${recipients.length}, NPC Mail: ${hasNpcMail}, News: ${newsRows.length}`);
