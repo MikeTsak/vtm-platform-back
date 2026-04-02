@@ -282,6 +282,27 @@ async function _ensureChatTables() {
 }
 _ensureChatTables();
 
+/* ------------------ Camarilla Columns Check ------------------ */
+let camarillaColsChecked = false;
+async function _ensureCamarillaColumns() {
+  if (camarillaColsChecked) return;
+  try {
+    const addCols = async (table) => {
+      const [cols] = await pool.query(`SHOW COLUMNS FROM ${table} LIKE 'is_ex'`);
+      if (cols.length === 0) {
+        await pool.query(`ALTER TABLE ${table} ADD COLUMN is_ex BOOLEAN DEFAULT FALSE, ADD COLUMN is_deceased BOOLEAN DEFAULT FALSE`);
+        log.ok(`Added is_ex and is_deceased to ${table}`);
+      }
+    };
+    await addCols('characters');
+    await addCols('npcs');
+    camarillaColsChecked = true;
+  } catch (e) {
+    log.err("Camarilla columns check failed", { message: e.message });
+  }
+}
+_ensureCamarillaColumns();
+
 // Global variable to prevent double-sending within the same minute
 let lastDailyCheckDate = '';
 
@@ -2536,31 +2557,57 @@ app.post('/api/admin/chat/npc/messages', authRequired, requireAdmin, async (req,
 
 /* --- Camarilla Hierarchy API --- */
 
-// 1. Fetch combined roster
+// 1. Fetch combined roster (Admin)
 app.get('/api/admin/camarilla/roster', authRequired, requireAdmin, async (req, res) => {
   try {
     const [players] = await pool.query(
-      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, 'player' as type FROM characters"
+      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, 'player' as type FROM characters"
     );
     const [npcs] = await pool.query(
-      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, 'npc' as type FROM npcs"
+      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, 'npc' as type FROM npcs"
     );
     
-    // Parse JSON strings back to arrays if necessary
     const format = (list) => list.map(item => ({
       ...item,
-      titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || [])
+      titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || []),
+      is_ex: !!item.is_ex,
+      is_deceased: !!item.is_deceased
     }));
 
     const combined = [...format(players), ...format(npcs)];
-    
-    // Sort NUMERICALLY by status (highest number first, nulls become 0)
     combined.sort((a, b) => (b.status || 0) - (a.status || 0));
 
     res.json({ roster: combined });
   } catch (e) {
     log.err('Admin roster fetch failed', { message: e.message });
     res.status(500).json({ error: e.message });
+  }
+});
+
+// GET: Publicly accessible roster
+app.get('/api/camarilla/roster', authRequired, async (req, res) => {
+  try {
+    const [players] = await pool.query(
+      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, 'player' as type FROM characters"
+    );
+    const [npcs] = await pool.query(
+      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, 'npc' as type FROM npcs"
+    );
+    
+    const format = (list) => list.map(item => ({
+      ...item,
+      titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || []),
+      is_ex: !!item.is_ex,
+      is_deceased: !!item.is_deceased
+    }));
+
+    const combined = [...format(players), ...format(npcs)];
+    combined.sort((a, b) => (b.status || 0) - (a.status || 0));
+
+    res.json({ roster: combined });
+  } catch (e) {
+    log.err('Public roster fetch failed', { message: e.message });
+    res.status(500).json({ error: "Failed to load the Court hierarchy." });
   }
 });
 
@@ -2595,19 +2642,25 @@ app.get('/api/camarilla/roster', authRequired, async (req, res) => {
   }
 });
 
-// 2. Update status, titles, or image_url
+// 2. Update status, titles, image_url, or modifiers
 app.patch('/api/admin/camarilla/update', authRequired, requireAdmin, async (req, res) => {
   const { id, type, field, value } = req.body;
   const table = type === 'player' ? 'characters' : 'npcs';
   
-  // Determine which DB field to update based on the requested field
   let dbField, dbValue;
+  
   if (field === 'titles') {
     dbField = 'camarilla_titles';
     dbValue = JSON.stringify(value);
   } else if (field === 'image_url') {
     dbField = 'image_url';
     dbValue = value;
+  } else if (field === 'is_ex') {
+    dbField = 'is_ex';
+    dbValue = value ? 1 : 0; // Convert boolean to MySQL tinyint
+  } else if (field === 'is_deceased') {
+    dbField = 'is_deceased';
+    dbValue = value ? 1 : 0; // Convert boolean to MySQL tinyint
   } else {
     dbField = 'status';
     dbValue = value;
