@@ -58,6 +58,18 @@ app.use('/api/admin', (req, res, next) => {
   next();
 });
 
+// --- Load Custom Font for Memes ---
+let memeFontBase64 = '';
+try {
+  // This looks for the exact file next to server.js
+  const fontPath = path.join(__dirname, 'Roboto_Condensed-Bold.ttf');
+  const fontBuffer = fs.readFileSync(fontPath);
+  memeFontBase64 = fontBuffer.toString('base64');
+  log.start('Custom meme font loaded successfully.');
+} catch (e) {
+  log.err('Could not load custom meme font. Memes might show tofu boxes.', { error: e.message });
+}
+
 // Create a multer instance that stores files in memory as buffers
 // Limit file size to 5MB
 const storage = multer.memoryStorage();
@@ -241,7 +253,7 @@ if (process.env.DISCORD_BOT_TOKEN) {
       log.err('Failed to send startup message to Discord', { error: e.message });
     }
   });
-  // --- Meme Maker Feature ---
+// --- Meme Maker Feature ---
   discordClient.on('messageCreate', async (message) => {
     // Ignore bots to prevent infinite loops
     if (message.author.bot) return;
@@ -276,7 +288,6 @@ if (process.env.DISCORD_BOT_TOKEN) {
         const words = text.split(' ');
         const lines = [];
         let currentLine = '';
-        // Estimate characters that fit in the width
         const maxCharsPerLine = Math.floor(width / (fontSize * 0.55)); 
 
         words.forEach(word => {
@@ -292,15 +303,38 @@ if (process.env.DISCORD_BOT_TOKEN) {
         // Calculate how much white padding we need at the top
         const paddingHeight = Math.floor((lines.length * fontSize * 1.3) + (fontSize * 1.5));
 
-        // 4. Generate SVG text (handles Greek and English natively)
+        // XML Escaper to prevent special characters from breaking the image
+        const escapeXML = (str) => {
+          return str.replace(/[<>&'"]/g, (c) => {
+            switch (c) {
+              case '<': return '&lt;';
+              case '>': return '&gt;';
+              case '&': return '&amp;';
+              case '\'': return '&apos;';
+              case '"': return '&quot;';
+              default: return c;
+            }
+          });
+        };
+
+        // 4. Generate SVG text 
         const svgLines = lines.map((line, i) => {
-          // Center text vertically inside the padding
           const yOffset = Math.floor((i + 1) * (fontSize * 1.3));
-          return `<text x="50%" y="${yOffset}" text-anchor="middle" font-family="Arial, sans-serif" font-weight="bold" font-size="${fontSize}px" fill="black">${line}</text>`;
+          // Explicitly call 'MemeFont'
+          return `<text x="50%" y="${yOffset}" text-anchor="middle" font-family="MemeFont" font-weight="bold" font-size="${fontSize}px" fill="black">${escapeXML(line)}</text>`;
         }).join('');
 
+        // Inject the Base64 font directly into the SVG <style> tag
         const svg = `
           <svg width="${width}" height="${paddingHeight}">
+            <style>
+              @font-face {
+                font-family: 'MemeFont';
+                src: url(data:font/truetype;charset=utf-8;base64,${memeFontBase64}) format('truetype');
+                font-weight: normal;
+                font-style: normal;
+              }
+            </style>
             ${svgLines}
           </svg>
         `;
