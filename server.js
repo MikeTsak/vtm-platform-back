@@ -18,6 +18,7 @@ const fs = require('fs');
 const multer = require('multer'); // Import multer
 const { Client, GatewayIntentBits } = require('discord.js');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const sharp = require('sharp');
 // --- Swagger Imports ---
 const swaggerUi = require('swagger-ui-express');
 const swaggerSpec = require('./swagger.config');
@@ -206,7 +207,11 @@ let discordLoginError = null; // <--- 1. New variable to hold the specific error
 // Only initialize if token is present
 if (process.env.DISCORD_BOT_TOKEN) {
   discordClient = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
+    intents: [
+      GatewayIntentBits.Guilds, 
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent
+    ],
     ws: { compress: false },
     rest: { timeout: 15000 },
   });
@@ -234,6 +239,93 @@ if (process.env.DISCORD_BOT_TOKEN) {
       }
     } catch (e) {
       log.err('Failed to send startup message to Discord', { error: e.message });
+    }
+  });
+  // --- Meme Maker Feature ---
+  discordClient.on('messageCreate', async (message) => {
+    // Ignore bots to prevent infinite loops
+    if (message.author.bot) return;
+
+    // Check for our &meme command
+    if (message.content.toLowerCase().startsWith('&meme')) {
+      const text = message.content.slice(5).trim();
+      const attachment = message.attachments.first();
+
+      // Validation
+      if (!attachment || !attachment.contentType.startsWith('image/')) {
+        return message.reply('🦇 You need to attach an image to make a meme!');
+      }
+      if (!text) {
+        return message.reply('🦇 Provide some text! Example: `&meme When the ST smiles`');
+      }
+
+      try {
+        // 1. Download the attached image using axios
+        const response = await axios.get(attachment.url, { responseType: 'arraybuffer' });
+        const imgBuffer = Buffer.from(response.data, 'binary');
+
+        // 2. Read image metadata to scale our text
+        const image = sharp(imgBuffer);
+        const metadata = await image.metadata();
+        const width = metadata.width;
+
+        // Dynamic font size relative to image width
+        const fontSize = Math.max(16, Math.floor(width / 15)); 
+        
+        // 3. Simple text wrapping logic
+        const words = text.split(' ');
+        const lines = [];
+        let currentLine = '';
+        // Estimate characters that fit in the width
+        const maxCharsPerLine = Math.floor(width / (fontSize * 0.55)); 
+
+        words.forEach(word => {
+          if ((currentLine + word).length > maxCharsPerLine) {
+            lines.push(currentLine.trim());
+            currentLine = word + ' ';
+          } else {
+            currentLine += word + ' ';
+          }
+        });
+        if (currentLine) lines.push(currentLine.trim());
+
+        // Calculate how much white padding we need at the top
+        const paddingHeight = Math.floor((lines.length * fontSize * 1.3) + (fontSize * 1.5));
+
+        // 4. Generate SVG text (handles Greek and English natively)
+        const svgLines = lines.map((line, i) => {
+          // Center text vertically inside the padding
+          const yOffset = Math.floor((i + 1) * (fontSize * 1.3));
+          return `<text x="50%" y="${yOffset}" text-anchor="middle" font-family="Arial, sans-serif" font-weight="bold" font-size="${fontSize}px" fill="black">${line}</text>`;
+        }).join('');
+
+        const svg = `
+          <svg width="${width}" height="${paddingHeight}">
+            ${svgLines}
+          </svg>
+        `;
+
+        // 5. Extend the image and overlay the text
+        const outputBuffer = await image
+          .extend({ 
+            top: paddingHeight, 
+            background: { r: 255, g: 255, b: 255, alpha: 1 } // White background
+          })
+          .composite([{ 
+            input: Buffer.from(svg), 
+            top: 0, 
+            left: 0 
+          }])
+          .jpeg({ quality: 90 })
+          .toBuffer();
+
+        // 6. Send it back!
+        await message.reply({ files: [{ attachment: outputBuffer, name: 'meme.jpg' }] });
+
+      } catch (error) {
+        log.err('Discord Meme Generation Failed', { error: error.message });
+        message.reply('❌ The shadows consumed your meme. (Something went wrong processing the image).');
+      }
     }
   });
 } else {
