@@ -368,12 +368,25 @@ if (process.env.DISCORD_BOT_TOKEN) {
           .jpeg({ quality: 90 })
           .toBuffer();
 
-        // 6. Send it back!
-        await message.reply({ files: [{ attachment: outputBuffer, name: 'meme.jpg' }] });
+// --- 6. Send it back & Cleanup! ---
+        // Send to the channel and mention the user who made it
+        await message.channel.send({ 
+          content: `🎨 Meme created by: <@${message.author.id}>`,
+          files: [{ attachment: outputBuffer, name: 'meme.jpg' }] 
+        });
+
+        // Delete the user's original command message
+        try {
+          await message.delete();
+        } catch (delErr) {
+          // If the bot lacks "Manage Messages" permission, it will fail here.
+          // We catch the error so it doesn't crash the bot.
+          console.warn('Could not delete original meme message:', delErr.message);
+        }
 
       } catch (error) {
         log.err('Discord Meme Generation Failed', { error: error.message });
-        message.reply('❌ The shadows consumed your meme. (Something went wrong processing the image).');
+        message.channel.send(`❌ <@${message.author.id}> The shadows consumed your meme. (Something went wrong processing the image).`);
       }
     }
   });
