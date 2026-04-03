@@ -273,34 +273,52 @@ if (process.env.DISCORD_BOT_TOKEN) {
     // Check for our &meme command
     if (message.content.toLowerCase().startsWith('&meme')) {
       const text = message.content.slice(5).trim();
-      const attachment = message.attachments.first();
+      
+      // Get all attachments that are images
+      const attachments = Array.from(message.attachments.values()).filter(a => a.contentType && a.contentType.startsWith('image/'));
 
       // Validation
-      if (!attachment || !attachment.contentType.startsWith('image/')) {
-        return message.reply('🦇 You need to attach an image to make a meme!');
+      if (attachments.length === 0) {
+        return message.reply('🦇 You need to attach at least one image to make a meme!');
       }
       if (!text) {
         return message.reply('🦇 Provide some text! Example: `&meme When the ST smiles`');
       }
 
       try {
-        // 1. Download the attached image using axios
-        const response = await axios.get(attachment.url, { responseType: 'arraybuffer' });
-        const imgBuffer = Buffer.from(response.data, 'binary');
-
-        // 2. Read image metadata to scale our text
-        const image = sharp(imgBuffer);
-        const metadata = await image.metadata();
-        const width = metadata.width;
-
         // Ensure textToSVG loaded successfully at the top of server.js
         if (!textToSVG) {
           return message.reply('❌ The server font engine is currently down. (TextToSVG failed to load).');
         }
 
-        // Dynamic font size relative to image width
-        const fontSize = Math.max(16, Math.floor(width / 15)); 
-        const maxWidth = width * 0.9; // Leave 5% padding on each side
+        // 1. Download all images and get their data
+        const downloadedImages = [];
+        for (const attachment of attachments) {
+          const response = await axios.get(attachment.url, { responseType: 'arraybuffer' });
+          const buffer = Buffer.from(response.data, 'binary');
+          const meta = await sharp(buffer).metadata();
+          downloadedImages.push({ buffer, meta });
+        }
+
+        // 2. Set the baseline width (based on the first image attached)
+        const targetWidth = downloadedImages[0].meta.width;
+        let totalImageHeight = 0;
+        const processedImages = [];
+
+        // Resize all images to match the target width, keeping aspect ratio intact
+        for (const img of downloadedImages) {
+          const resizedBuffer = await sharp(img.buffer)
+            .resize({ width: targetWidth })
+            .toBuffer();
+          const resizedMeta = await sharp(resizedBuffer).metadata();
+          
+          processedImages.push({ buffer: resizedBuffer, height: resizedMeta.height });
+          totalImageHeight += resizedMeta.height; // Keep a running total of the image heights
+        }
+
+        // 3. Setup Font and text logic based on targetWidth
+        const fontSize = Math.max(16, Math.floor(targetWidth / 15)); 
+        const maxWidth = targetWidth * 0.9; // Leave 5% padding on each side
         
         const fontOptions = { 
           x: 0, 
@@ -310,7 +328,7 @@ if (process.env.DISCORD_BOT_TOKEN) {
           attributes: { fill: 'black' } 
         };
 
-        // 3. Better text wrapping using exact pixel widths
+        // Text wrapping using exact pixel widths
         const words = text.split(' ');
         const lines = [];
         let currentLine = '';
@@ -328,19 +346,18 @@ if (process.env.DISCORD_BOT_TOKEN) {
         });
         if (currentLine) lines.push(currentLine);
 
-        // Calculate how much white padding we need at the top
-        const paddingHeight = Math.floor((lines.length * fontSize * 1.3) + (fontSize * 1.0));
+        // Calculate text padding height
+        const textPaddingHeight = Math.floor((lines.length * fontSize * 1.3) + (fontSize * 1.0));
 
-        // 4. Generate SVG Paths (Bypasses server fonts entirely)
+        // 4. Generate SVG Paths for the text (Bypasses server fonts entirely)
         let combinedSvgPaths = '';
-        
         lines.forEach((line, i) => {
           // Calculate vertical position
           const yOffset = Math.floor((i * fontSize * 1.3) + (fontSize * 0.5));
           
           // Get exact width to center the text perfectly
           const metrics = textToSVG.getMetrics(line, fontOptions);
-          const xOffset = (width - metrics.width) / 2;
+          const xOffset = (targetWidth - metrics.width) / 2;
           
           // Generate the vector path for this specific line of text
           const path = textToSVG.getPath(line, { ...fontOptions, x: xOffset, y: yOffset });
@@ -349,38 +366,49 @@ if (process.env.DISCORD_BOT_TOKEN) {
 
         // Wrap the paths in a standard SVG container
         const svg = `
-          <svg width="${width}" height="${paddingHeight}" xmlns="http://www.w3.org/2000/svg">
+          <svg width="${targetWidth}" height="${textPaddingHeight}" xmlns="http://www.w3.org/2000/svg">
             ${combinedSvgPaths}
           </svg>
         `;
 
-        // 5. Extend the image and overlay the vector text
-        const outputBuffer = await image
-          .extend({ 
-            top: paddingHeight, 
-            background: { r: 255, g: 255, b: 255, alpha: 1 } // White background
-          })
-          .composite([{ 
-            input: Buffer.from(svg), 
-            top: 0, 
-            left: 0 
-          }])
-          .jpeg({ quality: 90 })
-          .toBuffer();
+        // 5. Build the composite layers
+        // Start with the text layer at the very top (y = 0)
+        const compositeLayers = [
+          { input: Buffer.from(svg), top: 0, left: 0 }
+        ];
 
-// --- 6. Send it back & Cleanup! ---
-        // Send to the channel and mention the user who made it
+        // Now add each image below the text, stacking them sequentially
+        let currentY = textPaddingHeight;
+        for (const img of processedImages) {
+          compositeLayers.push({ input: img.buffer, top: currentY, left: 0 });
+          currentY += img.height; // Move the Y coordinate down for the next image
+        }
+
+        // 6. Create the final canvas and composite everything
+        const totalCanvasHeight = textPaddingHeight + totalImageHeight;
+        
+        const outputBuffer = await sharp({
+          create: {
+            width: targetWidth,
+            height: totalCanvasHeight,
+            channels: 4,
+            background: { r: 255, g: 255, b: 255, alpha: 1 } // White background
+          }
+        })
+        .composite(compositeLayers)
+        .jpeg({ quality: 90 })
+        .toBuffer();
+
+        // 7. Send it back & Cleanup!
         await message.channel.send({ 
           content: `🎨 Meme created by: <@${message.author.id}>`,
           files: [{ attachment: outputBuffer, name: 'meme.jpg' }] 
         });
 
-        // Delete the user's original command message
+        // Delete the original command message
         try {
           await message.delete();
         } catch (delErr) {
-          // If the bot lacks "Manage Messages" permission, it will fail here.
-          // We catch the error so it doesn't crash the bot.
           console.warn('Could not delete original meme message:', delErr.message);
         }
 
