@@ -922,7 +922,7 @@ async function sendResetEmailWithEmailJS({
   name,              // display name (string)
   link,              // absolute reset URL
   appName = process.env.APP_NAME || 'Erebus Portal',
-  expiresMinutes = 30
+  expiresMinutes = 24
 }) {
   // Build exactly what EmailJS expects
   const payload = {
@@ -1559,7 +1559,7 @@ app.post('/api/auth/forgot', async (req, res) => {
     const secret     = crypto.randomBytes(32).toString('hex');
     const combined   = `${tokenId}.${secret}`;
     const secretHash = await bcrypt.hash(secret, 12);
-    const expiresAt  = new Date(Date.now() + 30 * 60 * 1000); // 30 min
+    const expiresAt  = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h expiry
 
     await pool.query(
       'INSERT INTO password_resets (user_id, token_id, secret_hash, expires_at) VALUES (?,?,?,?)',
