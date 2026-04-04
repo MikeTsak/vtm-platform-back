@@ -475,6 +475,13 @@ async function _ensureCamarillaColumns() {
         await pool.query(`ALTER TABLE ${table} ADD COLUMN is_ex BOOLEAN DEFAULT FALSE, ADD COLUMN is_deceased BOOLEAN DEFAULT FALSE`);
         log.ok(`Added is_ex and is_deceased to ${table}`);
       }
+      
+      // NEW: Ensure is_hidden exists
+      const [hiddenCols] = await pool.query(`SHOW COLUMNS FROM ${table} LIKE 'is_hidden'`);
+      if (hiddenCols.length === 0) {
+        await pool.query(`ALTER TABLE ${table} ADD COLUMN is_hidden BOOLEAN DEFAULT FALSE`);
+        log.ok(`Added is_hidden to ${table}`);
+      }
     };
     await addCols('characters');
     await addCols('npcs');
@@ -2743,17 +2750,18 @@ app.post('/api/admin/chat/npc/messages', authRequired, requireAdmin, async (req,
 app.get('/api/admin/camarilla/roster', authRequired, requireAdmin, async (req, res) => {
   try {
     const [players] = await pool.query(
-      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, 'player' as type FROM characters"
+      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, 'player' as type FROM characters"
     );
     const [npcs] = await pool.query(
-      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, 'npc' as type FROM npcs"
+      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, 'npc' as type FROM npcs"
     );
     
     const format = (list) => list.map(item => ({
       ...item,
       titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || []),
       is_ex: !!item.is_ex,
-      is_deceased: !!item.is_deceased
+      is_deceased: !!item.is_deceased,
+      is_hidden: !!item.is_hidden // <--- Add this
     }));
 
     const combined = [...format(players), ...format(npcs)];
@@ -2763,6 +2771,34 @@ app.get('/api/admin/camarilla/roster', authRequired, requireAdmin, async (req, r
   } catch (e) {
     log.err('Admin roster fetch failed', { message: e.message });
     res.status(500).json({ error: e.message });
+  }
+});
+
+// GET: Publicly accessible roster
+app.get('/api/camarilla/roster', authRequired, async (req, res) => {
+  try {
+    const [players] = await pool.query(
+      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, 'player' as type FROM characters"
+    );
+    const [npcs] = await pool.query(
+      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, 'npc' as type FROM npcs"
+    );
+    
+    const format = (list) => list.map(item => ({
+      ...item,
+      titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || []),
+      is_ex: !!item.is_ex,
+      is_deceased: !!item.is_deceased,
+      is_hidden: !!item.is_hidden // <--- Add this
+    }));
+
+    const combined = [...format(players), ...format(npcs)];
+    combined.sort((a, b) => (b.status || 0) - (a.status || 0));
+
+    res.json({ roster: combined });
+  } catch (e) {
+    log.err('Public roster fetch failed', { message: e.message });
+    res.status(500).json({ error: "Failed to load the Court hierarchy." });
   }
 });
 
@@ -2839,10 +2875,13 @@ app.patch('/api/admin/camarilla/update', authRequired, requireAdmin, async (req,
     dbValue = value;
   } else if (field === 'is_ex') {
     dbField = 'is_ex';
-    dbValue = value ? 1 : 0; // Convert boolean to MySQL tinyint
+    dbValue = value ? 1 : 0;
   } else if (field === 'is_deceased') {
     dbField = 'is_deceased';
-    dbValue = value ? 1 : 0; // Convert boolean to MySQL tinyint
+    dbValue = value ? 1 : 0; 
+  } else if (field === 'is_hidden') {  // <--- ADD THIS BLOCK
+    dbField = 'is_hidden';
+    dbValue = value ? 1 : 0; 
   } else {
     dbField = 'status';
     dbValue = value;
