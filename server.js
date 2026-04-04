@@ -4163,7 +4163,11 @@ app.post('/api/push/unsubscribe', authRequired, async (req, res) => {
 
 
 app.use(attachRequestLogger({
-  silentPaths: [/^\/api\/admin\/logs(?:\/.*)?$/] // don’t log when hitting the logs endpoints
+  // This prevents NEW logs from being generated when you refresh the log page
+  silentPaths: [
+    /^\/api\/admin\/logs(?:\/.*)?$/,
+    /^\/api\/health/ 
+  ]
 }));
 
 // --- DB Init Helpers ---
@@ -4269,6 +4273,30 @@ app.post('/api/coteries', authRequired, async (req, res) => {
   } catch (e) {
     log.err('Create coterie failed', { message: e.message, stack: e.stack });
     res.status(500).json({ error: 'Failed to create coterie' });
+  }
+});
+
+// Public registry of all coteries for all players (Character Names Only)
+app.get('/api/coteries/all', authRequired, async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT 
+        c.id, c.name, c.type, c.domain_id,
+        COUNT(m.user_id) as member_count,
+        GROUP_CONCAT(
+          COALESCE(ch.name, m.display_name) 
+          SEPARATOR ', '
+        ) as members_display
+      FROM coteries c
+      LEFT JOIN coterie_members m ON m.coterie_id = c.id
+      LEFT JOIN characters ch ON ch.user_id = m.user_id
+      GROUP BY c.id
+      ORDER BY c.name ASC
+    `);
+    res.json({ coteries: rows });
+  } catch (e) {
+    console.error('Failed to load all coteries', e);
+    res.status(500).json({ error: 'Failed to load public coteries' });
   }
 });
 
