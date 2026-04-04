@@ -60,6 +60,35 @@ app.use('/api/admin', (req, res, next) => {
   next();
 });
 
+
+// Add this to server.js
+let passwordResetsTableCreated = false;
+async function _ensurePasswordResetsTable() {
+  if (passwordResetsTableCreated) return;
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS password_resets (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        token_id VARCHAR(255) NOT NULL,
+        secret_hash VARCHAR(255) NOT NULL,
+        expires_at TIMESTAMP NOT NULL,
+        used_at TIMESTAMP NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_token (token_id),
+        CONSTRAINT fk_reset_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    passwordResetsTableCreated = true;
+    log.ok('Password resets table verified/created.');
+  } catch (e) {
+    log.err('Failed to create password_resets table', { message: e.message });
+  }
+}
+
+// Call it at the top level of server.js with your other inits
+_ensurePasswordResetsTable();
+
 // --- Load Custom Font for Memes ---
 let memeFontBase64 = '';
 try {

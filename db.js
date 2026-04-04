@@ -10,16 +10,34 @@ const pool = mysql.createPool({
   database: process.env.DB_NAME,
   waitForConnections: true,
   connectionLimit: 10,
-  // Add connection quality improvements
+  
+  // --- CRITICAL FIXES FOR ECONNRESET ---
+  
+  // 1. Keep the connection alive by sending a "ping" every 10 seconds
   enableKeepAlive: true,
-  keepAliveInitialDelay: 0,
+  keepAliveInitialDelay: 10000, 
+
+  // 2. Automatically drop connections that have been idle too long 
+  // (Prevents using a connection the server already closed)
+  idleTimeout: 60000, 
+
+  // 3. Max lifetime of a connection (Refreshes connections every 30 mins)
+  maxIdle: 10,
+  maxLifetimeBeforeRecycle: 1800000,
+
+  // 4. Queue limit (0 = infinite)
+  queueLimit: 0,
 });
 
-// Handle pool errors gracefully
-// Note: Using console.error here to avoid circular dependency with logger module
+// Improved Error Handling
 pool.on('connection', (connection) => {
+  // Check for errors on individual connections
   connection.on('error', (err) => {
-    console.error('Database connection error:', err.message);
+    if (err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ECONNRESET') {
+       console.warn('⚠️ Database socket reset. Pool will handle reconnection.');
+    } else {
+       console.error('❌ Database connection error:', err.message);
+    }
   });
 });
 
