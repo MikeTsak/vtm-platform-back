@@ -3313,6 +3313,87 @@ app.get('/api/chat/groups/:id/history', authRequired, async (req, res) => {
   }
 });
 
+// Get members of a specific group
+app.get('/api/chat/groups/:id/members', authRequired, async (req, res) => {
+  try {
+    const groupId = Number(req.params.id);
+    
+    // Check if user is in group or is admin
+    const [m] = await pool.query('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?', [groupId, req.user.id]);
+    if (!m.length && req.user.role !== 'admin') return res.status(403).json({ error: 'Not a member' });
+
+    const [members] = await pool.query(`
+      SELECT u.id, u.display_name, c.name as char_name 
+      FROM chat_group_members cgm
+      JOIN users u ON cgm.user_id = u.id
+      LEFT JOIN characters c ON c.user_id = u.id
+      WHERE cgm.group_id = ?
+      ORDER BY u.display_name ASC
+    `, [groupId]);
+    res.json({ members });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to get members' });
+  }
+});
+
+// Add members to an existing group (Creator/Admin only)
+app.post('/api/chat/groups/:id/members', authRequired, async (req, res) => {
+  try {
+    const groupId = Number(req.params.id);
+    const { members } = req.body; 
+    if (!members || !members.length) return res.status(400).json({ error: 'No members provided' });
+
+    const [g] = await pool.query('SELECT created_by FROM chat_groups WHERE id=?', [groupId]);
+    if (!g.length) return res.status(404).json({ error: 'Group not found' });
+    if (g[0].created_by !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Not authorized' });
+
+    const values = members.map(uid => [groupId, Number(uid)]);
+    await pool.query('INSERT IGNORE INTO chat_group_members (group_id, user_id) VALUES ?', [values]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to add members' });
+  }
+});
+
+// Remove a member from a group (Creator/Admin, or User leaving)
+app.delete('/api/chat/groups/:id/members/:userId', authRequired, async (req, res) => {
+  try {
+    const groupId = Number(req.params.id);
+    const targetUserId = Number(req.params.userId);
+
+    const [g] = await pool.query('SELECT created_by FROM chat_groups WHERE id=?', [groupId]);
+    if (!g.length) return res.status(404).json({ error: 'Group not found' });
+    
+    // Check if requester is Creator, Admin, OR the user trying to leave
+    if (g[0].created_by !== req.user.id && req.user.role !== 'admin' && req.user.id !== targetUserId) {
+        return res.status(403).json({ error: 'Not authorized' });
+    }
+    
+    if (g[0].created_by === targetUserId) return res.status(400).json({ error: 'Cannot remove creator' });
+
+    await pool.query('DELETE FROM chat_group_members WHERE group_id=? AND user_id=?', [groupId, targetUserId]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to remove member' });
+  }
+});
+
+// Delete a group entirely (Creator/Admin only)
+app.delete('/api/chat/groups/:id', authRequired, async (req, res) => {
+  try {
+    const groupId = Number(req.params.id);
+    const [g] = await pool.query('SELECT created_by FROM chat_groups WHERE id=?', [groupId]);
+    if (!g.length) return res.status(404).json({ error: 'Group not found' });
+    if (g[0].created_by !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Only the creator can delete this group' });
+
+    // ON DELETE CASCADE will automatically wipe the chat_group_members and chat_group_messages
+    await pool.query('DELETE FROM chat_groups WHERE id=?', [groupId]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to delete group' });
+  }
+});
+
 // Send a message to a group
 app.post('/api/chat/groups/:id/messages', authRequired, async (req, res) => {
   try {
