@@ -1856,6 +1856,136 @@ app.get('/api/characters/xp/total', authRequired, async (req, res) => {
   }
 });
 
+// Admin: Allow player to Re-roll (Flags sheet so player gets the button)
+app.post('/api/admin/characters/:id/allow-reset', authRequired, requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  try {
+    const [rows] = await pool.query('SELECT sheet FROM characters WHERE id=?', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+
+    let sheet = {};
+    try { sheet = JSON.parse(rows[0].sheet || '{}'); } catch (e) {}
+    
+    // Add the authorization flag
+    sheet.allow_reset = true;
+    
+    await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), id]);
+    
+    log.adm('Character reset authorized by admin', { id, admin_id: req.user.id });
+    res.json({ success: true });
+  } catch (e) {
+    log.err('Admin allow reset failed', { message: e.message, id });
+    res.status(500).json({ error: 'Failed to authorize reset' });
+  }
+});
+
+// Admin: Revoke player Re-roll permission
+app.post('/api/admin/characters/:id/revoke-reset', authRequired, requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  try {
+    const [rows] = await pool.query('SELECT sheet FROM characters WHERE id=?', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+
+    let sheet = {};
+    try { sheet = JSON.parse(rows[0].sheet || '{}'); } catch (e) {}
+    
+    // Set the authorization flag to false
+    sheet.allow_reset = false;
+    
+    await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), id]);
+    
+    log.adm('Character reset revoked by admin', { id, admin_id: req.user.id });
+    res.json({ success: true });
+  } catch (e) {
+    log.err('Admin revoke reset failed', { message: e.message, id });
+    res.status(500).json({ error: 'Failed to revoke reset' });
+  }
+});
+
+// Admin: Toggle Character Active Status (For Chat & Downtimes)
+app.post('/api/admin/characters/:id/toggle-active', authRequired, requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  try {
+    const [rows] = await pool.query('SELECT sheet FROM characters WHERE id=?', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+
+    let sheet = {};
+    try { sheet = JSON.parse(rows[0].sheet || '{}'); } catch (e) {}
+    
+    // Flip the boolean
+    sheet.is_active = !sheet.is_active;
+    
+    await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), id]);
+    
+    log.adm(`Character ${sheet.is_active ? 'activated' : 'deactivated'}`, { id, admin_id: req.user.id });
+    res.json({ success: true, is_active: sheet.is_active });
+  } catch (e) {
+    log.err('Admin toggle active failed', { message: e.message, id });
+    res.status(500).json({ error: 'Failed to toggle active status' });
+  }
+});
+
+// Admin: Wipe sheet and reset XP to 50 (Rebuild/Re-roll)
+app.post('/api/admin/characters/:id/reset', authRequired, requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  try {
+    // 1. Clear XP logs so math doesn't break for the new sheet
+    try { await pool.query('DELETE FROM xp_log WHERE character_id=?', [id]); } catch(e) {}
+    
+    // 2. Reset sheet to NULL and XP to 50
+    await pool.query('UPDATE characters SET sheet=NULL, xp=50 WHERE id=?', [id]);
+    
+    const [rows] = await pool.query('SELECT * FROM characters WHERE id=?', [id]);
+    log.adm('Character reset by admin', { id, admin_id: req.user.id });
+    res.json({ character: rows[0] });
+  } catch (e) {
+    log.err('Admin reset character failed', { message: e.message, id });
+    res.status(500).json({ error: 'Failed to reset character' });
+  }
+});
+
+// Rebuild character (overwrites sheet, resets to 50 XP, keeps ID)
+app.post('/api/characters/rebuild', authRequired, async (req, res) => {
+  const { name, clan, sheet } = req.body;
+  if (!name || !clan) {
+    log.warn('Rebuild character missing fields', { user_id: req.user.id });
+    return res.status(400).json({ error: 'Name and clan are required' });
+  }
+
+  try {
+    // Find the user's existing character
+    const [rows] = await pool.query('SELECT id FROM characters WHERE user_id=?', [req.user.id]);
+    if (!rows.length) {
+      return res.status(404).json({ error: 'No character found to rebuild' });
+    }
+
+    const charId = rows[0].id;
+
+    // Wipe the old XP log so they start totally fresh
+    try { 
+      await pool.query('DELETE FROM xp_log WHERE character_id=?', [charId]); 
+    } catch(e) { /* ignore if table missing */ }
+
+    // Overwrite the character data and reset XP to 50
+    await pool.query(
+      'UPDATE characters SET name=?, clan=?, sheet=?, xp=50 WHERE id=?',
+      [name, clan, sheet ? JSON.stringify(sheet) : null, charId]
+    );
+
+    // Fetch and return the updated character
+    const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [charId]);
+    const ch = out[0];
+    if (ch && ch.sheet && typeof ch.sheet === 'string') { 
+      try { ch.sheet = JSON.parse(ch.sheet); } catch {} 
+    }
+
+    log.char('Character rebuilt', { id: charId, user_id: req.user.id, name, clan });
+    res.json({ character: ch });
+  } catch (e) {
+    log.err('Failed to rebuild character', e);
+    res.status(500).json({ error: 'Failed to rebuild character' });
+  }
+});
 
 /* -------------------- XP Spend -------------------- */
 app.post('/api/characters/xp/spend', authRequired, async (req, res) => {
