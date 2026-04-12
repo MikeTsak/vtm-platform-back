@@ -2260,24 +2260,24 @@ app.post('/api/admin/npcs/:id/xp/spend', authRequired, requireAdmin, async (req,
 app.get('/api/admin/chat/npc-conversations/:npcId', authRequired, requireAdmin, async (req, res) => {
   const npcId = Number(req.params.npcId);
   try {
-    // FIX: Changed table from 'npc_chat_messages' to 'npc_messages'
     const [rows] = await pool.query(`
       SELECT 
         u.id AS user_id, 
         u.display_name, 
         c.name AS char_name, 
-        MAX(m.created_at) AS last_message_at
+        MAX(m.created_at) AS last_message_at,
+        (SELECT COUNT(*) FROM npc_messages WHERE npc_id = ? AND user_id = u.id AND from_side = 'user' AND read_at IS NULL) as unread_count
       FROM npc_messages m
       JOIN users u ON m.user_id = u.id
-      LEFT JOIN characters c ON u.character_id = c.id
+      LEFT JOIN characters c ON c.user_id = u.id -- FIXED: Changed from u.character_id = c.id
       WHERE m.npc_id = ?
       GROUP BY u.id, u.display_name, c.name
-      ORDER BY last_message_at DESC
-    `, [npcId]);
-    
+      ORDER BY unread_count DESC, last_message_at DESC
+    `, [npcId, npcId]);
     res.json({ conversations: rows });
   } catch (e) {
-    log.err('Admin get NPC conversations failed', { message: e.message, stack: e.stack });
+    // Pro-tip: Log the actual error here temporarily if you ever get another 500!
+    // console.error("NPC Convo Error:", e);
     res.status(500).json({ error: 'Failed to fetch NPC conversations' });
   }
 });
@@ -2326,9 +2326,9 @@ app.post('/api/admin/chat/reply-as-npc/:npcId/:userId', authRequired, requireAdm
       return res.status(404).json({ error: 'Target user not found' });
     }
 
-    // Insert message into the NPC chat table, sent from the 'npc' side
+// Insert message into the NPC chat table, sent from the 'npc' side
     await pool.query(
-      'INSERT INTO npc_chat_messages (user_id, npc_id, body, from_side) VALUES (?, ?, ?, ?)',
+      'INSERT INTO npc_messages (user_id, npc_id, body, from_side) VALUES (?, ?, ?, ?)',
       [userId, npcId, body, 'npc']
     );
     
@@ -2340,49 +2340,45 @@ app.post('/api/admin/chat/reply-as-npc/:npcId/:userId', authRequired, requireAdm
   }
 });
 
-// Player: get my recent conversations (NPCs AND Players)
 app.get('/api/chat/my-recent', authRequired, async (req, res) => {
   try {
     const userId = req.user.id;
-    const limit = 10; 
+    const limit = 20;
 
-    // 1. FIX: Get recent NPC messages from BOTH tables (npc_messages AND npc_chat_messages)
+    // NPC Messages (Count unread from NPC to User)
     const [npcRows] = await pool.query(
       `SELECT m.id, m.npc_id AS partner_id, n.name AS partner_name, 
-              m.body, m.created_at, 'npc' as type
-       FROM (
-          SELECT id, npc_id, body, created_at FROM npc_messages WHERE user_id = ?
-          UNION ALL
-          SELECT id, npc_id, body, created_at FROM npc_chat_messages WHERE user_id = ?
-       ) m
+              m.body, m.created_at, 'npc' as type,
+              (SELECT COUNT(*) FROM npc_messages WHERE npc_id = m.npc_id AND user_id = ? AND from_side = 'npc' AND read_at IS NULL) as unread_count
+       FROM npc_messages m
        JOIN npcs n ON n.id = m.npc_id
+       WHERE m.user_id = ?
        ORDER BY m.created_at DESC LIMIT ?`,
       [userId, userId, limit]
     );
 
-    // 2. Get recent Player messages (Sent or Received)
+    // Player Messages (Count unread from Sender to User)
     const [playerRows] = await pool.query(
       `SELECT cm.id, 
               CASE WHEN cm.sender_id = ? THEN cm.recipient_id ELSE cm.sender_id END as partner_id,
               CASE WHEN cm.sender_id = ? THEN r.display_name ELSE s.display_name END as partner_name,
-              cm.body, cm.created_at, 'player' as type
+              cm.body, cm.created_at, 'player' as type,
+              (SELECT COUNT(*) FROM chat_messages WHERE sender_id = (CASE WHEN cm.sender_id = ? THEN cm.recipient_id ELSE cm.sender_id END) AND recipient_id = ? AND read_at IS NULL) as unread_count
        FROM chat_messages cm
        JOIN users s ON cm.sender_id = s.id
        JOIN users r ON cm.recipient_id = r.id
        WHERE cm.sender_id = ? OR cm.recipient_id = ?
        ORDER BY cm.created_at DESC LIMIT ?`,
-      [userId, userId, userId, userId, limit]
+      [userId, userId, userId, userId, userId, userId, limit]
     );
 
-    // 3. Combine and Unique by Partner
     const all = [...npcRows, ...playerRows];
     
-    // Sort absolute latest first
-    all.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-
-    // Deduplicate: Keep only the most recent message per partner
     const seenMap = new Map();
     const uniqueConvos = [];
+
+    // Sort absolute latest first to extract the unique latest messages
+    all.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
     for (const msg of all) {
       const key = `${msg.type}-${msg.partner_id}`;
@@ -2394,15 +2390,14 @@ app.get('/api/chat/my-recent', authRequired, async (req, res) => {
           lastMessage: msg.body,
           timestamp: msg.created_at,
           isNPC: msg.type === 'npc',
-          linkId: msg.partner_id // ID to open in comms
+          linkId: msg.partner_id,
+          unread_count: msg.unread_count || 0
         });
       }
-      if (uniqueConvos.length >= 10) break; // Limit result
+      if (uniqueConvos.length >= limit) break;
     }
-
     res.json({ conversations: uniqueConvos });
   } catch (e) {
-    log.err('Failed to fetch my recent chats', { message: e.message });
     res.status(500).json({ error: 'Failed to load recent chats' });
   }
 });
@@ -2667,7 +2662,7 @@ app.post('/api/emails/send', authRequired, async (req, res) => {
     try {
       const [[idRow]] = await pool.query('SELECT display_name FROM email_identities WHERE id=?', [identityId]);
       const [[player]] = await pool.query('SELECT display_name FROM users WHERE id=?', [req.user.id]);
-      const [admins] = await pool.query("SELECT id FROM users WHERE role = 'admin' OR permission_level = 'admin'");
+      const [admins] = await pool.query("SELECT id FROM users WHERE role = 'admin'");
       
       const pushTitle = `📧 Email to ${idRow?.display_name || identityName}`;
       const pushBody = `From ${player?.display_name}: ${subject || 'New Reply'}`;
@@ -2749,7 +2744,7 @@ app.post('/api/chat/npc/messages', authRequired, async (req, res) => {
       const notifBody = message.attachment_id ? '📷 Image Attachment' : message.body;
 
       // 2. Find all admins in the system
-      const [admins] = await pool.query("SELECT id FROM users WHERE role = 'admin' OR permission_level = 'admin'");
+      const [admins] = await pool.query("SELECT id FROM users WHERE role = 'admin'");
 
       // 3. Send a push to each admin
       for (const admin of admins) {
@@ -3655,46 +3650,28 @@ app.get('/api/chat/npcs', authRequired, async (req, res) => {
   try {
     const myId = req.user.id;
     const isAdmin = req.user.role === 'admin' || req.user.permission_level === 'admin';
-
-    let query;
-    let params;
+    let query, params;
 
     if (isAdmin) {
-      // 👑 ADMIN VIEW: See the absolute latest message sent to/from this NPC across ALL players
-      query = `SELECT 
-        n.id, n.name, n.clan,
-        (
-          SELECT created_at 
-          FROM npc_messages 
-          WHERE npc_id = n.id
-          ORDER BY created_at DESC LIMIT 1
-        ) as last_message_at
+      // Admins see if ANY player has sent an unread message to the NPC
+      query = `SELECT n.id, n.name, n.clan,
+        (SELECT created_at FROM npc_messages WHERE npc_id = n.id ORDER BY created_at DESC LIMIT 1) as last_message_at,
+        (SELECT COUNT(*) FROM npc_messages WHERE npc_id = n.id AND from_side = 'user' AND read_at IS NULL) as unread_count
        FROM npcs n
-       ORDER BY 
-         last_message_at DESC, -- Recent NPCs first
-         n.name ASC`;
+       ORDER BY unread_count DESC, last_message_at DESC, n.name ASC`;
       params = [];
     } else {
-      // 👤 PLAYER VIEW: Only see their own recent messages with the NPC
-      query = `SELECT 
-        n.id, n.name, n.clan,
-        (
-          SELECT created_at 
-          FROM npc_messages 
-          WHERE npc_id = n.id AND user_id = ?
-          ORDER BY created_at DESC LIMIT 1
-        ) as last_message_at
+      // Players see if the NPC has sent them an unread message
+      query = `SELECT n.id, n.name, n.clan,
+        (SELECT created_at FROM npc_messages WHERE npc_id = n.id AND user_id = ? ORDER BY created_at DESC LIMIT 1) as last_message_at,
+        (SELECT COUNT(*) FROM npc_messages WHERE npc_id = n.id AND user_id = ? AND from_side = 'npc' AND read_at IS NULL) as unread_count
        FROM npcs n
-       ORDER BY 
-         last_message_at DESC,
-         n.name ASC`;
-      params = [myId];
+       ORDER BY unread_count DESC, last_message_at DESC, n.name ASC`;
+      params = [myId, myId];
     }
-
     const [rows] = await pool.query(query, params);
     res.json({ npcs: rows });
   } catch (e) {
-    log.err('Failed to list NPCs', { message: e.message });
     res.status(500).json({ error: 'Failed to list NPCs' });
   }
 });
@@ -3784,19 +3761,32 @@ app.post('/api/chat/delivered', authRequired, async (req, res) => {
 
 // Mark messages from a specific user as read
 app.post('/api/chat/read', authRequired, async (req, res) => {
-    try {
-        const { sender_id } = req.body;
-        if (!sender_id) return res.status(400).json({ error: 'sender_id is required' });
+  try {
+    const { sender_id, npc_id, is_admin_reading_npc } = req.body;
 
+    if (npc_id && is_admin_reading_npc) {
+        // Admin is reading a player's messages to an NPC
+        await pool.query(
+            "UPDATE npc_messages SET read_at = NOW() WHERE npc_id = ? AND user_id = ? AND from_side = 'user' AND read_at IS NULL",
+            [npc_id, sender_id]
+        );
+    } else if (npc_id) {
+        // Player is reading an NPC's messages
+        await pool.query(
+            "UPDATE npc_messages SET read_at = NOW() WHERE npc_id = ? AND user_id = ? AND from_side = 'npc' AND read_at IS NULL",
+            [npc_id, req.user.id]
+        );
+    } else if (sender_id) {
+        // Normal Player to Player chat
         await pool.query(
             'UPDATE chat_messages SET read_at = NOW() WHERE sender_id = ? AND recipient_id = ? AND read_at IS NULL',
             [sender_id, req.user.id]
         );
-        res.json({ ok: true });
-    } catch (e) {
-        log.err('Failed to mark messages as read', { message: e.message });
-        res.status(500).json({ error: 'Failed to mark as read' });
     }
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to mark as read' });
+  }
 });
 
 /* -------------------- ADMIN DISCORD SETTINGS -------------------- */
@@ -4225,19 +4215,12 @@ app.post('/api/admin/logs/clear', authRequired, requireAdmin, (req, res) => {
 // Admin: fetch ALL NPC chat messages (flat list)
 app.get('/api/admin/chat/npc/all', authRequired, requireAdmin, async (_req, res) => {
   try {
-    // 👇 START OF FIX: Use the UNION query to get messages from BOTH tables
     const [rows] = await pool.query(`
-      SELECT m.id, m.npc_id, m.user_id, m.from_side, m.body, m.created_at
-      FROM (
-        SELECT id, npc_id, user_id, from_side, body, created_at FROM npc_messages
-        UNION ALL
-        SELECT id, npc_id, user_id, from_side, body, created_at FROM npc_chat_messages
-      ) m
-      ORDER BY m.created_at ASC
+      SELECT id, npc_id, user_id, from_side, body, created_at
+      FROM npc_messages
+      ORDER BY created_at ASC
     `);
 
-    // Example shape:
-    // { "messages": [ { id, npc_id, user_id, from_side, body, created_at }, ... ] }
     res.json({ messages: rows });
   } catch (e) {
     log.err('Admin fetch ALL NPC messages failed', { message: e.message, stack: e.stack });
@@ -4245,17 +4228,13 @@ app.get('/api/admin/chat/npc/all', authRequired, requireAdmin, async (_req, res)
   }
 });
 
-// Court/Admin: fetch ALL NPC messages (normalized from both tables)
+// Court/Admin: fetch ALL NPC messages
 app.get('/api/court/chat/npc/all', authRequired, requireCourt, async (_req, res) => {
   try {
     const [rows] = await pool.query(`
-      SELECT m.id, m.npc_id, m.user_id, m.from_side, m.body, m.created_at
-      FROM (
-        SELECT id, npc_id, user_id, from_side, body, created_at FROM npc_messages
-        UNION ALL
-        SELECT id, npc_id, user_id, from_side, body, created_at FROM npc_chat_messages
-      ) m
-      ORDER BY m.created_at ASC
+      SELECT id, npc_id, user_id, from_side, body, created_at
+      FROM npc_messages
+      ORDER BY created_at ASC
     `);
     res.json({ messages: rows });
   } catch (e) {
