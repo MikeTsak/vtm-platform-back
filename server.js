@@ -2073,6 +2073,34 @@ app.patch('/api/admin/characters/:id/xp', authRequired, requireAdmin, async (req
   res.json({ character: out[0] });
 });
 
+/* -------------------- Admin add/remove XP -------------------- */
+
+// Admin: Bulk XP to all characters at once
+app.patch('/api/admin/characters/xp/bulk', authRequired, requireAdmin, async (req, res) => {
+  const { delta } = req.body;
+  if (typeof delta !== 'number') return res.status(400).json({ error: 'delta must be a number' });
+
+  try {
+    await pool.query('UPDATE characters SET xp = GREATEST(0, xp + ?)', [delta]);
+    log.adm('Admin bulk XP adjust', { admin_id: req.user.id, delta });
+    res.json({ ok: true });
+  } catch (e) {
+    log.err('Admin bulk XP adjust failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to adjust bulk XP' });
+  }
+});
+
+// Admin: add/remove XP to single character
+app.patch('/api/admin/characters/:id/xp', authRequired, requireAdmin, async (req, res) => {
+  const { delta } = req.body;
+  if (typeof delta !== 'number') return res.status(400).json({ error: 'delta must be a number' });
+
+  await pool.query('UPDATE characters SET xp = GREATEST(0, xp + ?) WHERE id=?', [delta, req.params.id]);
+  const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [req.params.id]);
+  log.adm('Admin XP adjust', { character_id: req.params.id, delta, new_xp: out[0]?.xp });
+  res.json({ character: out[0] });
+});
+
 // --- Admin: edit character ---
 app.patch('/api/admin/characters/:id', authRequired, requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
