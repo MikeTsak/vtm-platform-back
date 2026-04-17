@@ -5464,11 +5464,12 @@ app.post('/api/admin/hunts/:id/steps', authRequired, requireAdmin, async (req, r
 
 // --- PLAYER ROUTES ---
 
-// --- PLAYER: Fetch Available Hunts ---
-// Shows all active hunts the user hasn't completed yet, with safety guards for empty hunts
+/* -------------------- Fixed Hunt Player Routes -------------------- */
+
+// GET: Fetch all active hunts available to the player
 app.get('/api/hunts/active', authRequired, async (req, res) => {
   try {
-    // 1. Find all active hunts where the user HAS NOT completed them
+    // 1. Find all active hunts the user HAS NOT completed
     const [hunts] = await pool.query(`
       SELECT h.* FROM hunts h
       LEFT JOIN hunt_progress hp ON h.id = hp.hunt_id AND hp.user_id = ?
@@ -5476,7 +5477,7 @@ app.get('/api/hunts/active', authRequired, async (req, res) => {
       AND (hp.completed IS NULL OR hp.completed = 0)
     `, [req.user.id]);
 
-    // 2. Fetch current step for each available hunt
+    // 2. Map hunts to their current steps and initialize progress if missing
     const activeHuntsWithSteps = await Promise.all(hunts.map(async (hunt) => {
       let [[progress]] = await pool.query(
         'SELECT * FROM hunt_progress WHERE user_id=? AND hunt_id=?', 
@@ -5484,22 +5485,22 @@ app.get('/api/hunts/active', authRequired, async (req, res) => {
       );
       
       let currentStepId;
-      let completed = false;
-
       if (!progress) {
-        // Start them at the first step
+        // Find the very first step
         const [[firstStep]] = await pool.query(
           'SELECT id FROM hunt_steps WHERE hunt_id=? ORDER BY step_order ASC LIMIT 1', 
           [hunt.id]
         );
-        
-        // GUARD: If the hunt is active but has NO steps, skip it so it doesn't break the list
-        if (!firstStep) return null; 
-        
+        if (!firstStep) return null; // Skip hunts that have no clues yet
+
+        // CRITICAL FIX: Create the progress row now so 'submit' works later
+        await pool.query(
+          'INSERT IGNORE INTO hunt_progress (user_id, hunt_id, current_step_id) VALUES (?,?,?)',
+          [req.user.id, hunt.id, firstStep.id]
+        );
         currentStepId = firstStep.id;
       } else {
         currentStepId = progress.current_step_id;
-        completed = !!progress.completed;
       }
 
       const [[step]] = await pool.query(
@@ -5507,50 +5508,49 @@ app.get('/api/hunts/active', authRequired, async (req, res) => {
         [currentStepId]
       );
 
-      // GUARD: If the step was deleted but progress record remained
       if (!step) return null; 
-
-      return { hunt, step, progress: { completed } };
+      return { hunt, step, progress: progress || { completed: false } };
     }));
 
-    // Filter out nulls so only hunts with valid steps are sent to the frontend
     res.json({ activeHunts: activeHuntsWithSteps.filter(h => h !== null) });
   } catch (e) {
-    log.err('Failed to load active hunts', { message: e.message });
-    res.status(500).json({ error: 'Failed to load active hunts.' });
+    log.err('Active hunts fetch failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to load chronicles.' });
   }
 });
 
-// POST: Submit an answer to the current step
+// POST: Submit Answer (Modified to ensure updates persist)
 app.post('/api/hunts/submit', authRequired, async (req, res) => {
   const { step_id, text_answer, lat, lng, media_id } = req.body;
-  
   try {
     const [[step]] = await pool.query('SELECT * FROM hunt_steps WHERE id=?', [step_id]);
+    if (!step) return res.status(404).json({ error: 'Step not found.' });
+
     let isCorrect = false;
+    const target = JSON.parse(step.target_data);
 
     if (step.task_type === 'text') {
-      const target = JSON.parse(step.target_data);
-      if (text_answer.toLowerCase().trim() === target.answer.toLowerCase()) isCorrect = true;
+      if (text_answer?.toLowerCase().trim() === target.answer.toLowerCase()) isCorrect = true;
+    } else if (step.task_type === 'qr') {
+      if (text_answer?.trim() === target.qr_string) isCorrect = true;
     } else if (step.task_type === 'gps') {
-      const target = JSON.parse(step.target_data);
       const dist = calculateDistance(lat, lng, target.lat, target.lng); 
       if (dist <= target.radius_meters) isCorrect = true;
-    } else if (['photo', 'draw', 'audio', 'qr'].includes(step.task_type)) {
-      if (step.task_type === 'qr') {
-          const target = JSON.parse(step.target_data);
-          if (text_answer.trim() === target.qr_string) isCorrect = true;
-      } else {
-          isCorrect = true; 
-      }
+    } else if (['photo', 'draw', 'audio'].includes(step.task_type)) {
+      isCorrect = true; // Auto-pass for manual review
     }
 
-    if (!isCorrect) return res.status(400).json({ error: 'Incorrect or conditions not met.' });
+    if (!isCorrect) return res.status(400).json({ error: 'Incorrect. The shadows reject your offering.' });
 
+    // Record submission
     await pool.query('INSERT INTO hunt_submissions (user_id, step_id, media_id, text_answer, is_verified) VALUES (?,?,?,?,?)', 
-      [req.user.id, step_id, media_id || null, text_answer || null, isCorrect]);
+      [req.user.id, step_id, media_id || null, text_answer || null, true]);
 
-    const [[nextStep]] = await pool.query('SELECT id FROM hunt_steps WHERE hunt_id=? AND step_order > ? ORDER BY step_order ASC LIMIT 1', [step.hunt_id, step.step_order]);
+    // Find next step
+    const [[nextStep]] = await pool.query(
+      'SELECT id FROM hunt_steps WHERE hunt_id=? AND step_order > ? ORDER BY step_order ASC LIMIT 1', 
+      [step.hunt_id, step.step_order]
+    );
     
     if (nextStep) {
       await pool.query('UPDATE hunt_progress SET current_step_id=? WHERE user_id=? AND hunt_id=?', [nextStep.id, req.user.id, step.hunt_id]);
