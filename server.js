@@ -5424,13 +5424,11 @@ app.post('/api/admin/hunts', authRequired, requireAdmin, async (req, res) => {
   }
 });
 
-// PATCH: Toggle active status (Ensures only ONE hunt is active at a time)
+// PATCH: Toggle active status (Now allows multiple active hunts)
 app.patch('/api/admin/hunts/:id/toggle', authRequired, requireAdmin, async (req, res) => {
   try {
     const id = req.params.id;
-    // Deactivate all others first, so players don't get overlapping hunts
-    await pool.query('UPDATE hunts SET is_active = 0 WHERE id != ?', [id]); 
-    // Toggle the selected one
+    // Simply toggle the selected one without touching others
     await pool.query('UPDATE hunts SET is_active = NOT is_active WHERE id=?', [id]);
     res.json({ ok: true });
   } catch (e) {
@@ -5464,26 +5462,42 @@ app.post('/api/admin/hunts/:id/steps', authRequired, requireAdmin, async (req, r
 
 // --- PLAYER ROUTES ---
 
-// GET: Fetch the active hunt and the player's current step
+// GET: Fetch all active hunts available to the player
 app.get('/api/hunts/active', authRequired, async (req, res) => {
   try {
-    const [[hunt]] = await pool.query('SELECT * FROM hunts WHERE is_active = 1 LIMIT 1');
-    if (!hunt) return res.json({ hunt: null });
+    // 1. Find all active hunts where the user HAS NOT completed them
+    const [hunts] = await pool.query(`
+      SELECT h.* FROM hunts h
+      LEFT JOIN hunt_progress hp ON h.id = hp.hunt_id AND hp.user_id = ?
+      WHERE h.is_active = 1 
+      AND (hp.completed IS NULL OR hp.completed = 0)
+    `, [req.user.id]);
 
-    let [[progress]] = await pool.query('SELECT * FROM hunt_progress WHERE user_id=? AND hunt_id=?', [req.user.id, hunt.id]);
-    
-    if (!progress) {
-      const [[firstStep]] = await pool.query('SELECT id FROM hunt_steps WHERE hunt_id=? ORDER BY step_order ASC LIMIT 1', [hunt.id]);
-      if (!firstStep) return res.json({ hunt, step: null });
+    // 2. For each available hunt, fetch the player's current step
+    const activeHuntsWithSteps = await Promise.all(hunts.map(async (hunt) => {
+      let [[progress]] = await pool.query(
+        'SELECT * FROM hunt_progress WHERE user_id=? AND hunt_id=?', 
+        [req.user.id, hunt.id]
+      );
       
-      await pool.query('INSERT INTO hunt_progress (user_id, hunt_id, current_step_id) VALUES (?,?,?)', [req.user.id, hunt.id, firstStep.id]);
-      progress = { current_step_id: firstStep.id, completed: false };
-    }
+      if (!progress) {
+        const [[firstStep]] = await pool.query(
+          'SELECT id FROM hunt_steps WHERE hunt_id=? ORDER BY step_order ASC LIMIT 1', 
+          [hunt.id]
+        );
+        return { hunt, step: firstStep, progress: { completed: false } };
+      }
 
-    const [[step]] = await pool.query('SELECT id, step_order, task_type, prompt FROM hunt_steps WHERE id=?', [progress.current_step_id]);
-    res.json({ hunt, progress, step });
+      const [[step]] = await pool.query(
+        'SELECT id, step_order, task_type, prompt FROM hunt_steps WHERE id=?', 
+        [progress.current_step_id]
+      );
+      return { hunt, step, progress };
+    }));
+
+    res.json({ activeHunts: activeHuntsWithSteps });
   } catch (e) {
-    res.status(500).json({ error: 'Failed to load hunt.' });
+    res.status(500).json({ error: 'Failed to load active hunts.' });
   }
 });
 
