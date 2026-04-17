@@ -450,6 +450,81 @@ if (process.env.DISCORD_BOT_TOKEN) {
 } else {
   log.warn('DISCORD_BOT_TOKEN not set. Discord bot disabled.');
 }
+
+/* -------------------- The Hunt (Admin & DB Init) -------------------- */
+
+// 1. Ensure the Hunt Tables exist on boot
+let huntTablesCreated = false;
+async function _ensureHuntTables() {
+  if (huntTablesCreated) return;
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hunts (
+          id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          title VARCHAR(255) NOT NULL,
+          description TEXT,
+          is_active BOOLEAN DEFAULT FALSE,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hunt_steps (
+          id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          hunt_id INT UNSIGNED NOT NULL,
+          step_order INT NOT NULL,
+          task_type ENUM('gps', 'photo', 'qr', 'text', 'draw', 'audio') NOT NULL,
+          prompt TEXT NOT NULL,
+          target_data JSON,
+          FOREIGN KEY (hunt_id) REFERENCES hunts(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hunt_progress (
+          id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          user_id INT NOT NULL,
+          hunt_id INT UNSIGNED NOT NULL,
+          current_step_id INT UNSIGNED,
+          completed BOOLEAN DEFAULT FALSE,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          UNIQUE KEY uniq_user_hunt (user_id, hunt_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hunt_submissions (
+          id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          user_id INT NOT NULL,
+          step_id INT UNSIGNED NOT NULL,
+          media_id INT UNSIGNED NULL,
+          text_answer TEXT NULL,
+          is_verified BOOLEAN DEFAULT FALSE,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    huntTablesCreated = true;
+    log.ok('Hunt tables ready.');
+  } catch (e) {
+    log.err('Failed to create hunt tables', { message: e.message });
+  }
+}
+_ensureHuntTables();
+
+// 2. Helper Math Function: Haversine Formula for GPS distance (in meters)
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371e3; // Earth's radius in meters
+  const rad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * rad;
+  const dLon = (lon2 - lon1) * rad;
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * rad) * Math.cos(lat2 * rad) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c; // Distance in meters
+}
+
 /* ------------------ Chat Media & Schema Updates ------------------ */
 let chatMediaTableCreated = false;
 async function _ensureChatTables() {
@@ -5328,78 +5403,62 @@ app.delete('/api/news/:id', authRequired, requireAdmin, async (req, res) => {
     }
 });
 
-
-// GET: Fetch the active hunt and the player's current step
-app.get('/api/hunts/active', authRequired, async (req, res) => {
+// GET: List all hunts
+app.get('/api/admin/hunts', authRequired, requireAdmin, async (req, res) => {
   try {
-    // 1. Get the active hunt
-    const [[hunt]] = await pool.query('SELECT * FROM hunts WHERE is_active = 1 LIMIT 1');
-    if (!hunt) return res.json({ hunt: null });
-
-    // 2. Get user progress
-    let [[progress]] = await pool.query('SELECT * FROM hunt_progress WHERE user_id=? AND hunt_id=?', [req.user.id, hunt.id]);
-    
-    // 3. If no progress, start them at step_order 1
-    if (!progress) {
-      const [[firstStep]] = await pool.query('SELECT id FROM hunt_steps WHERE hunt_id=? ORDER BY step_order ASC LIMIT 1', [hunt.id]);
-      if (!firstStep) return res.json({ hunt, step: null });
-      
-      await pool.query('INSERT INTO hunt_progress (user_id, hunt_id, current_step_id) VALUES (?,?,?)', [req.user.id, hunt.id, firstStep.id]);
-      progress = { current_step_id: firstStep.id, completed: false };
-    }
-
-    // 4. Fetch the actual step details (hide the answers from the client!)
-    const [[step]] = await pool.query('SELECT id, step_order, task_type, prompt FROM hunt_steps WHERE id=?', [progress.current_step_id]);
-
-    res.json({ hunt, progress, step });
+    const [hunts] = await pool.query('SELECT * FROM hunts ORDER BY created_at DESC');
+    res.json({ hunts });
   } catch (e) {
-    res.status(500).json({ error: 'Failed to load hunt.' });
+    res.status(500).json({ error: 'Failed to fetch hunts' });
   }
 });
 
-// POST: Submit an answer to the current step
-app.post('/api/hunts/submit', authRequired, async (req, res) => {
-  const { step_id, text_answer, lat, lng, media_id } = req.body;
-  
+// POST: Create a new hunt
+app.post('/api/admin/hunts', authRequired, requireAdmin, async (req, res) => {
   try {
-    const [[step]] = await pool.query('SELECT * FROM hunt_steps WHERE id=?', [step_id]);
-    let isCorrect = false;
-
-    // --- VALIDATION LOGIC BASED ON TYPE ---
-    if (step.task_type === 'text') {
-      const target = JSON.parse(step.target_data); // e.g., {"answer": "caine"}
-      if (text_answer.toLowerCase().trim() === target.answer.toLowerCase()) {
-        isCorrect = true;
-      }
-    } else if (step.task_type === 'gps') {
-      const target = JSON.parse(step.target_data); // e.g., {"lat": 37.9838, "lng": 23.7275, "radius_meters": 50}
-      // You will need a Haversine formula helper here to calculate distance
-      const dist = calculateDistance(lat, lng, target.lat, target.lng); 
-      if (dist <= target.radius_meters) isCorrect = true;
-    } else if (['photo', 'draw', 'audio'].includes(step.task_type)) {
-      // These usually require Storyteller manual review, or you auto-pass them and review later
-      isCorrect = true; 
-    }
-
-    if (!isCorrect) return res.status(400).json({ error: 'Incorrect or conditions not met.' });
-
-    // Record submission
-    await pool.query('INSERT INTO hunt_submissions (user_id, step_id, media_id, text_answer, is_verified) VALUES (?,?,?,?,?)', 
-      [req.user.id, step_id, media_id || null, text_answer || null, isCorrect]);
-
-    // Advance to next step
-    const [[nextStep]] = await pool.query('SELECT id FROM hunt_steps WHERE hunt_id=? AND step_order > ? ORDER BY step_order ASC LIMIT 1', [step.hunt_id, step.step_order]);
-    
-    if (nextStep) {
-      await pool.query('UPDATE hunt_progress SET current_step_id=? WHERE user_id=? AND hunt_id=?', [nextStep.id, req.user.id, step.hunt_id]);
-      res.json({ success: true, next_step: nextStep.id, completed: false });
-    } else {
-      await pool.query('UPDATE hunt_progress SET completed=1 WHERE user_id=? AND hunt_id=?', [req.user.id, step.hunt_id]);
-      res.json({ success: true, completed: true });
-    }
-
+    const { title, description } = req.body;
+    const [r] = await pool.query('INSERT INTO hunts (title, description) VALUES (?,?)', [title, description]);
+    res.json({ id: r.insertId });
   } catch (e) {
-    res.status(500).json({ error: 'Submission failed.' });
+    res.status(500).json({ error: 'Failed to create hunt' });
+  }
+});
+
+// PATCH: Toggle active status (Ensures only ONE hunt is active at a time)
+app.patch('/api/admin/hunts/:id/toggle', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const id = req.params.id;
+    // Deactivate all others first, so players don't get overlapping hunts
+    await pool.query('UPDATE hunts SET is_active = 0 WHERE id != ?', [id]); 
+    // Toggle the selected one
+    await pool.query('UPDATE hunts SET is_active = NOT is_active WHERE id=?', [id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to toggle hunt' });
+  }
+});
+
+// GET: List steps for a specific hunt
+app.get('/api/admin/hunts/:id/steps', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const [steps] = await pool.query('SELECT * FROM hunt_steps WHERE hunt_id=? ORDER BY step_order ASC', [req.params.id]);
+    res.json({ steps });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch steps' });
+  }
+});
+
+// POST: Add a new step to a hunt
+app.post('/api/admin/hunts/:id/steps', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const { task_type, prompt, target_data, step_order } = req.body;
+    await pool.query(
+      'INSERT INTO hunt_steps (hunt_id, step_order, task_type, prompt, target_data) VALUES (?,?,?,?,?)',
+      [req.params.id, step_order, task_type, prompt, JSON.stringify(target_data)]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to add step' });
   }
 });
 
