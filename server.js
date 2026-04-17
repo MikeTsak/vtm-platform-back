@@ -2069,6 +2069,17 @@ app.patch('/api/admin/characters/:id/xp', authRequired, requireAdmin, async (req
 
   await pool.query('UPDATE characters SET xp = GREATEST(0, xp + ?) WHERE id=?', [delta, req.params.id]);
   const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [req.params.id]);
+  
+  // NEW: Log this admin grant to your existing xp_log table
+  try {
+await pool.query(
+      'INSERT INTO xp_log (character_id, action, target, cost, payload) VALUES (?, ?, ?, ?, ?)',
+      [req.params.id, 'admin_grant', req.body.reason || 'Admin XP Adjustment', -delta, JSON.stringify({ admin_id: req.user.id })]
+    );
+  } catch (err) {
+    console.error('Failed to save to xp_log:', err);
+  }
+
   log.adm('Admin XP adjust', { character_id: req.params.id, delta, new_xp: out[0]?.xp });
   res.json({ character: out[0] });
 });
@@ -2082,11 +2093,37 @@ app.patch('/api/admin/characters/xp/bulk', authRequired, requireAdmin, async (re
 
   try {
     await pool.query('UPDATE characters SET xp = GREATEST(0, xp + ?)', [delta]);
+    
+    // NEW: Log the bulk grant for EVERY character in the database at once
+    await pool.query(`
+      INSERT INTO xp_log (character_id, action, target, cost, payload)
+      SELECT id, 'admin_bulk_grant', 'Bulk Session XP', ?, ? FROM characters
+    `, [-delta, JSON.stringify({ admin_id: req.user.id })]);
+
     log.adm('Admin bulk XP adjust', { admin_id: req.user.id, delta });
     res.json({ ok: true });
   } catch (e) {
     log.err('Admin bulk XP adjust failed', { message: e.message });
     res.status(500).json({ error: 'Failed to adjust bulk XP' });
+  }
+});
+
+/* -------------------- Fetch XP Logs for Admin Panel -------------------- */
+app.get('/api/admin/xp-logs', authRequired, requireAdmin, async (req, res) => {
+  try {
+    // Joins the xp_log table with characters and users to get readable names
+    const [logs] = await pool.query(`
+      SELECT l.*, c.name as character_name, u.display_name as player_name 
+      FROM xp_log l
+      LEFT JOIN characters c ON l.character_id = c.id
+      LEFT JOIN users u ON c.user_id = u.id
+      ORDER BY l.id DESC
+      LIMIT 200
+    `);
+    res.json(logs);
+  } catch (error) {
+    console.error('Error fetching XP logs:', error);
+    res.status(500).json({ error: 'Failed to fetch XP logs' });
   }
 });
 
