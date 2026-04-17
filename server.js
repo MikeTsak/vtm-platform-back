@@ -5329,6 +5329,80 @@ app.delete('/api/news/:id', authRequired, requireAdmin, async (req, res) => {
 });
 
 
+// GET: Fetch the active hunt and the player's current step
+app.get('/api/hunts/active', authRequired, async (req, res) => {
+  try {
+    // 1. Get the active hunt
+    const [[hunt]] = await pool.query('SELECT * FROM hunts WHERE is_active = 1 LIMIT 1');
+    if (!hunt) return res.json({ hunt: null });
+
+    // 2. Get user progress
+    let [[progress]] = await pool.query('SELECT * FROM hunt_progress WHERE user_id=? AND hunt_id=?', [req.user.id, hunt.id]);
+    
+    // 3. If no progress, start them at step_order 1
+    if (!progress) {
+      const [[firstStep]] = await pool.query('SELECT id FROM hunt_steps WHERE hunt_id=? ORDER BY step_order ASC LIMIT 1', [hunt.id]);
+      if (!firstStep) return res.json({ hunt, step: null });
+      
+      await pool.query('INSERT INTO hunt_progress (user_id, hunt_id, current_step_id) VALUES (?,?,?)', [req.user.id, hunt.id, firstStep.id]);
+      progress = { current_step_id: firstStep.id, completed: false };
+    }
+
+    // 4. Fetch the actual step details (hide the answers from the client!)
+    const [[step]] = await pool.query('SELECT id, step_order, task_type, prompt FROM hunt_steps WHERE id=?', [progress.current_step_id]);
+
+    res.json({ hunt, progress, step });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to load hunt.' });
+  }
+});
+
+// POST: Submit an answer to the current step
+app.post('/api/hunts/submit', authRequired, async (req, res) => {
+  const { step_id, text_answer, lat, lng, media_id } = req.body;
+  
+  try {
+    const [[step]] = await pool.query('SELECT * FROM hunt_steps WHERE id=?', [step_id]);
+    let isCorrect = false;
+
+    // --- VALIDATION LOGIC BASED ON TYPE ---
+    if (step.task_type === 'text') {
+      const target = JSON.parse(step.target_data); // e.g., {"answer": "caine"}
+      if (text_answer.toLowerCase().trim() === target.answer.toLowerCase()) {
+        isCorrect = true;
+      }
+    } else if (step.task_type === 'gps') {
+      const target = JSON.parse(step.target_data); // e.g., {"lat": 37.9838, "lng": 23.7275, "radius_meters": 50}
+      // You will need a Haversine formula helper here to calculate distance
+      const dist = calculateDistance(lat, lng, target.lat, target.lng); 
+      if (dist <= target.radius_meters) isCorrect = true;
+    } else if (['photo', 'draw', 'audio'].includes(step.task_type)) {
+      // These usually require Storyteller manual review, or you auto-pass them and review later
+      isCorrect = true; 
+    }
+
+    if (!isCorrect) return res.status(400).json({ error: 'Incorrect or conditions not met.' });
+
+    // Record submission
+    await pool.query('INSERT INTO hunt_submissions (user_id, step_id, media_id, text_answer, is_verified) VALUES (?,?,?,?,?)', 
+      [req.user.id, step_id, media_id || null, text_answer || null, isCorrect]);
+
+    // Advance to next step
+    const [[nextStep]] = await pool.query('SELECT id FROM hunt_steps WHERE hunt_id=? AND step_order > ? ORDER BY step_order ASC LIMIT 1', [step.hunt_id, step.step_order]);
+    
+    if (nextStep) {
+      await pool.query('UPDATE hunt_progress SET current_step_id=? WHERE user_id=? AND hunt_id=?', [nextStep.id, req.user.id, step.hunt_id]);
+      res.json({ success: true, next_step: nextStep.id, completed: false });
+    } else {
+      await pool.query('UPDATE hunt_progress SET completed=1 WHERE user_id=? AND hunt_id=?', [req.user.id, step.hunt_id]);
+      res.json({ success: true, completed: true });
+    }
+
+  } catch (e) {
+    res.status(500).json({ error: 'Submission failed.' });
+  }
+});
+
 /* -------------------- Error Handlers -------------------- */
 // Multer error handler (must be before general error handler)
 app.use((err, req, res, next) => {
