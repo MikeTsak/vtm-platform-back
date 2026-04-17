@@ -5230,7 +5230,7 @@ app.post('/api/news/upload', authRequired, memoryUpload.single('file'), async (r
   }
 });
 
-// GET /api/news/media/:id - Stream media
+// GET /api/news/media/:id - Stream media (WITH VIDEO SUPPORT)
 app.get('/api/news/media/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -5238,10 +5238,33 @@ app.get('/api/news/media/:id', async (req, res) => {
     if (!rows.length) return res.status(404).send('Not found');
 
     const { mime, size, data } = rows[0];
-    res.setHeader('Content-Type', mime || 'application/octet-stream');
-    res.setHeader('Content-Length', size);
-    res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
-    res.end(data);
+
+    // Handle HTML5 Video Range Requests (Crucial for iOS/Safari & scrubbing)
+    const range = req.headers.range;
+    if (range && mime.startsWith('video/')) {
+      const parts = range.replace(/bytes=/, "").split("-");
+      const partialstart = parts[0];
+      const partialend = parts[1];
+
+      const start = parseInt(partialstart, 10);
+      const end = partialend ? parseInt(partialend, 10) : size - 1;
+      const chunksize = (end - start) + 1;
+
+      res.writeHead(206, {
+        'Content-Range': `bytes ${start}-${end}/${size}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunksize,
+        'Content-Type': mime,
+      });
+      // Send only the requested slice of the buffer
+      res.end(data.subarray(start, end + 1));
+    } else {
+      // Standard image/file serving
+      res.setHeader('Content-Type', mime || 'application/octet-stream');
+      res.setHeader('Content-Length', size);
+      res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
+      res.end(data);
+    }
   } catch (e) {
     res.status(404).end();
   }
@@ -5254,7 +5277,13 @@ app.post('/api/news', authRequired, async (req, res) => {
 
     // Permission Check
     if (type === 'news') {
-        if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only Admins can post News' });
+        if (req.user.role === 'courtuser') {
+            if (theme !== 'RUMOR') {
+                return res.status(403).json({ error: 'Court members can only post Rumors/Gossip' });
+            }
+        } else if (req.user.role !== 'admin') {
+            return res.status(403).json({ error: 'Only Admins can post official News' });
+        }
     } else if (type === 'announcement') {
         if (req.user.role !== 'admin' && req.user.role !== 'courtuser') {
             return res.status(403).json({ error: 'Only Court/Admin can post Announcements' });
