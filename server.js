@@ -5424,14 +5424,16 @@ app.post('/api/admin/hunts', authRequired, requireAdmin, async (req, res) => {
   }
 });
 
-// PATCH: Toggle active status (Now allows multiple active hunts)
+// --- ADMIN: Toggle Hunt Status ---
+// Updated to allow multiple active hunts simultaneously
 app.patch('/api/admin/hunts/:id/toggle', authRequired, requireAdmin, async (req, res) => {
   try {
     const id = req.params.id;
-    // Simply toggle the selected one without touching others
+    // Removed the query that deactivated other hunts to allow multiple activations
     await pool.query('UPDATE hunts SET is_active = NOT is_active WHERE id=?', [id]);
     res.json({ ok: true });
   } catch (e) {
+    log.err('Failed to toggle hunt', { message: e.message });
     res.status(500).json({ error: 'Failed to toggle hunt' });
   }
 });
@@ -5462,7 +5464,8 @@ app.post('/api/admin/hunts/:id/steps', authRequired, requireAdmin, async (req, r
 
 // --- PLAYER ROUTES ---
 
-// GET: Fetch all active hunts available to the player
+// --- PLAYER: Fetch Available Hunts ---
+// Shows all active hunts the user hasn't completed yet, with safety guards for empty hunts
 app.get('/api/hunts/active', authRequired, async (req, res) => {
   try {
     // 1. Find all active hunts where the user HAS NOT completed them
@@ -5473,30 +5476,47 @@ app.get('/api/hunts/active', authRequired, async (req, res) => {
       AND (hp.completed IS NULL OR hp.completed = 0)
     `, [req.user.id]);
 
-    // 2. For each available hunt, fetch the player's current step
+    // 2. Fetch current step for each available hunt
     const activeHuntsWithSteps = await Promise.all(hunts.map(async (hunt) => {
       let [[progress]] = await pool.query(
         'SELECT * FROM hunt_progress WHERE user_id=? AND hunt_id=?', 
         [req.user.id, hunt.id]
       );
       
+      let currentStepId;
+      let completed = false;
+
       if (!progress) {
+        // Start them at the first step
         const [[firstStep]] = await pool.query(
           'SELECT id FROM hunt_steps WHERE hunt_id=? ORDER BY step_order ASC LIMIT 1', 
           [hunt.id]
         );
-        return { hunt, step: firstStep, progress: { completed: false } };
+        
+        // GUARD: If the hunt is active but has NO steps, skip it so it doesn't break the list
+        if (!firstStep) return null; 
+        
+        currentStepId = firstStep.id;
+      } else {
+        currentStepId = progress.current_step_id;
+        completed = !!progress.completed;
       }
 
       const [[step]] = await pool.query(
         'SELECT id, step_order, task_type, prompt FROM hunt_steps WHERE id=?', 
-        [progress.current_step_id]
+        [currentStepId]
       );
-      return { hunt, step, progress };
+
+      // GUARD: If the step was deleted but progress record remained
+      if (!step) return null; 
+
+      return { hunt, step, progress: { completed } };
     }));
 
-    res.json({ activeHunts: activeHuntsWithSteps });
+    // Filter out nulls so only hunts with valid steps are sent to the frontend
+    res.json({ activeHunts: activeHuntsWithSteps.filter(h => h !== null) });
   } catch (e) {
+    log.err('Failed to load active hunts', { message: e.message });
     res.status(500).json({ error: 'Failed to load active hunts.' });
   }
 });
