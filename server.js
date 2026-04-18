@@ -5466,100 +5466,133 @@ app.post('/api/admin/hunts/:id/steps', authRequired, requireAdmin, async (req, r
 
 /* -------------------- Fixed Hunt Player Routes -------------------- */
 
-// GET: Fetch all active hunts available to the player
+// GET: Fetch all active hunts with progress and competitive status
 app.get('/api/hunts/active', authRequired, async (req, res) => {
   try {
-    // 1. Find all active hunts the user HAS NOT completed
-    const [hunts] = await pool.query(`
-      SELECT h.* FROM hunts h
-      LEFT JOIN hunt_progress hp ON h.id = hp.hunt_id AND hp.user_id = ?
-      WHERE h.is_active = 1 
-      AND (hp.completed IS NULL OR hp.completed = 0)
-    `, [req.user.id]);
+    // 1. Fetch all active hunts
+    const [hunts] = await pool.query('SELECT * FROM hunts WHERE is_active = 1');
 
-    // 2. Map hunts to their current steps and initialize progress if missing
-    const activeHuntsWithSteps = await Promise.all(hunts.map(async (hunt) => {
-      let [[progress]] = await pool.query(
-        'SELECT * FROM hunt_progress WHERE user_id=? AND hunt_id=?', 
-        [req.user.id, hunt.id]
-      );
+    const huntsWithMetadata = await Promise.all(hunts.map(async (hunt) => {
+      // 2. Get total steps for percentage calculation
+      const [[{ total_steps }]] = await pool.query('SELECT COUNT(*) as total_steps FROM hunt_steps WHERE hunt_id = ?', [hunt.id]);
       
-      let currentStepId;
-      if (!progress) {
-        // Find the very first step
-        const [[firstStep]] = await pool.query(
-          'SELECT id FROM hunt_steps WHERE hunt_id=? ORDER BY step_order ASC LIMIT 1', 
-          [hunt.id]
-        );
-        if (!firstStep) return null; // Skip hunts that have no clues yet
+      // 3. Check if ANY user has already completed this hunt (Exclusive completion check)
+      const [[{ finisher_count }]] = await pool.query('SELECT COUNT(*) as finisher_count FROM hunt_progress WHERE hunt_id = ? AND completed = 1', [hunt.id]);
+      const isGloballyFinished = finisher_count > 0;
 
-        // CRITICAL FIX: Create the progress row now so 'submit' works later
-        await pool.query(
-          'INSERT IGNORE INTO hunt_progress (user_id, hunt_id, current_step_id) VALUES (?,?,?)',
-          [req.user.id, hunt.id, firstStep.id]
-        );
-        currentStepId = firstStep.id;
-      } else {
-        currentStepId = progress.current_step_id;
+      // 4. Count other active hunters (excluding current user)
+      const [[{ active_hunters }]] = await pool.query(
+        'SELECT COUNT(*) as active_hunters FROM hunt_progress WHERE hunt_id = ? AND completed = 0 AND user_id != ?',
+        [hunt.id, req.user.id]
+      );
+
+      // 5. Get current user's specific progress
+      let [[progress]] = await pool.query('SELECT * FROM hunt_progress WHERE user_id=? AND hunt_id=?', [req.user.id, hunt.id]);
+      
+      let currentStep = null;
+      let percent = 0;
+
+      if (progress) {
+        // Find current step details to get the order
+        [[currentStep]] = await pool.query('SELECT id, step_order, task_type, prompt FROM hunt_steps WHERE id = ?', [progress.current_step_id]);
+        
+        if (progress.completed) {
+          percent = 100;
+        } else if (currentStep && total_steps > 0) {
+          // Percent = (Steps completed / Total steps) * 100
+          // If you are on step 2 of 4, you have finished 1 step.
+          percent = Math.floor(((currentStep.step_order - 1) / total_steps) * 100);
+        }
+      } else if (!isGloballyFinished) {
+        // If they haven't started, initialize them with the first step
+        [[currentStep]] = await pool.query('SELECT id, step_order, task_type, prompt FROM hunt_steps WHERE hunt_id = ? ORDER BY step_order ASC LIMIT 1', [hunt.id]);
+        
+        if (currentStep) {
+            // Automatically initialize progress so they appear in the hunter count
+            await pool.query(
+                'INSERT IGNORE INTO hunt_progress (user_id, hunt_id, current_step_id) VALUES (?,?,?)',
+                [req.user.id, hunt.id, currentStep.id]
+            );
+        }
       }
 
-      const [[step]] = await pool.query(
-        'SELECT id, step_order, task_type, prompt FROM hunt_steps WHERE id=?', 
-        [currentStepId]
-      );
-
-      if (!step) return null; 
-      return { hunt, step, progress: progress || { completed: false } };
+      return {
+        hunt,
+        step: currentStep,
+        progress: {
+          percent,
+          completed: progress ? !!progress.completed : false,
+          isGloballyFinished,
+          otherHunters: active_hunters
+        }
+      };
     }));
 
-    res.json({ activeHunts: activeHuntsWithSteps.filter(h => h !== null) });
+    // Return only hunts that actually have steps configured
+    res.json({ activeHunts: huntsWithMetadata.filter(h => h.step !== null) });
   } catch (e) {
-    log.err('Active hunts fetch failed', { message: e.message });
+    log.err('Enhanced active hunts fetch failed', { message: e.message });
     res.status(500).json({ error: 'Failed to load chronicles.' });
   }
 });
 
-// POST: Submit Answer (Modified to ensure updates persist)
+// POST: Submit Answer with Exclusive Winner Check
 app.post('/api/hunts/submit', authRequired, async (req, res) => {
   const { step_id, text_answer, lat, lng, media_id } = req.body;
   try {
     const [[step]] = await pool.query('SELECT * FROM hunt_steps WHERE id=?', [step_id]);
     if (!step) return res.status(404).json({ error: 'Step not found.' });
 
+    // CRITICAL: Prevent submission if the hunt is already finished by someone else
+    const [[{ finisher_count }]] = await pool.query(
+        'SELECT COUNT(*) as finisher_count FROM hunt_progress WHERE hunt_id = ? AND completed = 1', 
+        [step.hunt_id]
+    );
+    if (finisher_count > 0) {
+      return res.status(403).json({ error: 'The prize has already been claimed by another kindred.' });
+    }
+
     let isCorrect = false;
     const target = JSON.parse(step.target_data);
 
+    // --- Validation Logic ---
     if (step.task_type === 'text') {
       if (text_answer?.toLowerCase().trim() === target.answer.toLowerCase()) isCorrect = true;
     } else if (step.task_type === 'qr') {
       if (text_answer?.trim() === target.qr_string) isCorrect = true;
     } else if (step.task_type === 'gps') {
       const dist = calculateDistance(lat, lng, target.lat, target.lng); 
-      if (dist <= target.radius_meters) isCorrect = true;
+      if (dist <= (target.radius_meters || 50)) isCorrect = true;
     } else if (['photo', 'draw', 'audio'].includes(step.task_type)) {
-      isCorrect = true; // Auto-pass for manual review
+      isCorrect = true; // Auto-pass for manual Storyteller review
     }
 
     if (!isCorrect) return res.status(400).json({ error: 'Incorrect. The shadows reject your offering.' });
 
-    // Record submission
+    // Record the specific submission for ST review
     await pool.query('INSERT INTO hunt_submissions (user_id, step_id, media_id, text_answer, is_verified) VALUES (?,?,?,?,?)', 
       [req.user.id, step_id, media_id || null, text_answer || null, true]);
 
-    // Find next step
+    // Find the next sequential step
     const [[nextStep]] = await pool.query(
       'SELECT id FROM hunt_steps WHERE hunt_id=? AND step_order > ? ORDER BY step_order ASC LIMIT 1', 
       [step.hunt_id, step.step_order]
     );
     
     if (nextStep) {
-      await pool.query('UPDATE hunt_progress SET current_step_id=? WHERE user_id=? AND hunt_id=?', [nextStep.id, req.user.id, step.hunt_id]);
-      res.json({ success: true, next_step: nextStep.id, completed: false });
+      // Move player to next step
+      await pool.query(
+        'UPDATE hunt_progress SET current_step_id=? WHERE user_id=? AND hunt_id=?', 
+        [nextStep.id, req.user.id, step.hunt_id]
+      );
+      res.json({ success: true, completed: false });
     } else {
+      // Mark player as the exclusive winner
       await pool.query('UPDATE hunt_progress SET completed=1 WHERE user_id=? AND hunt_id=?', [req.user.id, step.hunt_id]);
       res.json({ success: true, completed: true });
     }
   } catch (e) {
+    log.err('Submission failed', { message: e.message });
     res.status(500).json({ error: 'Submission failed.' });
   }
 });
