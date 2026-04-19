@@ -6035,6 +6035,9 @@ app.post('/api/hunts/:huntId/groups/join', authRequired, async (req, res) => {
 
 // GET: Player's active hunts, current progress, and Coterie info
 app.get('/api/hunts/active', authRequired, async (req, res) => {
+  // --- FIX: Force fresh data every time by disabling cache ---
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+
   try {
     const [activeHunts] = await pool.query('SELECT * FROM hunts WHERE is_active=1');
     if (activeHunts.length === 0) return res.json({ activeHunts: [] });
