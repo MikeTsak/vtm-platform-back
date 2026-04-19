@@ -458,6 +458,7 @@ let huntTablesCreated = false;
 async function _ensureHuntTables() {
   if (huntTablesCreated) return;
   try {
+    // Base Hunts Table
     await pool.query(`
       CREATE TABLE IF NOT EXISTS hunts (
           id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -468,6 +469,7 @@ async function _ensureHuntTables() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
+    // Hunt Steps (Clues)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS hunt_steps (
           id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -476,10 +478,12 @@ async function _ensureHuntTables() {
           task_type ENUM('gps', 'photo', 'qr', 'text', 'draw', 'audio') NOT NULL,
           prompt TEXT NOT NULL,
           target_data JSON,
+          manual_review BOOLEAN DEFAULT FALSE,
           FOREIGN KEY (hunt_id) REFERENCES hunts(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
+    // Player Progress
     await pool.query(`
       CREATE TABLE IF NOT EXISTS hunt_progress (
           id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -492,6 +496,7 @@ async function _ensureHuntTables() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
+    // Player Evidence Submissions
     await pool.query(`
       CREATE TABLE IF NOT EXISTS hunt_submissions (
           id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -499,13 +504,50 @@ async function _ensureHuntTables() {
           step_id INT UNSIGNED NOT NULL,
           media_id INT UNSIGNED NULL,
           text_answer TEXT NULL,
+          status VARCHAR(50) DEFAULT 'pending',
           is_verified BOOLEAN DEFAULT FALSE,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
+    // --- COTERIE / TEAM TABLES ---
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hunt_groups (
+          id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          hunt_id INT UNSIGNED NOT NULL,
+          name VARCHAR(255) NOT NULL,
+          invite_code VARCHAR(10) NOT NULL UNIQUE,
+          created_by INT NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (hunt_id) REFERENCES hunts(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hunt_group_members (
+          group_id INT UNSIGNED NOT NULL,
+          user_id INT NOT NULL,
+          joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (group_id, user_id),
+          FOREIGN KEY (group_id) REFERENCES hunt_groups(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Patch for older databases: Add missing columns if they don't exist yet
+    const [stepCols] = await pool.query("SHOW COLUMNS FROM hunt_steps LIKE 'manual_review'");
+    if (stepCols.length === 0) {
+      await pool.query("ALTER TABLE hunt_steps ADD COLUMN manual_review BOOLEAN DEFAULT FALSE");
+      log.ok('Added manual_review column to hunt_steps');
+    }
+
+    const [subCols] = await pool.query("SHOW COLUMNS FROM hunt_submissions LIKE 'status'");
+    if (subCols.length === 0) {
+      await pool.query("ALTER TABLE hunt_submissions ADD COLUMN status VARCHAR(50) DEFAULT 'pending'");
+      log.ok('Added status column to hunt_submissions');
+    }
+
     huntTablesCreated = true;
-    log.ok('Hunt tables ready.');
+    log.ok('Hunt & Coterie tables ready.');
   } catch (e) {
     log.err('Failed to create hunt tables', { message: e.message });
   }
@@ -2542,15 +2584,14 @@ app.get('/api/chat/my-recent', authRequired, async (req, res) => {
   }
 });
 
-// Upload Image
+// Upload Image & Audio
 app.post('/api/chat/upload', authRequired, memoryUpload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file provided' });
     
-    // Validate type
-    const validTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-    if (!validTypes.includes(req.file.mimetype)) {
-      return res.status(400).json({ error: 'Invalid file type. Only JPG, PNG, GIF, WEBP allowed.' });
+    // ✅ FIX: Allow any image or audio file instead of just specific image extensions
+    if (!req.file.mimetype.startsWith('image/') && !req.file.mimetype.startsWith('audio/')) {
+      return res.status(400).json({ error: 'Invalid file type. Only images and audio allowed.' });
     }
 
     // Insert into DB
@@ -2559,7 +2600,7 @@ app.post('/api/chat/upload', authRequired, memoryUpload.single('file'), async (r
       [req.user.id, req.file.originalname, req.file.mimetype, req.file.size, req.file.buffer]
     );
 
-    log.ok('Chat image uploaded', { user_id: req.user.id, media_id: ins.insertId });
+    log.ok('Chat media uploaded', { user_id: req.user.id, media_id: ins.insertId });
     res.json({ id: ins.insertId, url: `/api/chat/media/${ins.insertId}` });
   } catch (e) {
     log.err('Chat upload failed', { message: e.message });
@@ -5280,7 +5321,6 @@ app.get('/api/news/recent', authRequired, async (req, res) => {
   }
 });
 
-// ... app.listen ...
 
 // POST /api/news/upload (Admin/Court) - Upload media
 app.post('/api/news/upload', authRequired, memoryUpload.single('file'), async (req, res) => {
@@ -5439,14 +5479,16 @@ app.patch('/api/admin/hunts/:id/toggle', authRequired, requireAdmin, async (req,
   }
 });
 
-// Edit a step
+// Edit a step (Fixed to save manual_review flag)
 app.put('/api/admin/hunts/:huntId/steps/:stepId', authRequired, requireAdmin, async (req, res) => {
   const { task_type, prompt, target_data } = req.body;
   const tData = typeof target_data === 'string' ? target_data : JSON.stringify(target_data);
+  const isManual = ['photo', 'draw', 'audio'].includes(task_type) ? 1 : 0;
+  
   try {
     await pool.query(
-      'UPDATE hunt_steps SET task_type=?, prompt=?, target_data=? WHERE id=?', 
-      [task_type, prompt, tData, req.params.stepId]
+      'UPDATE hunt_steps SET task_type=?, prompt=?, target_data=?, manual_review=? WHERE id=?', 
+      [task_type, prompt, tData, isManual, req.params.stepId]
     );
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -5470,13 +5512,126 @@ app.get('/api/admin/hunts/:id/steps', authRequired, requireAdmin, async (req, re
   }
 });
 
-// POST: Add a new step to a hunt
+// Get progress of all players for a specific hunt
+app.get('/api/admin/hunts/:huntId/progress', authRequired, requireAdmin, async (req, res) => {
+  try {
+    // Fetch all players who have a progress entry for this hunt
+    const [progress] = await pool.query(`
+      SELECT 
+        u.id as user_id, 
+        u.email,
+        COALESCE(c.name, 'Unknown Kindred') as character_name,
+        hp.completed,
+        hs.step_order as current_step
+      FROM hunt_progress hp
+      JOIN users u ON hp.user_id = u.id
+      LEFT JOIN characters c ON u.id = c.user_id
+      LEFT JOIN hunt_steps hs ON hp.current_step_id = hs.id
+      WHERE hp.hunt_id = ?
+    `, [req.params.huntId]);
+    
+    // Get total steps to calculate the exact percentage
+    const [stepCount] = await pool.query('SELECT COUNT(*) as total FROM hunt_steps WHERE hunt_id = ?', [req.params.huntId]);
+    const totalSteps = stepCount[0].total || 1;
+
+    // Format the data for the frontend
+    const formattedProgress = progress.map(p => {
+      let percent = 0;
+      if (p.completed) percent = 100;
+      else if (p.current_step > 1) percent = Math.round(((p.current_step - 1) / totalSteps) * 100);
+      
+      return {
+        ...p,
+        percent: percent
+      };
+    });
+
+    res.json({ progress: formattedProgress });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get pending manual reviews for a chronicle (Fixed query logic)
+app.get('/api/admin/hunts/:huntId/reviews', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const [reviews] = await pool.query(`
+      SELECT 
+        s.id as submission_id,
+        u.email,
+        COALESCE(c.name, 'Unknown Kindred') as character_name,
+        hs.step_order,
+        hs.prompt,
+        hs.task_type,
+        s.media_id,
+        s.status
+      FROM hunt_submissions s
+      JOIN users u ON s.user_id = u.id
+      LEFT JOIN characters c ON u.id = c.user_id
+      JOIN hunt_steps hs ON s.step_id = hs.id
+      WHERE hs.hunt_id = ? 
+        AND hs.task_type IN ('photo', 'draw', 'audio') 
+        AND (s.status = 'pending' OR s.status IS NULL)
+    `, [req.params.huntId]);
+    
+    res.json({ reviews });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Approve or Reject a submission
+app.post('/api/admin/reviews/:submissionId/:action', authRequired, requireAdmin, async (req, res) => {
+  const { submissionId, action } = req.params;
+  const newStatus = action === 'approve' ? 'approved' : 'rejected';
+  
+  try {
+    // 1. Update the submission status
+    await pool.query('UPDATE hunt_submissions SET status = ? WHERE id = ?', [newStatus, submissionId]);
+    
+    // 2. If the ST rejects it, we punish the player
+    if (newStatus === 'rejected') {
+      
+      // Find out exactly who submitted this and for what step/hunt
+      const [[sub]] = await pool.query(`
+        SELECT s.user_id, s.step_id, hs.hunt_id, hs.step_order, hs.prompt
+        FROM hunt_submissions s
+        JOIN hunt_steps hs ON s.step_id = hs.id
+        WHERE s.id = ?
+      `, [submissionId]);
+
+      if (sub) {
+        // Roll their progress back to the failed step and ensure they are un-marked as completed
+        await pool.query(`
+          UPDATE hunt_progress 
+          SET current_step_id = ?, completed = 0 
+          WHERE user_id = ? AND hunt_id = ?
+        `, [sub.step_id, sub.user_id, sub.hunt_id]);
+
+        // Send a push notification alerting them of their failure
+        const title = "❌ Evidence Rejected";
+        const body = `The Court found your submission for Step ${sub.step_order} unacceptable. You must acquire better evidence.`;
+        
+        await sendPushNotification(sub.user_id, title, body).catch(() => {});
+        log.adm('Evidence rejected & player rolled back', { admin: req.user.id, player: sub.user_id, step: sub.step_order });
+      }
+    }
+    
+    res.json({ success: true });
+  } catch (err) { 
+    log.err('Review action failed', { error: err.message });
+    res.status(500).json({ error: err.message }); 
+  }
+});
+
+// POST: Add a new step to a hunt (Fixed to save manual_review flag)
 app.post('/api/admin/hunts/:id/steps', authRequired, requireAdmin, async (req, res) => {
   try {
     const { task_type, prompt, target_data, step_order } = req.body;
+    const isManual = ['photo', 'draw', 'audio'].includes(task_type) ? 1 : 0;
+    
     await pool.query(
-      'INSERT INTO hunt_steps (hunt_id, step_order, task_type, prompt, target_data) VALUES (?,?,?,?,?)',
-      [req.params.id, step_order, task_type, prompt, JSON.stringify(target_data)]
+      'INSERT INTO hunt_steps (hunt_id, step_order, task_type, prompt, target_data, manual_review) VALUES (?,?,?,?,?,?)',
+      [req.params.id, step_order, task_type, prompt, JSON.stringify(target_data), isManual]
     );
     res.json({ ok: true });
   } catch (e) {
@@ -5484,61 +5639,180 @@ app.post('/api/admin/hunts/:id/steps', authRequired, requireAdmin, async (req, r
   }
 });
 
+// DELETE: Completely remove a chronicle
+app.delete('/api/admin/hunts/:id', authRequired, requireAdmin, async (req, res) => {
+  try {
+    // Because of 'ON DELETE CASCADE' in your schema, this safely wipes all 
+    // associated steps, progress, and submissions automatically.
+    await pool.query('DELETE FROM hunts WHERE id=?', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    log.err('Failed to delete chronicle', { message: e.message });
+    res.status(500).json({ error: 'Failed to delete chronicle' });
+  }
+});
+
 // --- PLAYER ROUTES ---
+
+// --- TEAM / COTERIE SYSTEM FOR HUNTS ---
+
+// POST: Create a team for a hunt
+app.post('/api/hunts/:huntId/groups', authRequired, async (req, res) => {
+  const huntId = Number(req.params.huntId);
+  const { name } = req.body;
+  if (!name || name.trim() === '') return res.status(400).json({ error: 'Team name is required.' });
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // Generate a 6-character random hex invite code
+    const inviteCode = crypto.randomBytes(3).toString('hex').toUpperCase();
+
+    // 1. Create the group
+    const [gRes] = await conn.query(
+      'INSERT INTO hunt_groups (hunt_id, name, invite_code, created_by) VALUES (?, ?, ?, ?)',
+      [huntId, name.trim(), inviteCode, req.user.id]
+    );
+
+    // 2. Add creator to the group
+    await conn.query(
+      'INSERT INTO hunt_group_members (group_id, user_id) VALUES (?, ?)',
+      [gRes.insertId, req.user.id]
+    );
+
+    await conn.commit();
+    res.json({ ok: true, invite_code: inviteCode });
+  } catch (e) {
+    await conn.rollback();
+    log.err('Failed to create hunt group', { error: e.message });
+    res.status(500).json({ error: 'Failed to establish coterie.' });
+  } finally {
+    conn.release();
+  }
+});
+
+// POST: Join a team via invite code
+app.post('/api/hunts/:huntId/groups/join', authRequired, async (req, res) => {
+  const huntId = Number(req.params.huntId);
+  const { code } = req.body;
+  if (!code) return res.status(400).json({ error: 'Invite code required.' });
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // 1. Find the group
+    const [[group]] = await conn.query('SELECT id FROM hunt_groups WHERE hunt_id = ? AND invite_code = ?', [huntId, code.trim().toUpperCase()]);
+    if (!group) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Invalid invite code or chronicle mismatch.' });
+    }
+
+    // 2. Add user to the group (IGNORE handles if they are already in it)
+    await conn.query('INSERT IGNORE INTO hunt_group_members (group_id, user_id) VALUES (?, ?)', [group.id, req.user.id]);
+
+    // 3. Sync their progress to the group's highest progress
+    const [[groupProgress]] = await conn.query(`
+      SELECT current_step_id, completed 
+      FROM hunt_progress 
+      WHERE hunt_id = ? AND user_id IN (SELECT user_id FROM hunt_group_members WHERE group_id = ?)
+      ORDER BY completed DESC, current_step_id DESC LIMIT 1
+    `, [huntId, group.id]);
+
+    if (groupProgress) {
+      await conn.query(
+        'UPDATE hunt_progress SET current_step_id = ?, completed = ? WHERE user_id = ? AND hunt_id = ?',
+        [groupProgress.current_step_id, groupProgress.completed, req.user.id, huntId]
+      );
+    }
+
+    await conn.commit();
+    res.json({ ok: true });
+  } catch (e) {
+    await conn.rollback();
+    log.err('Failed to join hunt group', { error: e.message });
+    res.status(500).json({ error: 'Failed to join coterie.' });
+  } finally {
+    conn.release();
+  }
+});
 
 /* -------------------- Fixed & Enhanced Hunt Player Routes -------------------- */
 
-// GET: Fetch all active hunts with progress and competitive status
+// GET: Player's active hunts, current progress, and Coterie info
 app.get('/api/hunts/active', authRequired, async (req, res) => {
   try {
-    // 1. Fetch all active hunts
-    const [hunts] = await pool.query('SELECT * FROM hunts WHERE is_active = 1');
+    const [activeHunts] = await pool.query('SELECT * FROM hunts WHERE is_active=1');
+    if (activeHunts.length === 0) return res.json({ activeHunts: [] });
 
-    const huntsWithMetadata = await Promise.all(hunts.map(async (hunt) => {
-      // 2. Get total steps for percentage calculation
-      const [[{ total_steps }]] = await pool.query('SELECT COUNT(*) as total_steps FROM hunt_steps WHERE hunt_id = ?', [hunt.id]);
+    const huntsWithMetadata = await Promise.all(activeHunts.map(async (hunt) => {
+      // 1. Get player's progress
+      const [[progress]] = await pool.query('SELECT * FROM hunt_progress WHERE user_id=? AND hunt_id=?', [req.user.id, hunt.id]);
       
-      // 3. Check if ANY user has already completed this hunt (Race to Finish)
-      const [[{ finisher_count }]] = await pool.query('SELECT COUNT(*) as finisher_count FROM hunt_progress WHERE hunt_id = ? AND completed = 1', [hunt.id]);
-      const isGloballyFinished = finisher_count > 0;
+      // 2. Determine if it's already claimed by someone else
+      const [[winner]] = await pool.query('SELECT id FROM hunt_progress WHERE hunt_id=? AND completed=1 LIMIT 1', [hunt.id]);
+      const isGloballyFinished = !!winner;
 
-      // 4. Count other active hunters (excluding current user)
-      const [[{ active_hunters }]] = await pool.query(
-        'SELECT COUNT(*) as active_hunters FROM hunt_progress WHERE hunt_id = ? AND completed = 0 AND user_id != ?',
-        [hunt.id, req.user.id]
-      );
+      // 3. Count competitors
+      const [[competitorCount]] = await pool.query('SELECT COUNT(*) as c FROM hunt_progress WHERE hunt_id=? AND user_id!=? AND completed=0', [hunt.id, req.user.id]);
+      const active_hunters = competitorCount.c;
 
-      // 5. Get current user's specific progress
-      let [[progress]] = await pool.query('SELECT * FROM hunt_progress WHERE user_id=? AND hunt_id=?', [req.user.id, hunt.id]);
-      
-      let currentStep = null;
+      // 4. Determine current step
+      let currentStep;
+      if (!progress) {
+        // First time joining the hunt: give them step 1
+        const [[firstStep]] = await pool.query('SELECT * FROM hunt_steps WHERE hunt_id=? ORDER BY step_order ASC LIMIT 1', [hunt.id]);
+        if (!firstStep) return null; // Hunt has no steps yet
+        await pool.query('INSERT INTO hunt_progress (user_id, hunt_id, current_step_id) VALUES (?,?,?)', [req.user.id, hunt.id, firstStep.id]);
+        currentStep = firstStep;
+      } else if (progress.completed) {
+        // Already finished: get the last step so the UI doesn't crash
+        const [[lastStep]] = await pool.query('SELECT * FROM hunt_steps WHERE hunt_id=? ORDER BY step_order DESC LIMIT 1', [hunt.id]);
+        currentStep = lastStep;
+      } else {
+        // In progress: fetch their current step
+        const [[step]] = await pool.query('SELECT * FROM hunt_steps WHERE id=?', [progress.current_step_id]);
+        currentStep = step;
+      }
+
+      if (!currentStep) return null;
+
+      // 5. Calculate percentage completed
+      const [[totalSteps]] = await pool.query('SELECT COUNT(*) as t FROM hunt_steps WHERE hunt_id=?', [hunt.id]);
       let percent = 0;
+      if (progress?.completed) percent = 100;
+      else if (currentStep.step_order > 1) percent = Math.round(((currentStep.step_order - 1) / totalSteps.t) * 100);
 
-      if (progress) {
-        // Find current step details
-        [[currentStep]] = await pool.query('SELECT id, step_order, task_type, prompt FROM hunt_steps WHERE id = ?', [progress.current_step_id]);
+      // --- 6. Fetch Team/Coterie Data ---
+      let teamData = null;
+      const [[myGroup]] = await pool.query(`
+        SELECT g.id, g.name, g.invite_code
+        FROM hunt_groups g
+        JOIN hunt_group_members m ON m.group_id = g.id
+        WHERE m.user_id = ? AND g.hunt_id = ?
+      `, [req.user.id, hunt.id]);
+
+      if (myGroup) {
+        const [members] = await pool.query(`
+          SELECT COALESCE(c.name, u.display_name) as member_name
+          FROM hunt_group_members m
+          JOIN users u ON m.user_id = u.id
+          LEFT JOIN characters c ON c.user_id = u.id
+          WHERE m.group_id = ?
+        `, [myGroup.id]);
         
-        if (progress.completed) {
-          percent = 100;
-        } else if (currentStep && total_steps > 0) {
-          // Calculation: (Step Number - 1) / Total Steps
-          percent = Math.floor(((currentStep.step_order - 1) / total_steps) * 100);
-        }
-      } else if (!isGloballyFinished) {
-        // Automatically initialize progress when they first see the hunt
-        [[currentStep]] = await pool.query('SELECT id, step_order, task_type, prompt FROM hunt_steps WHERE hunt_id = ? ORDER BY step_order ASC LIMIT 1', [hunt.id]);
-        
-        if (currentStep) {
-          await pool.query(
-            'INSERT IGNORE INTO hunt_progress (user_id, hunt_id, current_step_id) VALUES (?,?,?)',
-            [req.user.id, hunt.id, currentStep.id]
-          );
-        }
+        teamData = {
+          name: myGroup.name,
+          invite_code: myGroup.invite_code,
+          members: members.map(m => m.member_name)
+        };
       }
 
       return {
         hunt,
         step: currentStep,
+        team: teamData,
         progress: {
           percent,
           completed: progress ? !!progress.completed : false,
@@ -5548,61 +5822,110 @@ app.get('/api/hunts/active', authRequired, async (req, res) => {
       };
     }));
 
-    res.json({ activeHunts: huntsWithMetadata.filter(h => h.step !== null) });
+    res.json({ activeHunts: huntsWithMetadata.filter(Boolean) });
   } catch (e) {
-    log.err('Enhanced active hunts fetch failed', { message: e.message });
-    res.status(500).json({ error: 'Failed to load chronicles.' });
+    log.err('Failed to fetch active hunts', { message: e.message });
+    res.status(500).json({ error: 'Failed to sync chronicles' });
   }
 });
-
-// POST: Submit Answer with Winner Check
+// POST: Submit an answer or evidence for the current step
 app.post('/api/hunts/submit', authRequired, async (req, res) => {
-  const { step_id, text_answer, lat, lng, media_id } = req.body;
   try {
+    const { step_id, text_answer, lat, lng, media_id } = req.body;
+
+    // 1. Verify step exists and belongs to the user's current progress
     const [[step]] = await pool.query('SELECT * FROM hunt_steps WHERE id=?', [step_id]);
-    if (!step) return res.status(404).json({ error: 'Step not found.' });
+    if (!step) return res.status(404).json({ error: 'Challenge not found in the archives.' });
 
-    // CRITICAL: Prevent submission if someone else already won
-    const [[{ finisher_count }]] = await pool.query(
-        'SELECT COUNT(*) as finisher_count FROM hunt_progress WHERE hunt_id = ? AND completed = 1', 
-        [step.hunt_id]
-    );
-    if (finisher_count > 0) {
-      return res.status(403).json({ error: 'The prize has already been claimed by another kindred.' });
+    const [[progress]] = await pool.query('SELECT * FROM hunt_progress WHERE user_id=? AND hunt_id=?', [req.user.id, step.hunt_id]);
+    if (!progress || progress.current_step_id !== step.id || progress.completed) {
+      return res.status(400).json({ error: 'Invalid submission sequence.' });
     }
 
-    let isCorrect = false;
-    // Handle both string and pre-parsed JSON objects from DB
-    const target = typeof step.target_data === 'string' ? JSON.parse(step.target_data) : step.target_data;
+    // Safely parse target data
+    const target = typeof step.target_data === 'string' ? JSON.parse(step.target_data || '{}') : (step.target_data || {});
 
+    // --- 2. VALIDATION BY TASK TYPE ---
     if (step.task_type === 'text') {
-      if (text_answer?.toLowerCase().trim() === target.answer.toLowerCase()) isCorrect = true;
-    } else if (step.task_type === 'qr') {
-      if (text_answer?.trim() === target.qr_string) isCorrect = true;
-    } else if (step.task_type === 'gps') {
-      const dist = calculateDistance(lat, lng, target.lat, target.lng); 
-      if (dist <= (target.radius_meters || 50)) isCorrect = true;
-    } else if (['photo', 'draw', 'audio'].includes(step.task_type)) {
-      isCorrect = true; 
+      if (text_answer?.toLowerCase().trim() !== target?.answer?.toLowerCase()) {
+        return res.status(400).json({ error: 'Incorrect answer. The Court expects better.' });
+      }
+    } 
+    else if (step.task_type === 'qr') {
+      if (text_answer?.trim() !== target?.qr_string) {
+        return res.status(400).json({ error: 'Invalid Sigil scanned.' });
+      }
+    } 
+    else if (step.task_type === 'gps') {
+      if (!lat || !lng) return res.status(400).json({ error: 'Missing GPS coordinates.' });
+      
+      // Haversine formula to calculate distance in meters
+      const R = 6371e3; // Earth radius in metres
+      const φ1 = lat * Math.PI/180;
+      const φ2 = target.lat * Math.PI/180;
+      const Δφ = (target.lat-lat) * Math.PI/180;
+      const Δλ = (target.lng-lng) * Math.PI/180;
+      const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+                Math.cos(φ1) * Math.cos(φ2) *
+                Math.sin(Δλ/2) * Math.sin(Δλ/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      const distance = R * c;
+
+      const allowedRadius = target.radius_meters || 50; // Default 50m allowance for GPS drift
+      if (distance > allowedRadius) {
+        return res.status(400).json({ error: `Location rejected. You are ${Math.round(distance)} meters away from the target.` });
+      }
+    } 
+    else if (['photo', 'draw', 'audio'].includes(step.task_type)) {
+      if (!media_id) return res.status(400).json({ error: 'Evidence file required.' });
+      
+      // Log the submission into the database for the ST to review later
+      await pool.query(
+        'INSERT INTO hunt_submissions (user_id, step_id, media_id, status) VALUES (?, ?, ?, ?)', 
+        [req.user.id, step.id, media_id, 'pending']
+      );
     }
 
-    if (!isCorrect) return res.status(400).json({ error: 'Incorrect. The shadows reject your offering.' });
+    // --- 3. GET NEXT STEP ---
+    const [[nextStep]] = await pool.query(
+      'SELECT * FROM hunt_steps WHERE hunt_id=? AND step_order > ? ORDER BY step_order ASC LIMIT 1', 
+      [step.hunt_id, step.step_order]
+    );
 
-    await pool.query('INSERT INTO hunt_submissions (user_id, step_id, media_id, text_answer, is_verified) VALUES (?,?,?,?,?)', 
-      [req.user.id, step_id, media_id || null, text_answer || null, true]);
-
-    const [[nextStep]] = await pool.query('SELECT id FROM hunt_steps WHERE hunt_id=? AND step_order > ? ORDER BY step_order ASC LIMIT 1', [step.hunt_id, step.step_order]);
+    // --- 4. ADVANCE THE TEAM / COTERIE ---
+    let targetUserIds = [req.user.id]; // Default to solo player
     
+    // Check if the user is in a group for this specific hunt
+    const [[myGroup]] = await pool.query(`
+      SELECT group_id FROM hunt_group_members 
+      WHERE user_id = ? AND group_id IN (SELECT id FROM hunt_groups WHERE hunt_id = ?)
+    `, [req.user.id, step.hunt_id]);
+
+    if (myGroup) {
+      // Get every user ID in that group
+      const [mRows] = await pool.query('SELECT user_id FROM hunt_group_members WHERE group_id = ?', [myGroup.group_id]);
+      targetUserIds = mRows.map(r => r.user_id);
+    }
+
+    // Update progress for every player in the targetUserIds array
     if (nextStep) {
-      await pool.query('UPDATE hunt_progress SET current_step_id=? WHERE user_id=? AND hunt_id=?', [nextStep.id, req.user.id, step.hunt_id]);
+      await pool.query(
+        'UPDATE hunt_progress SET current_step_id=? WHERE hunt_id=? AND user_id IN (?)', 
+        [nextStep.id, step.hunt_id, targetUserIds]
+      );
       res.json({ success: true, completed: false });
     } else {
-      await pool.query('UPDATE hunt_progress SET completed=1 WHERE user_id=? AND hunt_id=?', [req.user.id, step.hunt_id]);
+      // No more steps: The team has won!
+      await pool.query(
+        'UPDATE hunt_progress SET completed=1 WHERE hunt_id=? AND user_id IN (?)', 
+        [step.hunt_id, targetUserIds]
+      );
       res.json({ success: true, completed: true });
     }
+
   } catch (e) {
-    log.err('Submission failed', { message: e.message });
-    res.status(500).json({ error: 'Submission failed.' });
+    log.err('Submission logic failed', { message: e.message });
+    res.status(500).json({ error: 'Internal server error while verifying submission.' });
   }
 });
 /* -------------------- Error Handlers -------------------- */
