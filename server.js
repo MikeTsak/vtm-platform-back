@@ -551,6 +551,242 @@ async function _ensureHuntTables() {
 }
 _ensureHuntTables();
 
+/* ------------------------------------------------------------------
+   Core & Assumed Tables Initialization
+   (Users, Characters, NPCs, XP Logs, Domains, Downtimes, Coteries, etc)
+------------------------------------------------------------------- */
+
+let coreTablesCreated = false;
+async function _ensureCoreTables() {
+  if (coreTablesCreated) return;
+  try {
+    // 1. Users
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        email VARCHAR(255) NOT NULL UNIQUE,
+        display_name VARCHAR(190) NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        role VARCHAR(50) DEFAULT 'user',
+        discord_id VARCHAR(50),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // 2. Characters
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS characters (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        name VARCHAR(255) NOT NULL,
+        clan VARCHAR(100) NOT NULL,
+        sheet JSON NULL,
+        xp INT DEFAULT 50,
+        camarilla_titles JSON NULL,
+        status INT DEFAULT 0,
+        image_url VARCHAR(1024) NULL,
+        is_ex BOOLEAN DEFAULT FALSE,
+        is_deceased BOOLEAN DEFAULT FALSE,
+        is_hidden BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // 3. NPCs
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS npcs (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        clan VARCHAR(100) NOT NULL,
+        sheet JSON NULL,
+        xp INT DEFAULT 10000,
+        camarilla_titles JSON NULL,
+        status INT DEFAULT 0,
+        image_url VARCHAR(1024) NULL,
+        is_ex BOOLEAN DEFAULT FALSE,
+        is_deceased BOOLEAN DEFAULT FALSE,
+        is_hidden BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // 4. Base Chat Messages (Group chat is handled separately)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        sender_id INT NOT NULL,
+        recipient_id INT NOT NULL,
+        body TEXT,
+        attachment_id INT UNSIGNED NULL,
+        read_at TIMESTAMP NULL,
+        delivered_at TIMESTAMP NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS npc_messages (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        npc_id INT NOT NULL,
+        user_id INT NOT NULL,
+        from_side ENUM('user', 'npc') NOT NULL,
+        body TEXT,
+        attachment_id INT UNSIGNED NULL,
+        read_at TIMESTAMP NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // 5. XP Logs
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS xp_log (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        character_id INT NULL,
+        action VARCHAR(100) NOT NULL,
+        target VARCHAR(255) NULL,
+        from_level INT NULL,
+        to_level INT NULL,
+        cost INT NOT NULL,
+        payload JSON NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    coreTablesCreated = true;
+    log.ok('Core tables (users, chars, npcs, chat, xp_log) verified/created.');
+  } catch (e) {
+    log.err('Failed to create core tables', { message: e.message });
+  }
+}
+
+let gameplaySystemsTablesCreated = false;
+async function _ensureGameplaySystemsTables() {
+  if (gameplaySystemsTablesCreated) return;
+  try {
+    // 1. Domains
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS domains (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        description TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS domain_claims (
+        division INT PRIMARY KEY,
+        owner_character_id INT NULL,
+        owner_name VARCHAR(255) NOT NULL,
+        color VARCHAR(10) NOT NULL,
+        claimed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS domain_members (
+        domain_id INT NOT NULL,
+        character_id INT NOT NULL,
+        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (domain_id, character_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // 2. Downtimes
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS downtimes (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        character_id INT NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        feeding_type VARCHAR(100),
+        body TEXT NOT NULL,
+        status VARCHAR(50) DEFAULT 'submitted',
+        gm_notes TEXT,
+        gm_resolution TEXT,
+        resolved_at TIMESTAMP NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // 3. Coteries (Main System, distinct from hunt_groups)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS coteries (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        type VARCHAR(100) NULL,
+        domain_id INT NULL,
+        chasse INT DEFAULT 0,
+        lien INT DEFAULT 0,
+        portillon INT DEFAULT 0,
+        required_json JSON NULL,
+        backgrounds_json JSON NULL,
+        extras_json JSON NULL,
+        points_per_member INT DEFAULT 1,
+        coterie_xp INT DEFAULT 0,
+        created_by INT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS coterie_members (
+        coterie_id INT NOT NULL,
+        user_id INT NOT NULL,
+        display_name VARCHAR(190),
+        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (coterie_id, user_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // 4. Boons
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS boons (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        from_name VARCHAR(255) NOT NULL,
+        to_name VARCHAR(255) NOT NULL,
+        level VARCHAR(100) NOT NULL,
+        status VARCHAR(100) NOT NULL,
+        description TEXT,
+        date_incurred TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    gameplaySystemsTablesCreated = true;
+    log.ok('Gameplay systems (domains, downtimes, coteries, boons) verified/created.');
+  } catch (e) {
+    log.err('Failed to create gameplay systems tables', { message: e.message });
+  }
+}
+
+let pushSubscriptionTableCreated = false;
+async function _ensurePushSubscriptionsTable() {
+  if (pushSubscriptionTableCreated) return;
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS push_subscriptions (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        endpoint VARCHAR(512) NOT NULL UNIQUE,
+        subscription_json JSON NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    pushSubscriptionTableCreated = true;
+    log.ok('Push subscriptions table verified/created.');
+  } catch (e) {
+    log.err('Failed to create push_subscriptions table', { message: e.message });
+  }
+}
+
+// --- Trigger the new initializers ---
+_ensureCoreTables();
+_ensureGameplaySystemsTables();
+_ensurePushSubscriptionsTable();
+
 // 2. Helper Math Function: Haversine Formula for GPS distance (in meters)
 function calculateDistance(lat1, lon1, lat2, lon2) {
   const R = 6371e3; // Earth's radius in meters
@@ -4428,23 +4664,14 @@ app.get('/api/court/chat/npc/all', authRequired, requireCourt, async (_req, res)
 app.post('/api/push/subscribe', authRequired, async (req, res) => {
   try {
     const { subscription } = req.body || {};
+    
+    // Validate that we actually received a proper subscription object
     if (!subscription || !subscription.endpoint) {
       return res.status(400).json({ error: 'Valid subscription with endpoint is required' });
     }
 
     const endpoint = subscription.endpoint;
     const json = JSON.stringify(subscription);
-
-    // Ensure table exists (idempotent; comment out if you already created it)
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS push_subscriptions (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        user_id INT NOT NULL,
-        endpoint VARCHAR(512) NOT NULL UNIQUE,
-        subscription_json JSON NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB
-    `);
 
     // Upsert by endpoint, so repeated toggles don't duplicate
     await pool.query(
