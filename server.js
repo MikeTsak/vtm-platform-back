@@ -5439,6 +5439,27 @@ app.patch('/api/admin/hunts/:id/toggle', authRequired, requireAdmin, async (req,
   }
 });
 
+// Edit a step
+app.put('/api/admin/hunts/:huntId/steps/:stepId', authRequired, requireAdmin, async (req, res) => {
+  const { task_type, prompt, target_data } = req.body;
+  const tData = typeof target_data === 'string' ? target_data : JSON.stringify(target_data);
+  try {
+    await pool.query(
+      'UPDATE hunt_steps SET task_type=?, prompt=?, target_data=? WHERE id=?', 
+      [task_type, prompt, tData, req.params.stepId]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Delete a step
+app.delete('/api/admin/hunts/:huntId/steps/:stepId', authRequired, requireAdmin, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM hunt_steps WHERE id=?', [req.params.stepId]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // GET: List steps for a specific hunt
 app.get('/api/admin/hunts/:id/steps', authRequired, requireAdmin, async (req, res) => {
   try {
