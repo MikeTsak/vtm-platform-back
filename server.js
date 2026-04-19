@@ -5425,6 +5425,7 @@ app.post('/api/admin/hunts', authRequired, requireAdmin, async (req, res) => {
 });
 
 // --- ADMIN: Toggle Hunt Status ---
+
 // Updated to allow multiple active hunts simultaneously
 app.patch('/api/admin/hunts/:id/toggle', authRequired, requireAdmin, async (req, res) => {
   try {
