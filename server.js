@@ -5688,6 +5688,63 @@ app.post('/api/admin/hunts', authRequired, requireAdmin, async (req, res) => {
   }
 });
 
+// --- NEW: Move a Step Up or Down ---
+app.patch('/api/admin/hunts/:huntId/steps/:stepId/move/:direction', authRequired, requireAdmin, async (req, res) => {
+  const { huntId, stepId, direction } = req.params;
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    
+    // Get current step
+    const [[currentStep]] = await conn.query('SELECT id, step_order FROM hunt_steps WHERE id = ? AND hunt_id = ?', [stepId, huntId]);
+    if (!currentStep) throw new Error("Step not found");
+
+    const targetOrder = direction === 'up' ? currentStep.step_order - 1 : currentStep.step_order + 1;
+    
+    // Get the step we are swapping with
+    const [[swapStep]] = await conn.query('SELECT id, step_order FROM hunt_steps WHERE hunt_id = ? AND step_order = ?', [huntId, targetOrder]);
+    
+    if (swapStep) {
+      // Swap their orders
+      await conn.query('UPDATE hunt_steps SET step_order = ? WHERE id = ?', [targetOrder, currentStep.id]);
+      await conn.query('UPDATE hunt_steps SET step_order = ? WHERE id = ?', [currentStep.step_order, swapStep.id]);
+    }
+    
+    await conn.commit();
+    res.json({ ok: true });
+  } catch (e) {
+    await conn.rollback();
+    res.status(500).json({ error: 'Failed to reorder steps.' });
+  } finally {
+    conn.release();
+  }
+});
+
+// --- NEW: Force Advance a Player ---
+app.post('/api/admin/hunts/:huntId/progress/:userId/advance', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const huntId = Number(req.params.huntId);
+    const userId = Number(req.params.userId);
+
+    const [[progress]] = await pool.query('SELECT * FROM hunt_progress WHERE user_id=? AND hunt_id=?', [userId, huntId]);
+    if (!progress || progress.completed) return res.status(400).json({ error: 'Player is not active or already finished.' });
+
+    const [[currentStep]] = await pool.query('SELECT step_order FROM hunt_steps WHERE id=?', [progress.current_step_id]);
+    const [[nextStep]] = await pool.query('SELECT id FROM hunt_steps WHERE hunt_id=? AND step_order > ? ORDER BY step_order ASC LIMIT 1', [huntId, currentStep.step_order]);
+
+    if (nextStep) {
+      await pool.query('UPDATE hunt_progress SET current_step_id=? WHERE user_id=? AND hunt_id=?', [nextStep.id, userId, huntId]);
+    } else {
+      await pool.query('UPDATE hunt_progress SET completed=1 WHERE user_id=? AND hunt_id=?', [userId, huntId]);
+    }
+
+    log.adm('Admin forced player advance', { admin_id: req.user.id, target_user: userId, hunt_id: huntId });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to advance player.' });
+  }
+});
+
 // --- ADMIN: Toggle Hunt Status ---
 
 // Updated to allow multiple active hunts simultaneously
