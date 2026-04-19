@@ -510,16 +510,15 @@ async function _ensureHuntTables() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
-    // --- COTERIE / TEAM TABLES ---
+// --- COTERIE / TEAM TABLES ---
     await pool.query(`
       CREATE TABLE IF NOT EXISTS hunt_groups (
           id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-          hunt_id INT UNSIGNED NOT NULL,
+          hunt_id INT NOT NULL,
           name VARCHAR(255) NOT NULL,
           invite_code VARCHAR(10) NOT NULL UNIQUE,
           created_by INT NOT NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY (hunt_id) REFERENCES hunts(id) ON DELETE CASCADE
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
@@ -528,11 +527,9 @@ async function _ensureHuntTables() {
           group_id INT UNSIGNED NOT NULL,
           user_id INT NOT NULL,
           joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          PRIMARY KEY (group_id, user_id),
-          FOREIGN KEY (group_id) REFERENCES hunt_groups(id) ON DELETE CASCADE
+          PRIMARY KEY (group_id, user_id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
-
     // Patch for older databases: Add missing columns if they don't exist yet
     const [stepCols] = await pool.query("SHOW COLUMNS FROM hunt_steps LIKE 'manual_review'");
     if (stepCols.length === 0) {
@@ -5642,16 +5639,28 @@ app.post('/api/admin/hunts/:id/steps', authRequired, requireAdmin, async (req, r
 // DELETE: Completely remove a chronicle
 app.delete('/api/admin/hunts/:id', authRequired, requireAdmin, async (req, res) => {
   try {
-    // Because of 'ON DELETE CASCADE' in your schema, this safely wipes all 
-    // associated steps, progress, and submissions automatically.
-    await pool.query('DELETE FROM hunts WHERE id=?', [req.params.id]);
+    const huntId = req.params.id;
+    
+    // 1. Find all Coteries associated with this hunt
+    const [groups] = await pool.query('SELECT id FROM hunt_groups WHERE hunt_id=?', [huntId]);
+    if (groups.length > 0) {
+      const groupIds = groups.map(g => g.id);
+      // 2. Delete all members of those coteries
+      await pool.query('DELETE FROM hunt_group_members WHERE group_id IN (?)', [groupIds]);
+    }
+    
+    // 3. Delete the coteries themselves
+    await pool.query('DELETE FROM hunt_groups WHERE hunt_id=?', [huntId]);
+    
+    // 4. Finally, delete the actual chronicle
+    await pool.query('DELETE FROM hunts WHERE id=?', [huntId]);
+    
     res.json({ ok: true });
   } catch (e) {
     log.err('Failed to delete chronicle', { message: e.message });
     res.status(500).json({ error: 'Failed to delete chronicle' });
   }
 });
-
 // --- PLAYER ROUTES ---
 
 // --- TEAM / COTERIE SYSTEM FOR HUNTS ---
