@@ -1176,6 +1176,7 @@ let groupChatTablesCreated = false;
 async function _ensureGroupChatTables() {
   if (groupChatTablesCreated) return;
   try {
+    // 1. Δημιουργία πίνακα chat_groups
     await pool.query(`
       CREATE TABLE IF NOT EXISTS chat_groups (
         id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -1184,15 +1185,20 @@ async function _ensureGroupChatTables() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
+    
+    // 2. Δημιουργία πίνακα chat_group_members (Με την νέα στήλη last_read_at)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS chat_group_members (
         group_id INT UNSIGNED NOT NULL,
         user_id INT NOT NULL,
         joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_read_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (group_id, user_id),
         CONSTRAINT fk_cgm_group FOREIGN KEY (group_id) REFERENCES chat_groups(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
+    
+    // 3. Δημιουργία πίνακα chat_group_messages
     await pool.query(`
       CREATE TABLE IF NOT EXISTS chat_group_messages (
         id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -1200,9 +1206,18 @@ async function _ensureGroupChatTables() {
         sender_id INT NOT NULL,
         body TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        attachment_id INT UNSIGNED NULL,
         CONSTRAINT fk_cgms_group FOREIGN KEY (group_id) REFERENCES chat_groups(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
+
+    // --- PATCH: Αν ο πίνακας υπάρχει ήδη από πριν, προσθέτουμε την νέα στήλη ---
+    const [memberCols] = await pool.query("SHOW COLUMNS FROM chat_group_members LIKE 'last_read_at'");
+    if (memberCols.length === 0) {
+      await pool.query("ALTER TABLE chat_group_members ADD COLUMN last_read_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
+      log.ok('Added last_read_at column to chat_group_members');
+    }
+
     groupChatTablesCreated = true;
     log.ok('Group chat tables ready');
   } catch (e) {
@@ -3758,8 +3773,10 @@ app.delete('/api/boons/:id', authRequired, requireCourt, async (req, res) => {
 app.get('/api/chat/groups', authRequired, async (req, res) => {
   try {
     const userId = req.user.id;
-    // Χρήση COALESCE για να μπαίνει η ημερομηνία δημιουργίας αν δεν υπάρχει μήνυμα
-    // και ταξινόμηση ώστε τα πιο πρόσφατα (μηνύματα ή νέα groups) να είναι πάνω.
+    // Χρήση COALESCE για να μπαίνει η ημερομηνία δημιουργίας αν δεν υπάρχει μήνυμα.
+    // Προσθήκη unread_count: Μετράει πόσα μηνύματα (που ΔΕΝ έστειλε ο ίδιος ο χρήστης) 
+    // έχουν δημιουργηθεί μετά το last_read_at του συγκεκριμένου χρήστη στην ομάδα.
+    // Ταξινόμηση ώστε οι ομάδες με αδιάβαστα να πηγαίνουν πάνω, και μετά να ταξινομούνται ανά παλαιότητα.
     const [rows] = await pool.query(`
       SELECT 
         g.id, g.name, g.created_by, g.created_at as group_created_at,
@@ -3771,17 +3788,36 @@ app.get('/api/chat/groups', authRequired, async (req, res) => {
             ORDER BY created_at DESC LIMIT 1
           ), 
           g.created_at
-        ) as last_message_at
+        ) as last_message_at,
+        (
+          SELECT COUNT(*) 
+          FROM chat_group_messages 
+          WHERE group_id = g.id AND created_at > m.last_read_at AND sender_id != ?
+        ) as unread_count
       FROM chat_groups g
       JOIN chat_group_members m ON m.group_id = g.id
       WHERE m.user_id = ?
-      ORDER BY last_message_at DESC
-    `, [userId]);
+      ORDER BY unread_count DESC, last_message_at DESC
+    `, [userId, userId]); // <-- Προσοχή: Βάλαμε το userId δύο φορές στα parameters!
 
     res.json({ groups: rows });
   } catch (e) {
     log.err('Failed to get chat groups', { message: e.message });
     res.status(500).json({ error: 'Failed to get groups' });
+  }
+});
+
+// Mark all messages in a group as read (updates last_read_at)
+app.post('/api/chat/groups/:id/read', authRequired, async (req, res) => {
+  try {
+    const groupId = Number(req.params.id);
+    await pool.query(
+      'UPDATE chat_group_members SET last_read_at = NOW() WHERE group_id = ? AND user_id = ?',
+      [groupId, req.user.id]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to mark group as read' });
   }
 });
 
@@ -3957,7 +3993,28 @@ app.post('/api/chat/groups/:id/messages', authRequired, async (req, res) => {
       WHERE m.id = ?
     `, [r.insertId]);
 
-    // ... (Keep existing PUSH logic) ...
+    // --- NEW: PUSH NOTIFICATIONS ΓΙΑ ΟΜΑΔΙΚΕΣ ---
+    try {
+      // 1. Βρίσκουμε το όνομα της ομάδας
+      const [[groupInfo]] = await pool.query('SELECT name FROM chat_groups WHERE id=?', [groupId]);
+      const groupName = groupInfo?.name || 'Group Chat';
+      const senderName = message.char_name || message.display_name || 'Someone';
+
+      // 2. Φτιάχνουμε το περιεχόμενο της ειδοποίησης
+      const notifTitle = `💬 ${groupName} (${senderName})`;
+      const notifBody = message.attachment_id ? '📷 Image Attachment' : message.body;
+
+      // 3. Βρίσκουμε όλα τα μέλη εκτός από τον αποστολέα
+      const [members] = await pool.query('SELECT user_id FROM chat_group_members WHERE group_id=? AND user_id!=?', [groupId, req.user.id]);
+
+      // 4. Στέλνουμε push notification στο κάθε μέλος
+      for (const member of members) {
+        await sendPushNotification(member.user_id, notifTitle, notifBody).catch(() => {});
+      }
+    } catch (pushErr) {
+      log.err('Failed to notify group members', { error: pushErr.message });
+    }
+    // --------------------------------------------
 
     res.status(201).json({ message });
   } catch (e) {
