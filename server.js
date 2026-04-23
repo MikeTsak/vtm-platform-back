@@ -1460,6 +1460,22 @@ function formatDate(d) {
 }
 
 
+app.get('/api/debug/db-check', async (req, res) => {
+  try {
+    const [hunts] = await pool.query('SELECT id, title, is_active, created_at FROM hunts ORDER BY created_at DESC LIMIT 10');
+    const [steps] = await pool.query('SELECT id, hunt_id, step_order, task_type, prompt FROM hunt_steps ORDER BY id DESC LIMIT 10');
+    res.json({
+      ok: true,
+      env: process.env.NODE_ENV || 'unknown',
+      db_name: process.env.DB_NAME || process.env.MYSQL_DATABASE || null,
+      hunts,
+      steps
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Friendly HTML at "/" (quick glance in the browser)
 app.get('/', async (req, res) => {
   const errors = [];
