@@ -6092,90 +6092,158 @@ app.post('/api/hunts/:huntId/groups/join', authRequired, async (req, res) => {
 
 // GET: Player's active hunts, current progress, and Coterie info
 app.get('/api/hunts/active', authRequired, async (req, res) => {
-  // --- FIX: Force fresh data every time by disabling cache ---
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
 
   try {
-    const [activeHunts] = await pool.query('SELECT * FROM hunts WHERE is_active=1');
-    if (activeHunts.length === 0) return res.json({ activeHunts: [] });
+    const [activeHunts] = await pool.query(
+      'SELECT * FROM hunts WHERE is_active = 1 ORDER BY created_at DESC'
+    );
 
-    const huntsWithMetadata = await Promise.all(activeHunts.map(async (hunt) => {
-      // 1. Get player's progress
-      const [[progress]] = await pool.query('SELECT * FROM hunt_progress WHERE user_id=? AND hunt_id=?', [req.user.id, hunt.id]);
-      
-      // 2. Determine if it's already claimed by someone else
-      const [[winner]] = await pool.query('SELECT id FROM hunt_progress WHERE hunt_id=? AND completed=1 LIMIT 1', [hunt.id]);
-      const isGloballyFinished = !!winner;
+    if (activeHunts.length === 0) {
+      return res.json({ activeHunts: [] });
+    }
 
-      // 3. Count competitors
-      const [[competitorCount]] = await pool.query('SELECT COUNT(*) as c FROM hunt_progress WHERE hunt_id=? AND user_id!=? AND completed=0', [hunt.id, req.user.id]);
-      const active_hunters = competitorCount.c;
+    const huntsWithMetadata = await Promise.all(
+      activeHunts.map(async (hunt) => {
+        const [[progressRow]] = await pool.query(
+          'SELECT * FROM hunt_progress WHERE user_id = ? AND hunt_id = ?',
+          [req.user.id, hunt.id]
+        );
 
-      // 4. Determine current step
-      let currentStep;
-      if (!progress) {
-        // First time joining the hunt: give them step 1
-        const [[firstStep]] = await pool.query('SELECT * FROM hunt_steps WHERE hunt_id=? ORDER BY step_order ASC LIMIT 1', [hunt.id]);
-        if (!firstStep) return null; // Hunt has no steps yet
-        await pool.query('INSERT INTO hunt_progress (user_id, hunt_id, current_step_id) VALUES (?,?,?)', [req.user.id, hunt.id, firstStep.id]);
-        currentStep = firstStep;
-      } else if (progress.completed) {
-        // Already finished: get the last step so the UI doesn't crash
-        const [[lastStep]] = await pool.query('SELECT * FROM hunt_steps WHERE hunt_id=? ORDER BY step_order DESC LIMIT 1', [hunt.id]);
-        currentStep = lastStep;
-      } else {
-        // In progress: fetch their current step
-        const [[step]] = await pool.query('SELECT * FROM hunt_steps WHERE id=?', [progress.current_step_id]);
-        currentStep = step;
-      }
+        const [[winner]] = await pool.query(
+          'SELECT id FROM hunt_progress WHERE hunt_id = ? AND completed = 1 LIMIT 1',
+          [hunt.id]
+        );
+        const isGloballyFinished = !!winner;
 
-      if (!currentStep) return null;
+        const [[competitorCount]] = await pool.query(
+          'SELECT COUNT(*) AS c FROM hunt_progress WHERE hunt_id = ? AND user_id != ? AND completed = 0',
+          [hunt.id, req.user.id]
+        );
+        const active_hunters = competitorCount.c;
 
-      // 5. Calculate percentage completed
-      const [[totalSteps]] = await pool.query('SELECT COUNT(*) as t FROM hunt_steps WHERE hunt_id=?', [hunt.id]);
-      let percent = 0;
-      if (progress?.completed) percent = 100;
-      else if (currentStep.step_order > 1) percent = Math.round(((currentStep.step_order - 1) / totalSteps.t) * 100);
+        const [[firstStep]] = await pool.query(
+          'SELECT * FROM hunt_steps WHERE hunt_id = ? ORDER BY step_order ASC LIMIT 1',
+          [hunt.id]
+        );
 
-      // --- 6. Fetch Team/Coterie Data ---
-      let teamData = null;
-      const [[myGroup]] = await pool.query(`
-        SELECT g.id, g.name, g.invite_code
-        FROM hunt_groups g
-        JOIN hunt_group_members m ON m.group_id = g.id
-        WHERE m.user_id = ? AND g.hunt_id = ?
-      `, [req.user.id, hunt.id]);
+        let progress = progressRow || null;
+        let currentStep = null;
+        let isReady = !!firstStep;
 
-      if (myGroup) {
-        const [members] = await pool.query(`
-          SELECT COALESCE(c.name, u.display_name) as member_name
-          FROM hunt_group_members m
-          JOIN users u ON m.user_id = u.id
-          LEFT JOIN characters c ON c.user_id = u.id
-          WHERE m.group_id = ?
-        `, [myGroup.id]);
-        
-        teamData = {
-          name: myGroup.name,
-          invite_code: myGroup.invite_code,
-          members: members.map(m => m.member_name)
-        };
-      }
-
-      return {
-        hunt,
-        step: currentStep,
-        team: teamData,
-        progress: {
-          percent,
-          completed: progress ? !!progress.completed : false,
-          isGloballyFinished,
-          otherHunters: active_hunters
+        // No steps yet: still return the hunt so it appears in the player list
+        if (!firstStep) {
+          return {
+            hunt,
+            step: {
+              id: null,
+              step_order: 0,
+              prompt: 'This hunt is active, but no steps have been published yet.',
+              task_type: 'text'
+            },
+            team: null,
+            progress: {
+              percent: 0,
+              completed: false,
+              isGloballyFinished,
+              otherHunters: active_hunters
+            },
+            isReady: false
+          };
         }
-      };
-    }));
 
-    res.json({ activeHunts: huntsWithMetadata.filter(Boolean) });
+        if (!progress) {
+          await pool.query(
+            'INSERT INTO hunt_progress (user_id, hunt_id, current_step_id) VALUES (?, ?, ?)',
+            [req.user.id, hunt.id, firstStep.id]
+          );
+
+          progress = {
+            user_id: req.user.id,
+            hunt_id: hunt.id,
+            current_step_id: firstStep.id,
+            completed: 0
+          };
+
+          currentStep = firstStep;
+        } else if (progress.completed) {
+          const [[lastStep]] = await pool.query(
+            'SELECT * FROM hunt_steps WHERE hunt_id = ? ORDER BY step_order DESC LIMIT 1',
+            [hunt.id]
+          );
+          currentStep = lastStep || firstStep;
+        } else {
+          const [[step]] = await pool.query(
+            'SELECT * FROM hunt_steps WHERE id = ? AND hunt_id = ?',
+            [progress.current_step_id, hunt.id]
+          );
+
+          if (step) {
+            currentStep = step;
+          } else {
+            // self-heal stale progress when a step was deleted/reordered
+            await pool.query(
+              'UPDATE hunt_progress SET current_step_id = ? WHERE user_id = ? AND hunt_id = ?',
+              [firstStep.id, req.user.id, hunt.id]
+            );
+            progress.current_step_id = firstStep.id;
+            currentStep = firstStep;
+          }
+        }
+
+        const [[totalSteps]] = await pool.query(
+          'SELECT COUNT(*) AS t FROM hunt_steps WHERE hunt_id = ?',
+          [hunt.id]
+        );
+
+        let percent = 0;
+        if (progress?.completed) {
+          percent = 100;
+        } else if (currentStep?.step_order > 1 && totalSteps.t > 0) {
+          percent = Math.round(((currentStep.step_order - 1) / totalSteps.t) * 100);
+        }
+
+        let teamData = null;
+        const [[myGroup]] = await pool.query(`
+          SELECT g.id, g.name, g.invite_code
+          FROM hunt_groups g
+          JOIN hunt_group_members m ON m.group_id = g.id
+          WHERE m.user_id = ? AND g.hunt_id = ?
+          LIMIT 1
+        `, [req.user.id, hunt.id]);
+
+        if (myGroup) {
+          const [members] = await pool.query(`
+            SELECT COALESCE(c.name, u.display_name) AS member_name
+            FROM hunt_group_members m
+            JOIN users u ON m.user_id = u.id
+            LEFT JOIN characters c ON c.user_id = u.id
+            WHERE m.group_id = ?
+          `, [myGroup.id]);
+
+          teamData = {
+            name: myGroup.name,
+            invite_code: myGroup.invite_code,
+            members: members.map(m => m.member_name)
+          };
+        }
+
+        return {
+          hunt,
+          step: currentStep,
+          team: teamData,
+          progress: {
+            percent,
+            completed: !!progress?.completed,
+            isGloballyFinished,
+            otherHunters: active_hunters
+          },
+          isReady
+        };
+      })
+    );
+
+    res.json({ activeHunts: huntsWithMetadata });
   } catch (e) {
     log.err('Failed to fetch active hunts', { message: e.message });
     res.status(500).json({ error: 'Failed to sync chronicles' });
