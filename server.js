@@ -17,6 +17,8 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer'); // Import multer
 const { Client, GatewayIntentBits } = require('discord.js');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, NoSubscriberBehavior } = require('@discordjs/voice');
+const play = require('play-dl');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 // For meme generation
 const sharp = require('sharp');
@@ -59,7 +61,6 @@ app.use('/api/admin', (req, res, next) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
   next();
 });
-
 
 // Add this to server.js
 let passwordResetsTableCreated = false;
@@ -263,7 +264,8 @@ if (process.env.DISCORD_BOT_TOKEN) {
     intents: [
       GatewayIntentBits.Guilds, 
       GatewayIntentBits.GuildMessages,
-      GatewayIntentBits.MessageContent
+      GatewayIntentBits.MessageContent,
+      GatewayIntentBits.GuildVoiceStates
     ],
     ws: { compress: false },
     rest: { timeout: 15000 },
@@ -294,12 +296,53 @@ if (process.env.DISCORD_BOT_TOKEN) {
       log.err('Failed to send startup message to Discord', { error: e.message });
     }
   });
-// --- Meme Maker Feature ---
+
+// --- Main discord client ---
   discordClient.on('messageCreate', async (message) => {
     // Ignore bots to prevent infinite loops
     if (message.author.bot) return;
 
-    // Check for our &meme command
+    // --- V5 Dice Roller ---
+    if (message.content.toLowerCase().startsWith('&roll')) {
+      // Parse arguments: &roll [pool] [hunger]
+      const args = message.content.slice(5).trim().split(/\s+/);
+      const poolCount = Math.max(1, parseInt(args[0]) || 1); // Default to 1 die minimum
+      const hungerInput = Math.max(0, parseInt(args[1]) || 0);
+
+      // In V5, Hunger dice replace normal dice up to the total pool size
+      const hungerCount = Math.min(poolCount, hungerInput);
+      const normalCount = poolCount - hungerCount;
+
+      // Helper to roll a d10
+      const roll10 = () => Math.floor(Math.random() * 10) + 1;
+      
+      const normalRolls = Array.from({ length: normalCount }, roll10);
+      const hungerRolls = Array.from({ length: hungerCount }, roll10);
+
+      // Run it through your existing math function!
+      const outcome = computeV5Outcome({ normal: normalRolls, hunger: hungerRolls });
+
+      // Build the thematic Discord response
+      let title = "🦇 V5 Dice Roll";
+      if (outcome.messy_crit) title = "🩸 **MESSY CRITICAL!**";
+      else if (outcome.bestial_failure) title = "💀 **BESTIAL FAILURE!**";
+      else if (outcome.crit_pairs > 0) title = "🌟 **CRITICAL SUCCESS!**";
+
+      let reply = `${title}\n<@${message.author.id}> rolled **${poolCount}** dice (${hungerCount} Hunger).\n\n`;
+      
+      if (normalCount > 0) {
+        reply += `**Normal Dice:** [ ${normalRolls.join(', ')} ]\n`;
+      }
+      if (hungerCount > 0) {
+        reply += `**Hunger Dice:** [ ${hungerRolls.join(', ')} ]\n`;
+      }
+      
+      reply += `\n**Total Successes:** ${outcome.successes}`;
+
+      return message.reply(reply);
+    }
+
+    // --- Meme Maker Feature ---
     if (message.content.toLowerCase().startsWith('&meme')) {
       const text = message.content.slice(5).trim();
       
@@ -5328,7 +5371,40 @@ app.post('/api/admin/premonitions/send', authRequired, requireAdmin, async (req,
         'INSERT INTO premonition_recipients (premonition_id, user_id) VALUES ?',
         [values]
       );
+
+      // --- NEW: DISCORD PREMONITION DMs ---
+      if (discordClient?.isReady()) {
+        try {
+          // Fetch the Discord IDs for the targeted users
+          const [userRows] = await pool.query(
+            `SELECT discord_id FROM users WHERE id IN (?) AND discord_id IS NOT NULL AND discord_id != ''`,
+            [uniqueUserIds]
+          );
+
+          for (const row of userRows) {
+            try {
+              // Fetch the user from Discord and DM them
+              const discordUser = await discordClient.users.fetch(row.discord_id);
+              if (discordUser) {
+                let dmMsg = `🧠 **A sudden vision pierces your mind...**\n\n`;
+                if (content_text) dmMsg += `_${content_text}_\n`;
+                if (content_url) dmMsg += `\n${content_url}`;
+                
+                await discordUser.send(dmMsg);
+              }
+            } catch (dmErr) {
+              log.warn(`Failed to DM Discord user ${row.discord_id}`, { error: dmErr.message });
+            }
+          }
+        } catch (dbErr) {
+          log.err('Failed to fetch Discord IDs for premonitions', { error: dbErr.message });
+        }
+      }
+      // ------------------------------------
     }
+    
+    log.adm('Admin sent premonition', { id: premonitionId, by_user_id: req.user.id, targets: sendToAllMalks ? 'all_malks' : targetUserIds });
+    res.status(201).json({ ok: true, premonition_id: premonitionId, count: targetUserIds.length });
     
     log.adm('Admin sent premonition', { id: premonitionId, by_user_id: req.user.id, targets: sendToAllMalks ? 'all_malks' : targetUserIds });
     res.status(201).json({ ok: true, premonition_id: premonitionId, count: targetUserIds.length });
@@ -5721,6 +5797,32 @@ app.post('/api/news', authRequired, async (req, res) => {
         media_url || null
       ]
     );
+
+    // --- NEW: DISCORD NEWS BROADCAST ---
+    if (discordClient?.isReady()) {
+      try {
+        // Grab the channel ID from your settings table
+        const channelId = await getSetting('discord_channel_id', null);
+        if (channelId) {
+          const channel = await discordClient.channels.fetch(channelId);
+          if (channel) {
+            // Strip HTML tags from the body so it looks clean in Discord
+            const cleanBody = body.replace(/<[^>]*>?/gm, '');
+            const snippet = cleanBody.length > 300 ? cleanBody.substring(0, 300) + '...' : cleanBody;
+            
+            let broadcast = `📰 **NEW EREBUS ${type.toUpperCase()}** 📰\n\n**${title}**\n`;
+            if (subtitle) broadcast += `*${subtitle}*\n`;
+            broadcast += `\n${snippet}\n\n*Check the Erebus Portal for the full text.*`;
+            
+            await channel.send(broadcast);
+          }
+        }
+      } catch (discordErr) {
+        // Fail gracefully so the API request still succeeds
+        log.err('Discord news broadcast failed', { error: discordErr.message });
+      }
+    }
+    // -----------------------------------
 
     log.ok('News entry created', { user_id: req.user.id, type, title });
     res.json({ ok: true });
