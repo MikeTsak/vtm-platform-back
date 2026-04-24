@@ -5586,42 +5586,57 @@ app.post('/api/admin/premonitions/send', authRequired, requireAdmin, async (req,
         [values]
       );
 
-      // --- NEW: DISCORD PREMONITION DMs ---
-      if (discordClient?.isReady()) {
+// --- UPDATED: DISCORD PREMONITION DMs ---
+      const discordEnabled = await getSetting('discord_enabled', 'true') === 'true';
+      const notifyPrems = await getSetting('discord_notify_prems', 'true') === 'true';
+
+      if (discordEnabled && notifyPrems && discordClient?.isReady()) {
         try {
-          // Fetch the Discord IDs for the targeted users
           const [userRows] = await pool.query(
-            `SELECT discord_id FROM users WHERE id IN (?) AND discord_id IS NOT NULL AND discord_id != ''`,
+            `SELECT discord_id, display_name FROM users WHERE id IN (?) AND discord_id IS NOT NULL AND discord_id != ''`,
             [uniqueUserIds]
           );
 
+          // Log how many Discord accounts were found
+          log.ok(`Discord Premonition: Found ${userRows.length} linked accounts for targets.`, { targets: uniqueUserIds });
+
           for (const row of userRows) {
             try {
-              // Fetch the user from Discord and DM them
               const discordUser = await discordClient.users.fetch(row.discord_id);
               if (discordUser) {
                 let dmMsg = `🧠 **A sudden vision pierces your mind...**\n\n`;
                 if (content_text) dmMsg += `_${content_text}_\n`;
-                if (content_url) dmMsg += `\n${content_url}`;
+
+                if (content_type === 'image' || content_type === 'video') {
+                  dmMsg += `\n👁️ **View Vision:** https://portal.attlarp.gr/media/${premonitionId}`;
+                } else if (content_url) {
+                  dmMsg += `\n🔗 ${content_url}`;
+                }
                 
                 await discordUser.send(dmMsg);
+                log.ok(`Premonition DM sent to ${row.display_name}`);
               }
             } catch (dmErr) {
-              log.warn(`Failed to DM Discord user ${row.discord_id}`, { error: dmErr.message });
+              log.warn(`Failed to DM Discord user ${row.discord_id} (${row.display_name})`, { error: dmErr.message });
             }
           }
         } catch (dbErr) {
           log.err('Failed to fetch Discord IDs for premonitions', { error: dbErr.message });
         }
+      } else {
+        // This log will appear if the bot skips the DM process entirely
+        log.warn('Discord DM Skipped: Feature is toggled OFF or Bot is not ready.', { 
+          enabled: discordEnabled, 
+          notify: notifyPrems, 
+          ready: discordClient?.isReady() 
+        });
       }
       // ------------------------------------
     }
     
     log.adm('Admin sent premonition', { id: premonitionId, by_user_id: req.user.id, targets: sendToAllMalks ? 'all_malks' : targetUserIds });
     res.status(201).json({ ok: true, premonition_id: premonitionId, count: targetUserIds.length });
-    
-    log.adm('Admin sent premonition', { id: premonitionId, by_user_id: req.user.id, targets: sendToAllMalks ? 'all_malks' : targetUserIds });
-    res.status(201).json({ ok: true, premonition_id: premonitionId, count: targetUserIds.length });
+  
 
   } catch (e) {
     log.err('Failed to send premonition', { message: e.message, stack: e.stack });
