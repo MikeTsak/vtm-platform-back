@@ -16,7 +16,7 @@ const webpush = require('web-push');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer'); // Import multer
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, NoSubscriberBehavior } = require('@discordjs/voice');
 const play = require('play-dl');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
@@ -299,47 +299,162 @@ if (process.env.DISCORD_BOT_TOKEN) {
 
 // --- Main discord client ---
   discordClient.on('messageCreate', async (message) => {
+    // Check Master Switch
+    const isEnabled = await getSetting('discord_enabled', 'true') === 'true';
+    if (!isEnabled) return;
     // Ignore bots to prevent infinite loops
     if (message.author.bot) return;
 
-    // --- V5 Dice Roller ---
+// --- FANCY V5 DICE ROLLER WITH WILLPOWER ---
     if (message.content.toLowerCase().startsWith('&roll')) {
-      // Parse arguments: &roll [pool] [hunger]
       const args = message.content.slice(5).trim().split(/\s+/);
-      const poolCount = Math.max(1, parseInt(args[0]) || 1); // Default to 1 die minimum
+      const poolCount = Math.max(1, parseInt(args[0]) || 1);
       const hungerInput = Math.max(0, parseInt(args[1]) || 0);
 
-      // In V5, Hunger dice replace normal dice up to the total pool size
       const hungerCount = Math.min(poolCount, hungerInput);
       const normalCount = poolCount - hungerCount;
 
-      // Helper to roll a d10
       const roll10 = () => Math.floor(Math.random() * 10) + 1;
       
-      const normalRolls = Array.from({ length: normalCount }, roll10);
-      const hungerRolls = Array.from({ length: hungerCount }, roll10);
+      let normalRolls = Array.from({ length: normalCount }, roll10);
+      let hungerRolls = Array.from({ length: hungerCount }, roll10);
 
-      // Run it through your existing math function!
+      // Assumes computeV5Outcome is defined elsewhere in your server.js
       const outcome = computeV5Outcome({ normal: normalRolls, hunger: hungerRolls });
 
-      // Build the thematic Discord response
-      let title = "🦇 V5 Dice Roll";
-      if (outcome.messy_crit) title = "🩸 **MESSY CRITICAL!**";
-      else if (outcome.bestial_failure) title = "💀 **BESTIAL FAILURE!**";
-      else if (outcome.crit_pairs > 0) title = "🌟 **CRITICAL SUCCESS!**";
+      // Helper to format dice aesthetically
+      const formatDice = (rolls, isHunger) => {
+        if (!rolls || rolls.length === 0) return 'None';
+        return rolls.map(r => {
+          if (r === 10) return `**[10]**`;
+          if (r === 1 && isHunger) return `**[1]**`; // Bestial failure risk
+          if (r >= 6) return `[${r}]`;
+          return `\`${r}\``; // Failures look slightly dimmed
+        }).join(' ');
+      };
 
-      let reply = `${title}\n<@${message.author.id}> rolled **${poolCount}** dice (${hungerCount} Hunger).\n\n`;
-      
-      if (normalCount > 0) {
-        reply += `**Normal Dice:** [ ${normalRolls.join(', ')} ]\n`;
-      }
-      if (hungerCount > 0) {
-        reply += `**Hunger Dice:** [ ${hungerRolls.join(', ')} ]\n`;
-      }
-      
-      reply += `\n**Total Successes:** ${outcome.successes}`;
+      // 1. Build the Embed with your custom App Images
+      const buildEmbed = (currentNormal, currentHunger, currentOutcome, usedWillpower = false) => {
+        let title = "🦇 V5 Dice Roll";
+        let color = 0x2b2d31; // Default dark Discord color
+        let imageUrl = null;  // Custom image variable
 
-      return message.reply(reply);
+        if (currentOutcome.messy_crit) {
+          title = "🩸 **MESSY CRITICAL!**";
+          color = 0x8a0303; // Deep red
+          imageUrl = 'https://portal.attlarp.gr/img/dice/MessyCrit.png';
+        } else if (currentOutcome.bestial_failure) {
+          title = "💀 **BESTIAL FAILURE!**";
+          color = 0x000000; // Black
+          imageUrl = 'https://portal.attlarp.gr/img/dice/BestialFail.png';
+        } else if (currentOutcome.crit_pairs > 0) {
+          title = "🌟 **CRITICAL SUCCESS!**";
+          color = 0xd4af37; // Gold
+          imageUrl = 'https://portal.attlarp.gr/img/dice/Crit.png';
+        } else if (currentOutcome.successes > 0) {
+          title = "🦇 **SUCCESS**";
+          color = 0x3ecf8e; // Green
+          imageUrl = 'https://portal.attlarp.gr/img/dice/Success.png';
+        } else {
+          title = "🌑 **FAILURE**";
+          color = 0x5c5c63; // Grey
+        }
+
+        const embed = new EmbedBuilder()
+          .setTitle(title)
+          .setColor(color)
+          .setAuthor({ name: message.author.displayName, iconURL: message.author.displayAvatarURL() })
+          .setDescription(`Rolled **${poolCount}** dice (${currentHunger.length} Hunger).${usedWillpower ? '\n*✨ Spent Willpower to reroll failures.*' : ''}`)
+          .addFields(
+            { name: 'Normal Dice', value: formatDice(currentNormal, false), inline: false },
+            { name: 'Hunger Dice', value: formatDice(currentHunger, true), inline: false },
+            { name: 'Total Successes', value: `**${currentOutcome.successes}**`, inline: false }
+          );
+
+        // Attach the thumbnail if one was assigned
+        if (imageUrl) {
+          embed.setThumbnail(imageUrl);
+        }
+
+        return embed;
+      };
+
+      // Check if they even have failing normal dice to reroll
+      const failingNormalCount = normalRolls.filter(r => r <= 5).length;
+      const canReroll = normalCount > 0 && failingNormalCount > 0;
+
+      // 2. Build the Willpower Button
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('reroll_wp')
+          .setLabel('Spend Willpower (Reroll up to 3)')
+          .setStyle(ButtonStyle.Danger)
+          .setDisabled(!canReroll)
+      );
+
+      // 3. Send the Initial Message
+      const reply = await message.reply({ 
+        embeds: [buildEmbed(normalRolls, hungerRolls, outcome)], 
+        components: [row] 
+      });
+
+      // 4. Create the Interactive Button Collector (lasts for 5 minutes)
+      const collector = reply.createMessageComponentCollector({ 
+        componentType: ComponentType.Button, 
+        time: 300000 
+      });
+
+      collector.on('collect', async (interaction) => {
+        // Security: Only the person who rolled can press the reroll button
+        if (interaction.user.id !== message.author.id) {
+          return interaction.reply({ content: '🦇 You cannot spend Willpower for someone else!', ephemeral: true });
+        }
+
+        if (interaction.customId === 'reroll_wp') {
+          // Find up to 3 normal dice that failed (1-5) and reroll them
+          let rerollsLeft = 3;
+          let newNormalRolls = [...normalRolls];
+
+          for (let i = 0; i < newNormalRolls.length; i++) {
+            if (newNormalRolls[i] <= 5 && rerollsLeft > 0) {
+              newNormalRolls[i] = roll10();
+              rerollsLeft--;
+            }
+          }
+
+          // Re-calculate outcome
+          const newOutcome = computeV5Outcome({ normal: newNormalRolls, hunger: hungerRolls });
+
+          // Disable the button so they can't spam it
+          const disabledRow = new ActionRowBuilder().addComponents(
+            ButtonBuilder.from(interaction.component).setDisabled(true).setLabel('Willpower Spent')
+          );
+
+          // Update the message with the new rolls and image
+          await interaction.update({ 
+            embeds: [buildEmbed(newNormalRolls, hungerRolls, newOutcome, true)], 
+            components: [disabledRow] 
+          });
+          
+          collector.stop('wp_spent');
+        }
+      });
+
+      collector.on('end', (collected, reason) => {
+        // If the 5 minutes run out and nobody clicked it, disable the button to clean up the UI
+        if (reason === 'time') {
+          const disabledRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId('reroll_wp_timeout')
+              .setLabel('Spend Willpower (Time Expired)')
+              .setStyle(ButtonStyle.Secondary)
+              .setDisabled(true)
+          );
+          reply.edit({ components: [disabledRow] }).catch(() => {});
+        }
+      });
+
+      return;
     }
 
     // --- Meme Maker Feature ---
@@ -957,6 +1072,12 @@ startDailyMailCheck();
 async function sendDiscordMailNotifications(isTest = false) {
   if (!discordClient?.isReady()) return;
   
+  const isEnabled = await getSetting('discord_enabled', 'true') === 'true';
+  const notifyMail = await getSetting('discord_notify_mail', 'true') === 'true';
+
+  if (!isEnabled) return;
+  if (!notifyMail && !isTest) return; // Allow tests to bypass the mail toggle
+
   try {
     // 1. Get Channel ID from DB
     const channelId = await getSetting('discord_channel_id', null);
@@ -4321,14 +4442,27 @@ app.post('/api/chat/read', authRequired, async (req, res) => {
 
 /* -------------------- ADMIN DISCORD SETTINGS -------------------- */
 
+/* -------------------- ADMIN DISCORD SETTINGS -------------------- */
+
 // Get current Discord settings
 app.get('/api/admin/discord/config', authRequired, requireAdmin, async (req, res) => {
   try {
     const channelId = await getSetting('discord_channel_id', '');
     const scheduleTime = await getSetting('discord_schedule_time', '12:00');
+    
+    // New feature toggles (default to true)
+    const discord_enabled = await getSetting('discord_enabled', 'true') === 'true';
+    const notify_mail = await getSetting('discord_notify_mail', 'true') === 'true';
+    const notify_news = await getSetting('discord_notify_news', 'true') === 'true';
+    const notify_prems = await getSetting('discord_notify_prems', 'true') === 'true';
+
     res.json({
       discord_channel_id: channelId,
       discord_schedule_time: scheduleTime,
+      discord_enabled,
+      notify_mail,
+      notify_news,
+      notify_prems,
       bot_status: discordClient?.isReady() ? 'Online' : 'Offline',
       bot_name: discordClient?.user?.tag || 'N/A'
     });
@@ -4341,21 +4475,26 @@ app.get('/api/admin/discord/config', authRequired, requireAdmin, async (req, res
 // Update Discord settings
 app.post('/api/admin/discord/config', authRequired, requireAdmin, async (req, res) => {
   try {
-    const { discord_channel_id, discord_schedule_time } = req.body;
+    const { 
+      discord_channel_id, discord_schedule_time, 
+      discord_enabled, notify_mail, notify_news, notify_prems 
+    } = req.body;
     
-    if (discord_channel_id !== undefined) {
-      await setSetting('discord_channel_id', discord_channel_id.trim());
-    }
+    if (discord_channel_id !== undefined) await setSetting('discord_channel_id', String(discord_channel_id).trim());
     
     if (discord_schedule_time !== undefined) {
-      // Basic validation for HH:MM format
       if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(discord_schedule_time)) {
         return res.status(400).json({ error: 'Invalid time format. Use HH:MM (24h).' });
       }
-      await setSetting('discord_schedule_time', discord_schedule_time);
+      await setSetting('discord_schedule_time', String(discord_schedule_time));
     }
 
-    log.adm('Updated Discord settings', { admin_id: req.user.id, channel: discord_channel_id, time: discord_schedule_time });
+    if (discord_enabled !== undefined) await setSetting('discord_enabled', String(discord_enabled));
+    if (notify_mail !== undefined) await setSetting('discord_notify_mail', String(notify_mail));
+    if (notify_news !== undefined) await setSetting('discord_notify_news', String(notify_news));
+    if (notify_prems !== undefined) await setSetting('discord_notify_prems', String(notify_prems));
+
+    log.adm('Updated Discord settings', { admin_id: req.user.id });
     res.json({ ok: true });
   } catch (e) {
     log.err('Update discord config failed', { message: e.message });
@@ -4363,15 +4502,90 @@ app.post('/api/admin/discord/config', authRequired, requireAdmin, async (req, re
   }
 });
 
-// Trigger manual test notification
-app.post('/api/admin/discord/test', authRequired, requireAdmin, async (req, res) => {
+// Trigger manual test notifications
+app.post('/api/admin/discord/test/:type', authRequired, requireAdmin, async (req, res) => {
   try {
-    log.adm('Triggering manual Discord mail test', { admin_id: req.user.id });
-    await sendDiscordMailNotifications(true); // Pass true to enable test mode
-    res.json({ ok: true, message: 'Test procedure initiated.' });
+    const { type } = req.params;
+    const channelId = await getSetting('discord_channel_id', null);
+    
+    if (!discordClient?.isReady()) {
+      return res.status(503).json({ error: 'Discord bot is currently offline.' });
+    }
+
+    if (type === 'mail') {
+      await sendDiscordMailNotifications(true); // Pass true to force the test
+      return res.json({ ok: true, message: 'Mail test triggered.' });
+    } 
+    
+    if (type === 'news') {
+      if (!channelId) return res.status(400).json({ error: 'No channel configured.' });
+      const channel = await discordClient.channels.fetch(channelId);
+      await channel.send("📰 **TEST BROADCAST** 📰\n\nThis is a test of the Erebus News Network emergency broadcast system.");
+      return res.json({ ok: true, message: 'News test broadcast sent.' });
+    }
+
+    if (type === 'premonition') {
+      // Find the admin's discord ID to send them a test DM
+      const [[adminRow]] = await pool.query('SELECT discord_id FROM users WHERE id=?', [req.user.id]);
+      if (!adminRow?.discord_id) {
+        return res.status(400).json({ error: 'You must link your Discord ID in the Users tab to receive a test premonition.' });
+      }
+      const discordUser = await discordClient.users.fetch(adminRow.discord_id);
+      await discordUser.send("🧠 **TEST VISION**\n\nThe shadows whisper to you: *The system is functioning perfectly.*");
+      return res.json({ ok: true, message: 'Test premonition sent to your DMs.' });
+    }
+
+    res.status(400).json({ error: 'Unknown test type.' });
   } catch (e) {
     log.err('Manual Discord test failed', { message: e.message });
-    res.status(500).json({ error: 'Test failed' });
+    res.status(500).json({ error: 'Test failed: ' + e.message });
+  }
+});
+
+// Hard Restart the Bot Connection
+app.post('/api/admin/discord/restart', authRequired, requireAdmin, async (req, res) => {
+  try {
+    if (discordClient && process.env.DISCORD_BOT_TOKEN) {
+      log.adm('Admin requested Discord bot restart', { admin_id: req.user.id });
+      discordClient.destroy();
+      await discordClient.login(process.env.DISCORD_BOT_TOKEN);
+      res.json({ ok: true, message: "Bot connection restarted successfully." });
+    } else {
+      res.status(400).json({ error: "Bot is not configured." });
+    }
+  } catch (e) {
+    log.err('Bot restart failed', { error: e.message });
+    res.status(500).json({ error: 'Failed to restart bot.' });
+  }
+});
+
+// Admin: Send Custom Direct Message to a specific user via Discord
+app.post('/api/admin/discord/dm', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const { user_id, message } = req.body;
+    if (!user_id || !message) {
+      return res.status(400).json({ error: 'User and message are required.' });
+    }
+
+    if (!discordClient?.isReady()) {
+      return res.status(503).json({ error: 'Discord bot is currently offline.' });
+    }
+
+    // Lookup the user's Discord ID
+    const [[user]] = await pool.query('SELECT discord_id, display_name FROM users WHERE id=?', [user_id]);
+    if (!user || !user.discord_id) {
+      return res.status(400).json({ error: `${user?.display_name || 'User'} has not linked their Discord ID yet.` });
+    }
+
+    // Fetch the user on Discord and send the DM
+    const discordUser = await discordClient.users.fetch(user.discord_id);
+    await discordUser.send(`🦇 **Message from the Storytellers:**\n\n${message}`);
+
+    log.adm('Admin sent custom Discord DM', { admin_id: req.user.id, target_user: user_id });
+    res.json({ ok: true, message: `DM successfully sent to ${user.display_name}.` });
+  } catch (e) {
+    log.err('Failed to send custom Discord DM', { error: e.message });
+    res.status(500).json({ error: 'Failed to send DM.' });
   }
 });
 
@@ -5799,7 +6013,9 @@ app.post('/api/news', authRequired, async (req, res) => {
     );
 
     // --- NEW: DISCORD NEWS BROADCAST ---
-    if (discordClient?.isReady()) {
+    const discordEnabled = await getSetting('discord_enabled', 'true') === 'true';
+    const notifyPrems = await getSetting('discord_notify_prems', 'true') === 'true';
+    if (discordEnabled && notifyPrems && discordClient?.isReady()) {
       try {
         // Grab the channel ID from your settings table
         const channelId = await getSetting('discord_channel_id', null);
