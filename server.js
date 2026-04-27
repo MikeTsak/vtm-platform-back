@@ -1578,8 +1578,9 @@ function xpCost({ type, newLevel, ritualLevel, formulaLevel, dots = 1, disciplin
     return lvl * 3;
   }
   if (type === 'advantage') return 3 * Number(dots || 1);
+  if (type === 'flaw') return 0; // <--- ΑΥΤΗ Η ΓΡΑΜΜΗ ΠΡΟΣΤΕΘΗΚΕ!
   if (type === 'blood_potency') return Number(newLevel) * 10;
-  throw new Error('Unknown XP type');
+  throw new Error('Unknown XP type: ' + type);
 }
 // --- Simple status/health ---
 
