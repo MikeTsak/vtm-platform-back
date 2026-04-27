@@ -2181,6 +2181,34 @@ app.get('/api/characters/me', authRequired, async (req, res) => {
   res.json({ character: ch });
 });
 
+// Update my character (optional)
+app.put('/api/characters/me', authRequired, async (req, res) => {
+  const { name, clan, sheet } = req.body;
+  const [rows] = await pool.query('SELECT id FROM characters WHERE user_id=?', [req.user.id]);
+  if (!rows.length) {
+    log.warn('Update character not found', { user_id: req.user.id });
+    return res.status(404).json({ error: 'No character' });
+  }
+
+  const fields = [], vals = [];
+  if (name) { fields.push('name=?'); vals.push(name); }
+  if (clan) { fields.push('clan=?'); vals.push(clan); }
+  if (sheet !== undefined) { fields.push('sheet=?'); vals.push(sheet ? JSON.stringify(sheet) : null); }
+  if (!fields.length) {
+    log.warn('Update character no fields', { user_id: req.user.id });
+    return res.status(400).json({ error: 'Nothing to update' });
+  }
+
+  vals.push(rows[0].id);
+  await pool.query(`UPDATE characters SET ${fields.join(', ')} WHERE id=?`, vals);
+
+  const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [rows[0].id]);
+  const ch = out[0];
+  if (ch && ch.sheet && typeof ch.sheet === 'string') { try { ch.sheet = JSON.parse(ch.sheet); } catch {} }
+  log.char('Character updated', { id: rows[0].id, user_id: req.user.id, updates: fields });
+  res.json({ character: ch });
+});
+
 /**
  * @swagger
  * /api/characters:
