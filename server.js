@@ -3671,7 +3671,10 @@ app.patch('/api/admin/camarilla/update', authRequired, requireAdmin, async (req,
   } else if (field === 'is_deceased') {
     dbField = 'is_deceased';
     dbValue = value ? 1 : 0; 
-  } else if (field === 'is_hidden') {  // <--- ADD THIS BLOCK
+  } else if (field === 'is_bloodhunted') { 
+    dbField = 'is_bloodhunted';
+    dbValue = value ? 1 : 0; 
+  }else if (field === 'is_hidden') {  // <--- ADD THIS BLOCK
     dbField = 'is_hidden';
     dbValue = value ? 1 : 0; 
   } else {
