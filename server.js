@@ -1007,17 +1007,28 @@ async function _ensureCamarillaColumns() {
   if (camarillaColsChecked) return;
   try {
     const addCols = async (table) => {
+      // Check for is_ex and is_deceased
       const [cols] = await pool.query(`SHOW COLUMNS FROM ${table} LIKE 'is_ex'`);
       if (cols.length === 0) {
         await pool.query(`ALTER TABLE ${table} ADD COLUMN is_ex BOOLEAN DEFAULT FALSE, ADD COLUMN is_deceased BOOLEAN DEFAULT FALSE`);
         log.ok(`Added is_ex and is_deceased to ${table}`);
       }
       
-      // NEW: Ensure is_hidden exists
+      // Ensure is_hidden exists
       const [hiddenCols] = await pool.query(`SHOW COLUMNS FROM ${table} LIKE 'is_hidden'`);
       if (hiddenCols.length === 0) {
         await pool.query(`ALTER TABLE ${table} ADD COLUMN is_hidden BOOLEAN DEFAULT FALSE`);
         log.ok(`Added is_hidden to ${table}`);
+      }
+
+      // NEW: Loop through all extra tags and ensure they exist
+      const extraTags = ['is_left', 'is_called', 'is_missing', 'is_exiled', 'is_bloodhunted'];
+      for (const col of extraTags) {
+        const [check] = await pool.query(`SHOW COLUMNS FROM ${table} LIKE '${col}'`);
+        if (check.length === 0) {
+          await pool.query(`ALTER TABLE ${table} ADD COLUMN ${col} BOOLEAN DEFAULT FALSE`);
+          log.ok(`Added ${col} to ${table}`);
+        }
       }
     };
     await addCols('characters');
@@ -3553,10 +3564,10 @@ app.post('/api/admin/chat/npc/messages', authRequired, requireAdmin, async (req,
 app.get('/api/admin/camarilla/roster', authRequired, requireAdmin, async (req, res) => {
   try {
     const [players] = await pool.query(
-      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, 'player' as type FROM characters"
+      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, 'player' as type FROM characters"
     );
     const [npcs] = await pool.query(
-      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, 'npc' as type FROM npcs"
+      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, 'npc' as type FROM npcs"
     );
     
     const format = (list) => list.map(item => ({
@@ -3676,19 +3687,12 @@ app.patch('/api/admin/camarilla/update', authRequired, requireAdmin, async (req,
   } else if (field === 'image_url') {
     dbField = 'image_url';
     dbValue = value;
-  } else if (field === 'is_ex') {
-    dbField = 'is_ex';
+  // Use a quick array check for all boolean flags
+  } else if (['is_ex', 'is_deceased', 'is_hidden', 'is_bloodhunted', 'is_left', 'is_called', 'is_missing', 'is_exiled'].includes(field)) {
+    dbField = field;
     dbValue = value ? 1 : 0;
-  } else if (field === 'is_deceased') {
-    dbField = 'is_deceased';
-    dbValue = value ? 1 : 0; 
-  } else if (field === 'is_bloodhunted') { 
-    dbField = 'is_bloodhunted';
-    dbValue = value ? 1 : 0; 
-  }else if (field === 'is_hidden') {  // <--- ADD THIS BLOCK
-    dbField = 'is_hidden';
-    dbValue = value ? 1 : 0; 
   } else {
+    // If it's not any of the above, it's the status slider
     dbField = 'status';
     dbValue = value;
   }
