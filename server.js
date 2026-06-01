@@ -2712,6 +2712,17 @@ app.patch('/api/admin/characters/:id/xp', authRequired, requireAdmin, async (req
   res.json({ character: out[0] });
 });
 
+// ADMIN: Get all characters (for stats and admin views)
+app.get('/api/admin/characters', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const [characters] = await pool.query('SELECT * FROM characters ORDER BY created_at DESC');
+    res.json({ characters });
+  } catch (e) {
+    console.error('Failed to fetch all characters:', e);
+    res.status(500).json({ error: 'Failed to fetch characters' });
+  }
+});
+
 // --- Admin: edit character ---
 app.patch('/api/admin/characters/:id', authRequired, requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
@@ -4249,6 +4260,26 @@ app.get('/api/admin/chat/groups', authRequired, requireAdmin, async (req, res) =
     res.json({ groups });
   } catch (e) {
     res.status(500).json({ error: 'Failed' });
+  }
+});
+
+// ADMIN: Get all group messages (for stats)
+app.get('/api/admin/chat/groups/messages/all', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const [messages] = await pool.query('SELECT * FROM chat_group_messages');
+    res.json({ messages });
+  } catch (e) { 
+    res.status(500).json({ error: 'Failed to fetch group messages' }); 
+  }
+});
+
+// ADMIN: Get all email messages (for stats)
+app.get('/api/admin/emails/messages/all', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const [messages] = await pool.query('SELECT * FROM email_messages');
+    res.json({ messages });
+  } catch (e) { 
+    res.status(500).json({ error: 'Failed to fetch email messages' }); 
   }
 });
 
