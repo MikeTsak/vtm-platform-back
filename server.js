@@ -2696,14 +2696,15 @@ app.patch('/api/admin/characters/xp/bulk', authRequired, requireAdmin, async (re
 /* -------------------- Fetch XP Logs for Admin Panel -------------------- */
 app.get('/api/admin/xp-logs', authRequired, requireAdmin, async (req, res) => {
   try {
-    // Joins the xp_log table with characters and users to get readable names
+    // Allow the Stats Engine to bypass the 200 limit to calculate all-time flow
+    const limitClause = req.query.limit === 'all' ? '' : 'LIMIT 200';
     const [logs] = await pool.query(`
       SELECT l.*, c.name as character_name, u.display_name as player_name 
       FROM xp_log l
       LEFT JOIN characters c ON l.character_id = c.id
       LEFT JOIN users u ON c.user_id = u.id
       ORDER BY l.id DESC
-      LIMIT 200
+      ${limitClause}
     `);
     res.json(logs);
   } catch (error) {
@@ -5850,24 +5851,49 @@ app.post('/api/dice/rolls', authRequired, async (req, res) => {
   }
 });
 
+/* -------------------- Fetch Dice Logs for Admin Panel -------------------- */
 app.get('/api/admin/dice/rolls', authRequired, requireAdmin, async (req, res) => {
   try {
     await _ensureDiceTable();
-    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
-    
-    const [rows] = await pool.query(`
-      SELECT r.*, u.display_name AS user_name, c.name AS char_name, c.clan AS char_clan
+
+    let limitClause = '';
+    const vals = [];
+
+    // Allow the Stats Engine to pull all data, otherwise enforce a safe limit for the Logs tab
+    if (req.query.limit === 'all') {
+        limitClause = ''; 
+    } else {
+        const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 1000);
+        limitClause = `LIMIT ${limit}`;
+    }
+
+    const userId = Number(req.query.user_id) || null;
+    const since = req.query.since ? new Date(req.query.since) : null;
+    const where = [];
+
+    if (userId) { where.push('r.user_id=?'); vals.push(userId); }
+    if (since && !isNaN(since.getTime())) { where.push('r.created_at >= ?'); vals.push(since); }
+
+    const sql = `
+      SELECT
+        r.id, r.user_id, r.character_id, r.pool, r.hunger, r.sides,
+        r.results_json, r.successes, r.crit_pairs, r.messy_crit, r.bestial_failure,
+        r.note, r.created_at,
+        u.display_name AS user_name,
+        c.name AS char_name, c.clan AS char_clan
       FROM dice_rolls r
       LEFT JOIN users u ON u.id = r.user_id
       LEFT JOIN characters c ON c.id = r.character_id
+      ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
       ORDER BY r.created_at DESC
-      LIMIT ?
-    `, [limit]);
+      ${limitClause}
+    `;
 
+    const [rows] = await pool.query(sql, vals);
     res.json({ rolls: rows });
   } catch (e) {
-    log.err('Admin fetch dice rolls failed', { message: e.message, stack: e.stack });
-    res.status(500).json({ error: 'Failed to fetch rolls' });
+    console.error('Admin fetch dice rolls failed', e);
+    res.status(500).json({ error: 'Failed to fetch dice rolls' });
   }
 });
 
