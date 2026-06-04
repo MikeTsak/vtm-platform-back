@@ -3002,6 +3002,16 @@ app.post('/api/admin/chat/reply-as-npc/:npcId/:userId', authRequired, requireAdm
   }
 });
 
+// Public: Check if comms are enabled
+app.get('/api/comms/status', authRequired, async (req, res) => {
+  try {
+    const enabled = await getSetting('comms_enabled', 'true');
+    res.json({ comms_enabled: enabled === 'true' });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch comms status' });
+  }
+});
+
 app.get('/api/chat/my-recent', authRequired, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -3341,6 +3351,18 @@ app.post('/api/emails/send', authRequired, async (req, res) => {
     res.status(500).json({ error: 'Send failed' });
   } finally {
     conn.release();
+  }
+});
+
+// Admin: Toggle comms status
+app.post('/api/admin/comms/status', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const { comms_enabled } = req.body;
+    await setSetting('comms_enabled', String(comms_enabled));
+    log.adm(`Master comms switched to ${comms_enabled ? 'ONLINE' : 'OFFLINE'}`, { admin_id: req.user.id });
+    res.json({ ok: true, comms_enabled });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to update comms status' });
   }
 });
 
@@ -5443,17 +5465,20 @@ app.delete('/api/coteries/:id', authRequired, requireAdmin, async (req, res) => 
 });
 
 // GET: public to logged-in users (players need to see dates)
-// READ: players (and admins) can read the two dates
 app.get('/api/downtimes/config', authRequired, async (req, res) => {
   try {
-    // FIX: Prevent browser caching so new deadlines appear immediately for players
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     
     const deadline = await getSetting('downtime_deadline', null);
     const opening  = await getSetting('downtime_opening', null);
+    const projectDeadline = await getSetting('project_deadline', null); 
+    const activePhase = await getSetting('downtime_active_phase', 'standard'); // <-- NEW
+    
     res.json({
       downtime_deadline: deadline || null,
       downtime_opening: opening  || null,
+      project_deadline: projectDeadline || null, 
+      downtime_active_phase: activePhase, // <-- NEW
     });
   } catch (e) {
     log.err('Fetch downtime config failed', { message: e.message });
@@ -5461,17 +5486,81 @@ app.get('/api/downtimes/config', authRequired, async (req, res) => {
   }
 });
 
-// WRITE (admins): save the two dates
-// ⚠️ make sure the path is **/admin/downtimes/config** (no extra 'c')
+// WRITE (admins): save the dates
 app.post('/api/admin/downtimes/config', authRequired, requireAdmin, async (req, res) => {
   try {
-    const { downtime_deadline, downtime_opening } = req.body || {};
+    const { downtime_deadline, downtime_opening, project_deadline, downtime_active_phase } = req.body || {}; 
 
     if (downtime_deadline && isNaN(new Date(downtime_deadline).getTime())) {
       return res.status(400).json({ error: 'Invalid downtime_deadline date' });
     }
     if (downtime_opening && isNaN(new Date(downtime_opening).getTime())) {
       return res.status(400).json({ error: 'Invalid downtime_opening date' });
+    }
+    if (project_deadline && isNaN(new Date(project_deadline).getTime())) { 
+      return res.status(400).json({ error: 'Invalid project_deadline date' });
+    }
+
+    if (typeof downtime_deadline !== 'undefined') await setSetting('downtime_deadline', downtime_deadline || '');
+    if (typeof downtime_opening !== 'undefined') await setSetting('downtime_opening', downtime_opening || '');
+    if (typeof project_deadline !== 'undefined') await setSetting('project_deadline', project_deadline || '');
+    if (typeof downtime_active_phase !== 'undefined') await setSetting('downtime_active_phase', downtime_active_phase || 'standard'); // <-- NEW
+
+    const deadline = await getSetting('downtime_deadline', null);
+    const opening  = await getSetting('downtime_opening', null);
+    const projDeadline = await getSetting('project_deadline', null); 
+    const phase = await getSetting('downtime_active_phase', 'standard'); // <-- NEW
+
+    res.json({
+      ok: true,
+      downtime_deadline: deadline || null,
+      downtime_opening: opening  || null,
+      project_deadline: projDeadline || null, 
+      downtime_active_phase: phase // <-- NEW
+    });
+  } catch (e) {
+    log.err('Update downtime config failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to update downtime config' });
+  }
+});
+
+// GET: public to logged-in users (players need to see dates)
+// READ: players (and admins) can read the dates
+app.get('/api/downtimes/config', authRequired, async (req, res) => {
+  try {
+    // FIX: Prevent browser caching so new deadlines appear immediately for players
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    
+    const deadline = await getSetting('downtime_deadline', null);
+    const opening  = await getSetting('downtime_opening', null);
+    const projectDeadline = await getSetting('project_deadline', null); // <-- Added
+    
+    res.json({
+      downtime_deadline: deadline || null,
+      downtime_opening: opening  || null,
+      project_deadline: projectDeadline || null, // <-- Added
+    });
+  } catch (e) {
+    log.err('Fetch downtime config failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to fetch downtime config' });
+  }
+});
+
+// WRITE (admins): save the dates
+// ⚠️ make sure the path is **/admin/downtimes/config** (no extra 'c')
+app.post('/api/admin/downtimes/config', authRequired, requireAdmin, async (req, res) => {
+  try {
+    // <-- Added project_deadline to destructuring
+    const { downtime_deadline, downtime_opening, project_deadline } = req.body || {}; 
+
+    if (downtime_deadline && isNaN(new Date(downtime_deadline).getTime())) {
+      return res.status(400).json({ error: 'Invalid downtime_deadline date' });
+    }
+    if (downtime_opening && isNaN(new Date(downtime_opening).getTime())) {
+      return res.status(400).json({ error: 'Invalid downtime_opening date' });
+    }
+    if (project_deadline && isNaN(new Date(project_deadline).getTime())) { // <-- Added validation
+      return res.status(400).json({ error: 'Invalid project_deadline date' });
     }
 
     if (typeof downtime_deadline !== 'undefined') {
@@ -5480,13 +5569,19 @@ app.post('/api/admin/downtimes/config', authRequired, requireAdmin, async (req, 
     if (typeof downtime_opening !== 'undefined') {
       await setSetting('downtime_opening', downtime_opening || '');
     }
+    if (typeof project_deadline !== 'undefined') { // <-- Now safely works
+      await setSetting('project_deadline', project_deadline || '');
+    }
 
     const deadline = await getSetting('downtime_deadline', null);
     const opening  = await getSetting('downtime_opening', null);
+    const projDeadline = await getSetting('project_deadline', null); // <-- Added fetch back
+
     res.json({
       ok: true,
       downtime_deadline: deadline || null,
       downtime_opening: opening  || null,
+      project_deadline: projDeadline || null, // <-- Added return
     });
   } catch (e) {
     log.err('Update downtime config failed', { message: e.message });
