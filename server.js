@@ -1635,6 +1635,43 @@ function formatDate(d) {
   });
 }
 
+// ==========================================
+// --- GLOBAL BANNER ROUTES ---
+// ==========================================
+
+// Public: Get global banner settings (No auth required so it loads for everyone)
+app.get('/api/system/banner', async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    const enabled = await getSetting('banner_enabled', 'false');
+    const message = await getSetting('banner_message', '');
+    const countdown = await getSetting('banner_countdown', '');
+    
+    res.json({
+      banner_enabled: enabled === 'true',
+      banner_message: message,
+      banner_countdown: countdown
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch banner config' });
+  }
+});
+
+// Admin: Save global banner settings
+app.post('/api/admin/system/banner', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const { banner_enabled, banner_message, banner_countdown } = req.body;
+    
+    await setSetting('banner_enabled', String(banner_enabled));
+    await setSetting('banner_message', banner_message || '');
+    await setSetting('banner_countdown', banner_countdown || '');
+    
+    log.adm('Global banner updated', { admin_id: req.user.id });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to update banner config' });
+  }
+});
 
 app.get('/api/debug/db-check', async (req, res) => {
   try {
