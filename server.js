@@ -1598,6 +1598,46 @@ function xpCost({ type, newLevel, ritualLevel, formulaLevel, dots = 1, disciplin
 // Optional: capture server start time
 const startedAt = new Date();
 
+// ==========================================
+// --- HOME FEED ROUTE ---
+// ==========================================
+app.get('/api/home/feed', authRequired, async (req, res) => {
+  try {
+    // 1. Fetch News (Safely catch errors if table is empty or missing)
+    const [news] = await pool.query(`
+      SELECT id, title, body, created_at, 'news' as type 
+      FROM news 
+      ORDER BY created_at DESC LIMIT 10
+    `).catch(e => {
+      console.error("Feed News Query Failed:", e.message);
+      return [[]]; // Return empty array on failure so server doesn't crash
+    });
+    
+    // 2. Fetch Recent Approved Actions/Rumors 
+    // (We join with users to get the character name of who did it)
+    const [actions] = await pool.query(`
+      SELECT d.id, d.title, d.body, d.created_at, 'action' as type, u.char_name 
+      FROM downtimes d
+      LEFT JOIN users u ON d.user_id = u.id
+      WHERE d.status IN ('approved', 'resolved', 'Resolved in scene')
+      ORDER BY d.created_at DESC LIMIT 15
+    `).catch(e => {
+      console.error("Feed Actions Query Failed:", e.message);
+      return [[]];
+    });
+
+    // Merge, sort by newest first, and limit to top 20
+    const feed = [...news, ...actions]
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+      .slice(0, 20);
+
+    res.json({ feed });
+  } catch (e) {
+    console.error("HOME FEED CRITICAL ERROR:", e);
+    res.status(500).json({ error: 'Feed failed to load.' });
+  }
+});
+
 // JSON health probe (good for uptime checks / Kubernetes / monitors)
 app.get('/api/health', async (req, res) => {
   try {
