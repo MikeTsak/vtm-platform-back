@@ -90,6 +90,71 @@ async function _ensurePasswordResetsTable() {
 // Call it at the top level of server.js with your other inits
 _ensurePasswordResetsTable();
 
+/* -------------------- LIVE SESSION TABLES -------------------- */
+let liveSessionTablesCreated = false;
+async function _ensureLiveSessionTables() {
+  if (liveSessionTablesCreated) return;
+  try {
+    // 1. Sessions: Stores the session name and admin
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS live_sessions (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        admin_id INT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // 2. Participants: Links users/characters to active sessions
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS live_session_participants (
+        session_id INT UNSIGNED NOT NULL,
+        user_id INT NOT NULL,
+        character_id INT NOT NULL,
+        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (session_id, user_id),
+        FOREIGN KEY (session_id) REFERENCES live_sessions(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // 3. Rolls: Logs every roll performed in the session
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS live_session_rolls (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        session_id INT UNSIGNED NOT NULL,
+        character_id INT NOT NULL,
+        roll_type VARCHAR(50),
+        pool INT,
+        hunger INT,
+        results JSON,
+        successes INT,
+        note TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (session_id) REFERENCES live_sessions(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // 4. Broadcasts: Stores messages sent from GM to players
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS live_session_broadcasts (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        session_id INT UNSIGNED NOT NULL,
+        message TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (session_id) REFERENCES live_sessions(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    liveSessionTablesCreated = true;
+    log.ok('Live Session tables verified/created.');
+  } catch (e) {
+    log.err('Failed to create Live Session tables', { message: e.message });
+  }
+}
+
+// Trigger this with your other init functions
+_ensureLiveSessionTables();
+
 // --- Load Custom Font for Memes ---
 let memeFontBase64 = '';
 try {
@@ -5931,6 +5996,88 @@ app.get('/api/premonitions/media/:id', authRequired, async (req, res) => {
   }
 });
 
+/* -------------------- LIVE SESSION ROUTES -------------------- */
+
+// Create a new live session
+app.post('/api/live-session', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const { name } = req.body;
+    // Assuming you have a 'live_sessions' table, or just handle in-memory if transient
+    // For production, use a database table
+    const [r] = await pool.query('INSERT INTO live_sessions (name, admin_id) VALUES (?, ?)', [name || 'Live Session', req.user.id]);
+    res.json({ id: r.insertId, name });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to create session' });
+  }
+});
+
+// Get session details
+app.get('/api/live-session/:id', authRequired, async (req, res) => {
+  const [rows] = await pool.query('SELECT * FROM live_sessions WHERE id=?', [req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: 'Session not found' });
+  res.json({ session: rows[0] });
+});
+
+// Join a session
+app.post('/api/live-session/:id/join', authRequired, async (req, res) => {
+  const { characterId } = req.body;
+  // logic to register user/character as present in the session
+  await pool.query('INSERT INTO live_session_participants (session_id, user_id, character_id) VALUES (?, ?, ?)', 
+    [req.params.id, req.user.id, characterId]);
+  res.json({ ok: true });
+});
+
+app.get('/api/live-session/:id/rolls', authRequired, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      'SELECT * FROM live_session_rolls WHERE session_id=? ORDER BY created_at DESC LIMIT 50', 
+      [req.params.id]
+    );
+    res.json({ rolls: rows });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch rolls' });
+  }
+});
+
+// Log a roll to the session
+app.post('/api/live-session/:id/rolls', authRequired, async (req, res) => {
+  const { characterId, roll_type, pool, hunger, results, successes, note } = req.body;
+  await pool.query(
+    'INSERT INTO live_session_rolls (session_id, character_id, roll_type, pool, hunger, results, successes, note) VALUES (?,?,?,?,?,?,?,?)',
+    [req.params.id, characterId, roll_type, pool, hunger, JSON.stringify(results), successes, note]
+  );
+  res.json({ ok: true });
+});
+
+// Get session players
+app.get('/api/live-session/:id/players', authRequired, async (req, res) => {
+  const [players] = await pool.query(`
+    SELECT c.id, c.name, c.clan, c.sheet 
+    FROM live_session_participants lsp
+    JOIN characters c ON lsp.character_id = c.id
+    WHERE lsp.session_id = ?
+  `, [req.params.id]);
+  res.json({ players });
+});
+
+// Broadcast a message (Admin)
+app.post('/api/live-session/:id/broadcast', authRequired, requireAdmin, async (req, res) => {
+  await pool.query('INSERT INTO live_session_broadcasts (session_id, message) VALUES (?, ?)', 
+    [req.params.id, req.body.message]);
+  res.json({ ok: true });
+});
+
+app.get('/api/live-session/:id/broadcast', authRequired, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      'SELECT * FROM live_session_broadcasts WHERE session_id=? ORDER BY created_at DESC LIMIT 5', 
+      [req.params.id]
+    );
+    res.json({ broadcasts: rows });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch broadcasts' });
+  }
+});
 
 
 /* -------------------- Dice Rolls (V5) -------------------- */
