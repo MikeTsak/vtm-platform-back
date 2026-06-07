@@ -6041,14 +6041,20 @@ app.get('/api/live-session/:id/rolls', authRequired, async (req, res) => {
 
 // Log a roll to the session
 app.post('/api/live-session/:id/rolls', authRequired, async (req, res) => {
-  const { characterId, roll_type, pool, hunger, results, successes, note } = req.body;
-  await pool.query(
-    'INSERT INTO live_session_rolls (session_id, character_id, roll_type, pool, hunger, results, successes, note) VALUES (?,?,?,?,?,?,?,?)',
-    [req.params.id, characterId, roll_type, pool, hunger, JSON.stringify(results), successes, note]
-  );
-  res.json({ ok: true });
+  // Rename 'pool' to 'poolCount' to prevent shadowing the database connection
+  const { characterId, roll_type, pool: poolCount, hunger, results, successes, note } = req.body;
+  
+  try {
+    await pool.query(
+      'INSERT INTO live_session_rolls (session_id, character_id, roll_type, pool, hunger, results, successes, note) VALUES (?,?,?,?,?,?,?,?)',
+      [req.params.id, characterId, roll_type, poolCount, hunger, JSON.stringify(results), successes, note]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("Failed to log live session roll:", e);
+    res.status(500).json({ error: 'Failed to log roll' });
+  }
 });
-
 // Get session players
 app.get('/api/live-session/:id/players', authRequired, async (req, res) => {
   const [players] = await pool.query(`
