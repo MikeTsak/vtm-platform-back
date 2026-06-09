@@ -2050,15 +2050,19 @@ app.get('/', async (req, res) => {
 
 // 2. Check Discord Bot
   let discordStatus = 'DISABLED';
-  let discordClass = 'muted'; // Default for disabled
+  let discordClass = 'muted'; 
   if (process.env.DISCORD_BOT_TOKEN) {
-    if (discordClient?.isReady()) {
+    const isDiscordEnabled = await getSetting('discord_enabled', 'true') === 'true';
+    
+    if (!isDiscordEnabled) {
+      discordStatus = 'OFFLINE (Toggled Off via Master Switch)';
+      discordClass = 'muted';
+    } else if (discordClient?.isReady()) {
       discordStatus = `ONLINE (${discordClient.user.tag})`;
       discordClass = 'ok';
     } else {
       discordStatus = 'DOWN / ERROR';
       discordClass = 'bad';
-      // 4. Display the specific error if we have one
       if (discordLoginError) {
         errors.push(`Discord Error: ${discordLoginError}`);
       } else {
