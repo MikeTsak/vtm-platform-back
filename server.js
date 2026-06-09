@@ -3887,12 +3887,12 @@ app.put('/api/downtimes/:id', authRequired, async (req, res) => {
     const { id } = req.params;
     const { title, body } = req.body;
 
-    // 1. Fetch the submission and its associated deadline
+    // 1. Verify ownership by joining downtimes with characters
     const [rows] = await pool.query(`
-      SELECT dt.*, p.deadline 
+      SELECT dt.*, c.user_id 
       FROM downtimes dt 
-      LEFT JOIN projects p ON dt.project_id = p.id 
-      WHERE dt.id = ? AND dt.user_id = ?
+      JOIN characters c ON dt.character_id = c.id
+      WHERE dt.id = ? AND c.user_id = ?
     `, [id, req.user.id]);
 
     if (rows.length === 0) {
@@ -3901,22 +3901,24 @@ app.put('/api/downtimes/:id', authRequired, async (req, res) => {
 
     const submission = rows[0];
 
-    // 2. Check Deadline & Status (Only allow edits if status is 'submitted' and deadline is not past)
+    // 2. Only allow edits if status is strictly 'submitted'
     if (submission.status !== 'submitted') {
-      return res.status(400).json({ error: 'You can only edit submissions that are strictly in a submitted state' });
+      return res.status(400).json({ error: 'You can only edit actions that are strictly in a submitted state' });
     }
 
-    if (submission.deadline && new Date(submission.deadline) < new Date()) {
-      return res.status(400).json({ error: 'The deadline for this project has passed' });
+    // 3. Check against global downtime deadline setting
+    const deadlineStr = await getSetting('downtime_deadline', null);
+    if (deadlineStr && new Date(deadlineStr) < new Date()) {
+      return res.status(400).json({ error: 'The deadline for action submissions has passed' });
     }
 
-    // 3. Perform the update
+    // 4. Perform update
     await pool.query(
       'UPDATE downtimes SET title = ?, body = ? WHERE id = ?',
       [title || submission.title, body || submission.body, id]
     );
 
-    res.json({ success: true, message: 'Submission updated successfully' });
+    res.json({ success: true, message: 'Action updated successfully' });
   } catch (e) {
     console.error('Failed to update downtime/project:', e);
     res.status(500).json({ error: 'Internal server error while updating submission' });
