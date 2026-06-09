@@ -95,7 +95,7 @@ let liveSessionTablesCreated = false;
 async function _ensureLiveSessionTables() {
   if (liveSessionTablesCreated) return;
   try {
-    // 1. Sessions: Stores the session name and admin
+    // 1. Sessions
     await pool.query(`
       CREATE TABLE IF NOT EXISTS live_sessions (
         id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -105,7 +105,20 @@ async function _ensureLiveSessionTables() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
-    // 2. Participants: Links users/characters to active sessions
+    // -> Schema Patch: Add Session Code, Status, and Timers
+    const [lsCols] = await pool.query("SHOW COLUMNS FROM live_sessions LIKE 'session_code'");
+    if (lsCols.length === 0) {
+      await pool.query(`
+        ALTER TABLE live_sessions 
+        ADD COLUMN session_code VARCHAR(10) UNIQUE AFTER id,
+        ADD COLUMN status ENUM('active', 'ended') DEFAULT 'active',
+        ADD COLUMN ended_at TIMESTAMP NULL,
+        ADD COLUMN duration_seconds INT NULL
+      `);
+      log.ok('Added 8-character code, status, and duration tracking to live_sessions');
+    }
+
+    // 2. Participants
     await pool.query(`
       CREATE TABLE IF NOT EXISTS live_session_participants (
         session_id INT UNSIGNED NOT NULL,
@@ -117,7 +130,7 @@ async function _ensureLiveSessionTables() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
-    // 3. Rolls: Logs every roll performed in the session
+    // 3. Rolls
     await pool.query(`
       CREATE TABLE IF NOT EXISTS live_session_rolls (
         id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -134,7 +147,7 @@ async function _ensureLiveSessionTables() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
-    // 4. Broadcasts: Stores messages sent from GM to players
+    // 4. Broadcasts
     await pool.query(`
       CREATE TABLE IF NOT EXISTS live_session_broadcasts (
         id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -146,13 +159,12 @@ async function _ensureLiveSessionTables() {
     `);
 
     liveSessionTablesCreated = true;
-    log.ok('Live Session tables verified/created.');
+    log.ok('Live Session tables verified/patched.');
   } catch (e) {
-    log.err('Failed to create Live Session tables', { message: e.message });
+    log.err('Failed to create/patch Live Session tables', { message: e.message });
   }
 }
 
-// Trigger this with your other init functions
 _ensureLiveSessionTables();
 
 // --- Load Custom Font for Memes ---
@@ -3869,6 +3881,48 @@ app.get('/api/downtimes/quota', authRequired, async (req, res) => {
   res.json({ used: rows[0].c, limit: 3 });
 });
 
+// PUT /api/downtimes/:id — Edit a project/downtime submission
+app.put('/api/downtimes/:id', authRequired, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, body } = req.body;
+
+    // 1. Fetch the submission and its associated deadline
+    const [rows] = await pool.query(`
+      SELECT dt.*, p.deadline 
+      FROM downtimes dt 
+      LEFT JOIN projects p ON dt.project_id = p.id 
+      WHERE dt.id = ? AND dt.user_id = ?
+    `, [id, req.user.id]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Submission not found or unauthorized' });
+    }
+
+    const submission = rows[0];
+
+    // 2. Check Deadline & Status (Only allow edits if status is 'submitted' and deadline is not past)
+    if (submission.status !== 'submitted') {
+      return res.status(400).json({ error: 'You can only edit submissions that are strictly in a submitted state' });
+    }
+
+    if (submission.deadline && new Date(submission.deadline) < new Date()) {
+      return res.status(400).json({ error: 'The deadline for this project has passed' });
+    }
+
+    // 3. Perform the update
+    await pool.query(
+      'UPDATE downtimes SET title = ?, body = ? WHERE id = ?',
+      [title || submission.title, body || submission.body, id]
+    );
+
+    res.json({ success: true, message: 'Submission updated successfully' });
+  } catch (e) {
+    console.error('Failed to update downtime/project:', e);
+    res.status(500).json({ error: 'Internal server error while updating submission' });
+  }
+});
+
 // List my downtimes
 app.get('/api/downtimes/mine', authRequired, async (req, res) => {
   const [[char]] = await Promise.all([
@@ -5998,40 +6052,107 @@ app.get('/api/premonitions/media/:id', authRequired, async (req, res) => {
 
 /* -------------------- LIVE SESSION ROUTES -------------------- */
 
-// Create a new live session
-app.post('/api/live-session', authRequired, requireAdmin, async (req, res) => {
+// Helper: Converts the 8-character DDMMYY## code into the internal INT ID required for relationships
+async function getSessionInternalId(codeOrId) {
+  const [rows] = await pool.query('SELECT id FROM live_sessions WHERE session_code=? OR id=?', [codeOrId, codeOrId]);
+  return rows[0]?.id;
+}
+
+// Create a new live session (Generates an 8-character Code) - CHANGED TO requireCourt
+app.post('/api/live-session', authRequired, requireCourt, async (req, res) => {
   try {
     const { name } = req.body;
-    // Assuming you have a 'live_sessions' table, or just handle in-memory if transient
-    // For production, use a database table
-    const [r] = await pool.query('INSERT INTO live_sessions (name, admin_id) VALUES (?, ?)', [name || 'Live Session', req.user.id]);
-    res.json({ id: r.insertId, name });
+    
+    // Generate an 8-letter DDMMYY + Number code
+    const now = new Date();
+    const dd = String(now.getDate()).padStart(2, '0');
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const yy = String(now.getFullYear()).slice(-2);
+    const prefix = `${dd}${mm}${yy}`;
+    
+    const [countRows] = await pool.query("SELECT COUNT(*) as c FROM live_sessions WHERE session_code LIKE ?", [`${prefix}%`]);
+    const nextNum = String((countRows[0].c || 0) + 1).padStart(2, '0');
+    const sessionCode = `${prefix}${nextNum}`;
+
+    const [r] = await pool.query(
+      "INSERT INTO live_sessions (name, admin_id, session_code, status) VALUES (?, ?, ?, 'active')", 
+      [name || 'Live Session', req.user.id, sessionCode]
+    );
+
+    log.adm('Started new Live Session', { code: sessionCode, admin: req.user.id });
+    res.json({ id: sessionCode, internal_id: r.insertId, name, session_code: sessionCode });
   } catch (e) {
     res.status(500).json({ error: 'Failed to create session' });
   }
 });
 
-// Get session details
+// End an active live session - CHANGED TO requireCourt
+app.post('/api/live-session/:id/end', authRequired, requireCourt, async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT id, created_at, status FROM live_sessions WHERE session_code=? OR id=?', [req.params.id, req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Session not found' });
+    if (rows[0].status === 'ended') return res.json({ ok: true, message: 'Already ended' });
+    
+    const internalId = rows[0].id;
+    // Calculate total duration
+    const duration = Math.floor((Date.now() - new Date(rows[0].created_at).getTime()) / 1000);
+    
+    await pool.query(
+      "UPDATE live_sessions SET status='ended', ended_at=NOW(), duration_seconds=? WHERE id=?",
+      [duration, internalId]
+    );
+    
+    log.adm('Live Session Ended', { session: req.params.id, duration_seconds: duration });
+    res.json({ ok: true, duration_seconds: duration });
+  } catch(e) {
+    res.status(500).json({ error: 'Failed to end session' });
+  }
+});
+
+// Admin/ST: List all historical sessions - CHANGED TO requireCourt
+app.get('/api/admin/live-sessions', authRequired, requireCourt, async (req, res) => {
+  try {
+    const [sessions] = await pool.query(`
+      SELECT s.*, u.display_name as st_name,
+      (SELECT COUNT(DISTINCT user_id) FROM live_session_participants WHERE session_id = s.id) as player_count
+      FROM live_sessions s
+      LEFT JOIN users u ON s.admin_id = u.id
+      ORDER BY s.created_at DESC
+    `);
+    res.json({ sessions });
+  } catch(e) {
+    res.status(500).json({ error: 'Failed to fetch sessions' });
+  }
+});
+
+// Get session details (Calculates running timer if active)
 app.get('/api/live-session/:id', authRequired, async (req, res) => {
-  const [rows] = await pool.query('SELECT * FROM live_sessions WHERE id=?', [req.params.id]);
+  const [rows] = await pool.query('SELECT * FROM live_sessions WHERE session_code=? OR id=?', [req.params.id, req.params.id]);
   if (!rows.length) return res.status(404).json({ error: 'Session not found' });
-  res.json({ session: rows[0] });
+  const s = rows[0];
+  if (s.status === 'active') {
+    s.duration_seconds = Math.floor((Date.now() - new Date(s.created_at).getTime()) / 1000);
+  }
+  res.json({ session: s });
 });
 
 // Join a session
 app.post('/api/live-session/:id/join', authRequired, async (req, res) => {
+  const internalId = await getSessionInternalId(req.params.id);
+  if (!internalId) return res.status(404).json({ error: 'Session not found' });
+  
   const { characterId } = req.body;
-  // logic to register user/character as present in the session
-  await pool.query('INSERT INTO live_session_participants (session_id, user_id, character_id) VALUES (?, ?, ?)', 
-    [req.params.id, req.user.id, characterId]);
+  await pool.query('INSERT IGNORE INTO live_session_participants (session_id, user_id, character_id) VALUES (?, ?, ?)', 
+    [internalId, req.user.id, characterId]);
   res.json({ ok: true });
 });
 
 app.get('/api/live-session/:id/rolls', authRequired, async (req, res) => {
   try {
+    const internalId = await getSessionInternalId(req.params.id);
     const [rows] = await pool.query(
       'SELECT * FROM live_session_rolls WHERE session_id=? ORDER BY created_at DESC LIMIT 50', 
-      [req.params.id]
+      [internalId]
     );
     res.json({ rolls: rows });
   } catch (e) {
@@ -6039,49 +6160,149 @@ app.get('/api/live-session/:id/rolls', authRequired, async (req, res) => {
   }
 });
 
-// Log a roll to the session
+// Log a roll: Double-Insert into BOTH live_session_rolls AND dice_rolls
 app.post('/api/live-session/:id/rolls', authRequired, async (req, res) => {
-  // Rename 'pool' to 'poolCount' to prevent shadowing the database connection
+  const internalId = await getSessionInternalId(req.params.id);
+  if (!internalId) return res.status(404).json({ error: 'Session not found' });
+
   const { characterId, roll_type, pool: poolCount, hunger, results, successes, note } = req.body;
   
   try {
+    // 1. Log to the localized session table
     await pool.query(
       'INSERT INTO live_session_rolls (session_id, character_id, roll_type, pool, hunger, results, successes, note) VALUES (?,?,?,?,?,?,?,?)',
-      [req.params.id, characterId, roll_type, poolCount, hunger, JSON.stringify(results), successes, note]
+      [internalId, characterId, roll_type, poolCount, hunger, JSON.stringify(results), successes, note]
     );
+
+    // 2. Mirror into the Global/Permanent Dice Roller Table
+    await _ensureDiceTable();
+    const outcome = computeV5Outcome({
+      normal: (results?.normal || []).map(Number),
+      hunger: (results?.hunger || []).map(Number),
+    });
+    
+    const payload = {
+      normal: results?.normal || [],
+      hunger: results?.hunger || [],
+      difficulty: null
+    };
+
+    const safeNote = note ? `[Session: ${req.params.id}] ${note}`.slice(0, 255) : `[Session: ${req.params.id}]`;
+
+    await pool.query(
+      `INSERT INTO dice_rolls 
+       (user_id, character_id, pool, hunger, sides, results_json, successes, crit_pairs, messy_crit, bestial_failure, note)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [
+        req.user.id, characterId, 
+        Number(poolCount) || (payload.normal.length + payload.hunger.length),
+        Number(hunger) || payload.hunger.length,
+        10,
+        JSON.stringify(payload),
+        outcome.successes,
+        outcome.crit_pairs,
+        outcome.messy_crit ? 1 : 0,
+        outcome.bestial_failure ? 1 : 0,
+        safeNote
+      ]
+    );
+
     res.json({ ok: true });
   } catch (e) {
     console.error("Failed to log live session roll:", e);
     res.status(500).json({ error: 'Failed to log roll' });
   }
 });
+
 // Get session players
 app.get('/api/live-session/:id/players', authRequired, async (req, res) => {
+  const internalId = await getSessionInternalId(req.params.id);
   const [players] = await pool.query(`
     SELECT c.id, c.name, c.clan, c.sheet 
     FROM live_session_participants lsp
     JOIN characters c ON lsp.character_id = c.id
     WHERE lsp.session_id = ?
-  `, [req.params.id]);
+  `, [internalId]);
   res.json({ players });
 });
 
-// Broadcast a message (Admin)
-app.post('/api/live-session/:id/broadcast', authRequired, requireAdmin, async (req, res) => {
+// Broadcast a message (ST/Admin) - CHANGED TO requireCourt
+app.post('/api/live-session/:id/broadcast', authRequired, requireCourt, async (req, res) => {
+  const internalId = await getSessionInternalId(req.params.id);
   await pool.query('INSERT INTO live_session_broadcasts (session_id, message) VALUES (?, ?)', 
-    [req.params.id, req.body.message]);
+    [internalId, req.body.message]);
   res.json({ ok: true });
 });
 
 app.get('/api/live-session/:id/broadcast', authRequired, async (req, res) => {
   try {
+    const internalId = await getSessionInternalId(req.params.id);
     const [rows] = await pool.query(
       'SELECT * FROM live_session_broadcasts WHERE session_id=? ORDER BY created_at DESC LIMIT 5', 
-      [req.params.id]
+      [internalId]
     );
     res.json({ broadcasts: rows });
   } catch (e) {
     res.status(500).json({ error: 'Failed to fetch broadcasts' });
+  }
+});
+
+// Update a live player's trackers as ST - CHANGED TO requireCourt
+app.patch('/api/live-session/:id/players/:charId', authRequired, requireCourt, async (req, res) => {
+  try {
+    const charId = req.params.charId;
+    const { hungerDelta, healthSupDelta, healthAggDelta, wpSupDelta, wpAggDelta, humanityDelta, frenzyState, forceRouseCheck } = req.body;
+    
+    const [rows] = await pool.query('SELECT sheet FROM characters WHERE id=?', [charId]);
+    if(!rows.length) return res.status(404).json({error: 'Char not found'});
+    
+    let sheet = {};
+    try { sheet = JSON.parse(rows[0].sheet || '{}'); } catch(e) {}
+    
+    if (hungerDelta !== undefined) sheet.hunger = Math.max(0, Math.min(5, (sheet.hunger || 0) + hungerDelta));
+    if (humanityDelta !== undefined) {
+        const currentHum = sheet.morality?.humanity ?? sheet.humanity ?? 7;
+        const nextHum = Math.max(0, Math.min(10, currentHum + humanityDelta));
+        sheet.humanity = nextHum;
+        if(!sheet.morality) sheet.morality = {};
+        sheet.morality.humanity = nextHum;
+    }
+    if (healthSupDelta !== undefined) {
+        if(!sheet.health) sheet.health = { superficial:0, aggravated:0 };
+        sheet.health.superficial = Math.max(0, (sheet.health.superficial || 0) + healthSupDelta);
+    }
+    if (healthAggDelta !== undefined) {
+        if(!sheet.health) sheet.health = { superficial:0, aggravated:0 };
+        sheet.health.aggravated = Math.max(0, (sheet.health.aggravated || 0) + healthAggDelta);
+    }
+    if (wpSupDelta !== undefined) {
+        if(!sheet.willpower) sheet.willpower = { superficial:0, aggravated:0 };
+        sheet.willpower.superficial = Math.max(0, (sheet.willpower.superficial || 0) + wpSupDelta);
+    }
+    if (wpAggDelta !== undefined) {
+        if(!sheet.willpower) sheet.willpower = { superficial:0, aggravated:0 };
+        sheet.willpower.aggravated = Math.max(0, (sheet.willpower.aggravated || 0) + wpAggDelta);
+    }
+    if (frenzyState !== undefined) {
+        sheet.frenzyState = frenzyState;
+    }
+
+    if (forceRouseCheck) {
+        const rouseDie = Math.floor(Math.random() * 10) + 1;
+        if (rouseDie < 6) {
+            sheet.hunger = Math.max(0, Math.min(5, (sheet.hunger || 0) + 1));
+        }
+        const internalId = await getSessionInternalId(req.params.id);
+        if (internalId) {
+            await pool.query('INSERT INTO live_session_broadcasts (session_id, message) VALUES (?, ?)', 
+            [internalId, `ST forced a Rouse Check. Result: ${rouseDie} ${rouseDie < 6 ? '(Failed)' : '(Safe)'}`]);
+        }
+    }
+
+    await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), charId]);
+    res.json({ ok: true });
+  } catch(e) {
+    res.status(500).json({error: 'Failed to update player'});
   }
 });
 
