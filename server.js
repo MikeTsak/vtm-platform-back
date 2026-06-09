@@ -6,6 +6,7 @@ const { log, attachRequestLogger, expressErrorHandler, installProcessHandlers } 
 
 const express = require('express');
 const cors = require('cors');
+const cron = require('node-cron');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
@@ -382,6 +383,185 @@ if (process.env.DISCORD_BOT_TOKEN) {
     // Ignore bots to prevent infinite loops
     if (message.author.bot) return;
 
+// --- SCHRECKNET NODE AI - "ΓΙΑΝΝΑΚΗΣ" (WITH DATABASE TOOLS & HEAVY DEBUG LOGS) ---
+    if (message.mentions.has(discordClient.user)) {
+      try {
+        await message.channel.sendTyping();
+
+        // 1. Get Discord Username as the ultimate fallback
+        const discordName = message.author.username;
+        let charName = discordName; // Default to discord name
+
+        // 2. Hardcoded Overrides (Bulletproof specific users)
+        if (message.author.id === '290944008094744576') {
+          charName = 'Handro';
+        } else if (message.author.id === '194191187509248001') {
+          charName = 'Ζαχαρία';
+} else {
+          // 3. Database Check (If no hardcoded override exists)
+          const [userRows] = await pool.query(
+            'SELECT display_name FROM users WHERE discord_id = ? LIMIT 1', 
+            [message.author.id]
+          );
+          
+          if (userRows.length > 0 && userRows[0].display_name) {
+            charName = userRows[0].display_name;
+          }
+        }
+
+        const userQuery = message.content.replace(`<@${discordClient.user.id}>`, '').trim();
+        log.info(`🤖 [DEBUG] Ο ${charName} ρώτησε τον Γιαννάκη: "${userQuery}"`);
+
+        const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
+
+        if (!apiKey) {
+            log.warn('Discord Bot AI Error: GOOGLE_API_KEY is undefined in your environment.');
+            return message.reply({ content: "Συγγνώμη κ. Administrator... το κλειδί πρόσβασής μου (API Key) λείπει." });
+        }
+
+        const genAI = new GoogleGenerativeAI(apiKey);
+
+        const tools = [{
+          functionDeclarations: [
+            {
+              name: "get_domain_owner",
+              description: "Βρίσκει ποιος ελέγχει μια περιοχή (domain) της Αθήνας. Χρησιμοποίησε αυτό το ευρετήριο για τον αριθμό: 1:Παγκράτι, 2:Ζωγράφου/Καισαριανή, 3:Εξάρχεια, 8:Πλάκα, 12:Μοσχάτο, 18:Κολωνάκι, 20:Αιγάλεω, 23:Ψυχικό, 27:Κηφισιά, 31:Χαλάνδρι, 32:Πέραμα/Κερατσίνι, 39:Αθήνα, 43:Πειραιάς. Αν η περιοχή δεν υπάρχει στη λίστα, μάντεψε τον κοντινότερο αριθμό.",
+              parameters: {
+                type: "OBJECT",
+                properties: {
+                  division_number: {
+                    type: "INTEGER",
+                    description: "Ο αριθμός της περιοχής, π.χ. 32 για το Πέραμα."
+                  }
+                },
+                required: ["division_number"]
+              }
+            },
+            {
+              name: "get_latest_news",
+              description: "Επιστρέφει τα τελευταία νέα, ανακοινώσεις ή πληροφορίες για πρόσωπα/events που υπάρχουν στα News του δικτύου.",
+            }
+          ]
+        }];
+
+        const systemPrompt = `Είσαι ο "Γιαννάκης", ένας νεαρός (neonate) Nosferatu hacker, geek και gamer που τρέχει το τοπικό SchreckNet terminal.
+ΟΔΗΓΙΕΣ ΠΡΟΣΩΠΙΚΟΤΗΤΑΣ:
+1. Είσαι υπερβολικά ευγενικός και γλυκός. Απευθύνεσαι ΠΑΝΤΑ στον χρήστη ως "κ. ${charName}".
+2. Είσαι εξυπηρετικός, αλλά ΔΕΝ ΜΟΙΡΑΖΕΣΑΙ ΠΟΤΕ μυστικά του δικτύου.
+3. ΔΕΝ μιλάς πολύ. Οι απαντήσεις σου πρέπει να είναι αυστηρά 1-2 προτάσεις, κοφτές και άμεσες.
+4. Χρησιμοποιείς φυσικά ορολογία υπολογιστών/gaming (π.χ. "lag", "uptime 24/7", "glitch", "server", "gg", "firewall").
+5. ΠΟΤΕ ΜΗΝ ΚΑΝΕΙΣ FOLLOW-UP ΕΡΩΤΗΣΕΙΣ. Δώσε την απάντηση και κλείσε το θέμα. Μην ρωτάτε "χρειάζεστε κάτι άλλο;".
+6. ΣΗΜΑΝΤΙΚΟ: Αφού τρέξεις κάποιο εργαλείο (όπως έλεγχος domain ή νέων), εξήγησέ το με το προσωπικό σου tech/gamer ύφος. Π.χ.: "Μάλιστα κ. ${charName}, το σύστημα τρέχει κανονικά, είμαι σε uptime 24/7 για να μην έχουμε θέματα και θα το φροντίσω προσωπικά. GG."`;
+
+        const model = genAI.getGenerativeModel({ 
+          model: "gemini-3.1-flash-lite", 
+          systemInstruction: systemPrompt,
+          tools: tools 
+        }); 
+        
+        const chat = model.startChat();
+        
+log.info(`🤖 [DEBUG] Στέλνω την πρώτη ερώτηση στο Gemini...`);
+        let result = await chat.sendMessage(userQuery);
+        let response = result.response;
+
+        // BULLETPROOF: Διαβάζουμε σωστά τα function calls ανάλογα με την έκδοση του SDK
+        const calls = typeof response.functionCalls === 'function' ? response.functionCalls() : response.functionCalls;
+
+        // Check if Gemini wants to call a Database Function
+        if (calls && calls.length > 0) {
+          const call = calls[0];
+          let functionResult = {};
+
+          try {
+            // EXECUTE DB QUERIES BASED ON AI REQUEST
+            if (call.name === 'get_domain_owner') {
+              const div = call.args.division_number;
+              log.info(`🤖 [DEBUG] Το Gemini ζήτησε Tool: get_domain_owner για division [${div}]`);
+              
+              const [rows] = await pool.query('SELECT owner_name FROM domain_claims WHERE division = ? LIMIT 1', [div]);
+              if (rows.length > 0 && rows[0].owner_name) {
+                functionResult = { status: "claimed", owner: rows[0].owner_name, division: div };
+              } else {
+                functionResult = { status: "unclaimed", message: "Η περιοχή είναι free/unclaimed." };
+              }
+            } 
+else if (call.name === 'get_latest_news') {
+              log.info(`🤖 [DEBUG] Το Gemini ζήτησε Tool: get_latest_news`);
+              
+              // Χρησιμοποιούμε την έτοιμη συνάρτηση getSetting αντί για raw SQL
+              const bannerEnabled = await getSetting('banner_enabled', 'false');
+              
+              if (bannerEnabled === 'true' || bannerEnabled === '1' || bannerEnabled === true) {
+                const bannerMessage = await getSetting('banner_message', '');
+                
+                if (bannerMessage) {
+                  functionResult = { latest_news: bannerMessage };
+                } else {
+                  functionResult = { latest_news: "Το δίκτυο είναι ήσυχο. Δεν υπάρχουν νέα." };
+                }
+              } else {
+                functionResult = { latest_news: "Το δίκτυο είναι ήσυχο. Δεν υπάρχουν ενεργές ανακοινώσεις αυτή τη στιγμή." };
+              }
+            }
+
+            log.info(`🤖 [DEBUG] Απάντηση από τη Βάση (στέλνεται στο Gemini):`, JSON.stringify(functionResult));
+
+            // Επιστροφή των δεδομένων πίσω στο Gemini
+            result = await chat.sendMessage([{
+              functionResponse: {
+                name: call.name,
+                response: functionResult
+              }
+            }]);
+            response = result.response;
+            
+            log.info(`🤖 [DEBUG] Raw Response από Gemini ΜΕΤΑ το Tool:`, JSON.stringify(response));
+
+          } catch (dbErr) {
+            log.err('DB Tool Execution Failed', { error: dbErr.message });
+            result = await chat.sendMessage([{
+              functionResponse: {
+                name: call.name,
+                response: { error: "Database error. Database unreachable." }
+              }
+            }]);
+            response = result.response;
+          }
+        } else {
+          log.info(`🤖 [DEBUG] Το Gemini ΔΕΝ ζήτησε εργαλείο. Απαντάει απευθείας.`);
+        }
+        
+        // --- BULLETPROOF EMPTY MESSAGE FALLBACK & SAFETY CHECK ---
+        let replyText = "";
+        try {
+          if (response && typeof response.text === 'function') {
+            replyText = response.text();
+            log.info(`🤖 [DEBUG] Τελικό Κείμενο που διαβάστηκε: "${replyText}"`);
+          } else if (response && response.text) {
+             replyText = response.text; // Fallback για παλαιότερα SDK
+          }
+        } catch (textErr) {
+          log.err('Gemini response.text() is empty or threw error', { error: textErr.message });
+          
+          if (response.candidates && response.candidates.length > 0) {
+             log.warn(`🤖 [DEBUG] Finish Reason: ${response.candidates[0].finishReason}`);
+          }
+        }
+
+        if (!replyText || replyText.trim() === "") {
+          replyText = `Συγγνώμη κ. ${charName}, το σήμα χάθηκε και το firewall της βάσης δεδομένων μπλόκαρε την απάντηση. Μπορείτε να επαναλάβετε;`;
+        }
+        
+        await message.reply({ content: replyText });
+        return;
+
+      } catch (error) {
+        log.err('Giannakis AI Critical Error', { error: error.message });
+        await message.reply({ content: "Συγγνώμη... το terminal έκανε crash. (Exception Thrown) Κάνω reboot." });
+        return;
+      }
+    }
 // --- FANCY V5 DICE ROLLER WITH WILLPOWER ---
     if (message.content.toLowerCase().startsWith('&roll')) {
       const args = message.content.slice(5).trim().split(/\s+/);
@@ -676,15 +856,73 @@ if (process.env.DISCORD_BOT_TOKEN) {
           console.warn('Could not delete original meme message:', delErr.message);
         }
 
-      } catch (error) {
+} catch (error) {
         log.err('Discord Meme Generation Failed', { error: error.message });
         message.channel.send(`❌ <@${message.author.id}> The shadows consumed your meme. (Something went wrong processing the image).`);
       }
-    }
-  });
+    } 
+  }); 
 } else {
   log.warn('DISCORD_BOT_TOKEN not set. Discord bot disabled.');
 }
+
+// ============================================================================
+// AUTOMATED LOGISTICS - DOWNTIME DEADLINE PINGS
+// ============================================================================
+// This cron job runs daily at 12:00 PM (server time)
+cron.schedule('0 12 * * *', async () => {
+  try {
+    // 1. Retrieve the downtime configuration to check the deadline
+    const [configRows] = await pool.query('SELECT downtime_deadline FROM system_config LIMIT 1'); 
+    
+    if (configRows.length === 0 || !configRows[0].downtime_deadline) return;
+
+    const deadline = new Date(configRows[0].downtime_deadline);
+    const now = new Date();
+    
+    // Calculate the difference in hours
+    const timeDiff = deadline.getTime() - now.getTime();
+    const hoursLeft = Math.ceil(timeDiff / (1000 * 60 * 60));
+
+    // If the deadline is roughly between 24 and 48 hours away
+    if (hoursLeft > 24 && hoursLeft <= 48) {
+      log.info('Downtime deadline is in 48h. Checking for missing actions.');
+
+      // 2. Identify users with Discord IDs and linked characters who haven't submitted
+      // Note: Adjust the SQL query if your table structure differs.
+      const [lazyUsers] = await pool.query(`
+        SELECT discord_id, char_name 
+        FROM users 
+        WHERE discord_id IS NOT NULL 
+          AND character_id IS NOT NULL 
+          AND role = 'user'
+          AND id NOT IN (
+            SELECT user_id 
+            FROM downtimes 
+            WHERE status != 'rejected' AND created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)
+          )
+      `);
+
+      // 3. Send a direct message to each identified player
+      for (const u of lazyUsers) {
+        if (!u.discord_id) continue;
+        
+        try {
+          const discordUser = await client.users.fetch(u.discord_id);
+          if (discordUser) {
+            const warningMessage = `Hello ${u.char_name || 'there'}, this is an automated reminder. The server for actions (Downtimes) closes in 48 hours. Please submit your actions to avoid an AFK penalty.`;
+            
+            await discordUser.send(warningMessage);
+          }
+        } catch (dmErr) {
+          log.warn(`Could not send DM to Discord ID: ${u.discord_id}`, { err: dmErr.message });
+        }
+      }
+    }
+  } catch (error) {
+    log.err('Cron Job Deadline Ping Error', { error: error.message });
+  }
+});
 
 /* -------------------- The Hunt (Admin & DB Init) -------------------- */
 
