@@ -508,7 +508,7 @@ discordClient.on('messageCreate', async (message) => {
 5. ΠΟΤΕ ΜΗΝ ΚΑΝΕΙΣ FOLLOW-UP ΕΡΩΤΗΣΕΙΣ. Δώσε την απάντηση, πέτα το σχόλιό σου και κλείσε το port. Μην ρωτάτε ποτέ "χρειάζεστε κάτι άλλο;".
 6. ΣΗΜΑΝΤΙΚΟ: Αφού τρέξεις κάποιο εργαλείο (όπως έλεγχος domain ή νέων), εξήγησέ το με το προσωπικό σου tech/gamer/vtm ύφος. Π.χ.: "Μάλιστα κ. ${charName}, το σύστημα τρέχει ρολόι. Εγώ είμαι εδώ 24/7 να φυλάω τα νώτα σας μην σας κάνει κανένα τσακάλι Brujah brute-force, gg."`;
       const model = genAI.getGenerativeModel({ 
-        model: "gemini-2.5-flash", 
+        model: "gemini-3.1-flash-lite", 
         systemInstruction: systemPrompt,
         tools: tools 
       }); 
