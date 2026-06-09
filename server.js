@@ -809,6 +809,13 @@ async function _ensureCoreTables() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
+    // ✅ AUTOMATICALLY ENSURE THE THEME COLUMN EXISTS
+    const [userCols] = await pool.query("SHOW COLUMNS FROM users LIKE 'theme'");
+    if (userCols.length === 0) {
+      await pool.query("ALTER TABLE users ADD COLUMN theme VARCHAR(50) DEFAULT 'camarilla'");
+      log.ok('Added theme column to users table');
+    }
+
     // 2. Characters
     await pool.query(`
       CREATE TABLE IF NOT EXISTS characters (
@@ -2295,6 +2302,20 @@ app.post('/api/auth/reset', async (req, res) => {
         log.err('Reset password error', { message: e.message, stack: e.stack });
         return res.status(500).json({ error: 'Reset failed' });
     }
+});
+
+// PUT /api/auth/theme — Save user's theme preference globally
+app.put('/api/auth/theme', authRequired, async (req, res) => {
+  try {
+    const { theme } = req.body;
+    if (!theme) return res.status(400).json({ error: 'Theme is required' });
+
+    await pool.query('UPDATE users SET theme = ? WHERE id = ?', [theme, req.user.id]);
+    res.json({ success: true, theme });
+  } catch (e) {
+    log.err('Failed to update theme', { error: e.message });
+    res.status(500).json({ error: 'Internal server error while saving theme.' });
+  }
 });
 
 
