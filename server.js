@@ -376,75 +376,122 @@ if (process.env.DISCORD_BOT_TOKEN) {
   });
 
 // --- Main discord client ---
-  discordClient.on('messageCreate', async (message) => {
-    // Check Master Switch
-    const isEnabled = await getSetting('discord_enabled', 'true') === 'true';
-    if (!isEnabled) return;
-    // Ignore bots to prevent infinite loops
-    if (message.author.bot) return;
+discordClient.on('messageCreate', async (message) => {
+  // Check Master Switch
+  const isEnabled = await getSetting('discord_enabled', 'true') === 'true';
+  if (!isEnabled) return;
+  // Ignore bots to prevent infinite loops
+  if (message.author.bot) return;
 
-// --- SCHRECKNET NODE AI - "ΓΙΑΝΝΑΚΗΣ" (WITH DATABASE TOOLS & HEAVY DEBUG LOGS) ---
-    if (message.mentions.has(discordClient.user)) {
+  // --- @bot whoami TEST COMMAND (No Tokens Burned) ---
+  const botMentionPrefix = `<@${discordClient.user.id}>`;
+  if (message.content.startsWith(botMentionPrefix)) {
+    const commandText = message.content.replace(botMentionPrefix, '').trim().toLowerCase();
+    
+    if (commandText === 'whoami') {
       try {
-        await message.channel.sendTyping();
+        // 1. Cross-reference users table via discord_id
+        const [userRows] = await pool.query(
+          'SELECT id, display_name FROM users WHERE discord_id = ? LIMIT 1', 
+          [message.author.id]
+        );
 
-        // 1. Get Discord Username as the ultimate fallback
-        const discordName = message.author.username;
-        let charName = discordName; // Default to discord name
+        if (userRows.length === 0) {
+          return await message.reply('❌ Δεν βρέθηκε εγγραφή χρήστη συνδεδεμένη με το Discord ID σου.');
+        }
 
-        // 2. Hardcoded Overrides (Bulletproof specific users)
-        if (message.author.id === '290944008094744576') {
-          charName = 'Handro';
-        } else if (message.author.id === '194191187509248001') {
-          charName = 'Ζαχαρία';
-} else {
-          // 3. Database Check (If no hardcoded override exists)
-          const [userRows] = await pool.query(
-            'SELECT display_name FROM users WHERE discord_id = ? LIMIT 1', 
-            [message.author.id]
+        const user = userRows[0];
+
+        // 2. Match user id from characters table to get character name
+        const [charRows] = await pool.query(
+          'SELECT name FROM characters WHERE user_id = ? LIMIT 1', 
+          [user.id]
+        );
+
+        const charName = charRows.length > 0 ? charRows[0].name : 'Δεν βρέθηκε ενεργός χαρακτήρας';
+
+        return await message.reply({
+          content: `👤 **SchreckNet Identity Verification**\n` +
+                   `> **Discord User:** \`${message.author.username}\`\n` +
+                   `> **Portal Display Name:** \`${user.display_name}\`\n` +
+                   `> **Character Name:** \`${charName}\``
+        });
+      } catch (e) {
+        log.err('Whoami command failure', { error: e.message });
+        return await message.reply('❌ Σφάλμα ανάκτησης στοιχείων από τον server.');
+      }
+    }
+  }
+
+  // --- SCHRECKNET NODE AI - "ΓΙΑΝΝΑΚΗΣ" (WITH IMPROVED DB CROSS-REFERENCING) ---
+  if (message.mentions.has(discordClient.user)) {
+    try {
+      await message.channel.sendTyping();
+
+      // Ultimate Fallback: Discord Username
+      let charName = message.author.username;
+
+      // Chained Database Lookup: users -> characters
+      try {
+        const [userRows] = await pool.query(
+          'SELECT id, display_name FROM users WHERE discord_id = ? LIMIT 1', 
+          [message.author.id]
+        );
+        
+        if (userRows.length > 0) {
+          const dbUser = userRows[0];
+          charName = dbUser.display_name; // Fallback to portal name
+
+          // Match character using the user.id
+          const [charRows] = await pool.query(
+            'SELECT name FROM characters WHERE user_id = ? LIMIT 1', 
+            [dbUser.id]
           );
-          
-          if (userRows.length > 0 && userRows[0].display_name) {
-            charName = userRows[0].display_name;
+
+          if (charRows.length > 0 && charRows[0].name) {
+            charName = charRows[0].name;
           }
         }
+      } catch (dbLookupErr) {
+        log.err('DB Lookup failed during character resolution', { error: dbLookupErr.message });
+      }
 
-        const userQuery = message.content.replace(`<@${discordClient.user.id}>`, '').trim();
-        log.info(`🤖 [DEBUG] Ο ${charName} ρώτησε τον Γιαννάκη: "${userQuery}"`);
+      const userQuery = message.content.replace(`<@${discordClient.user.id}>`, '').trim();
+      log.info(`🤖 [DEBUG] Ο/Η ${charName} ρώτησε τον Γιαννάκη: "${userQuery}"`);
 
-        const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
+      const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
 
-        if (!apiKey) {
-            log.warn('Discord Bot AI Error: GOOGLE_API_KEY is undefined in your environment.');
-            return message.reply({ content: "Συγγνώμη κ. Administrator... το κλειδί πρόσβασής μου (API Key) λείπει." });
-        }
+      if (!apiKey) {
+          log.warn('Discord Bot AI Error: API Key is undefined in your environment.');
+          return message.reply({ content: "Συγγνώμη κ. Administrator... το κλειδί πρόσβασής μου (API Key) λείπει." });
+      }
 
-        const genAI = new GoogleGenerativeAI(apiKey);
+      const genAI = new GoogleGenerativeAI(apiKey);
 
-        const tools = [{
-          functionDeclarations: [
-            {
-              name: "get_domain_owner",
-              description: "Βρίσκει ποιος ελέγχει μια περιοχή (domain) της Αθήνας. Χρησιμοποίησε αυτό το ευρετήριο για τον αριθμό: 1:Παγκράτι, 2:Ζωγράφου/Καισαριανή, 3:Εξάρχεια, 8:Πλάκα, 12:Μοσχάτο, 18:Κολωνάκι, 20:Αιγάλεω, 23:Ψυχικό, 27:Κηφισιά, 31:Χαλάνδρι, 32:Πέραμα/Κερατσίνι, 39:Αθήνα, 43:Πειραιάς. Αν η περιοχή δεν υπάρχει στη λίστα, μάντεψε τον κοντινότερο αριθμό.",
-              parameters: {
-                type: "OBJECT",
-                properties: {
-                  division_number: {
-                    type: "INTEGER",
-                    description: "Ο αριθμός της περιοχής, π.χ. 32 για το Πέραμα."
-                  }
-                },
-                required: ["division_number"]
-              }
-            },
-            {
-              name: "get_latest_news",
-              description: "Επιστρέφει τα τελευταία νέα, ανακοινώσεις ή πληροφορίες για πρόσωπα/events που υπάρχουν στα News του δικτύου.",
+      const tools = [{
+        functionDeclarations: [
+          {
+            name: "get_domain_owner",
+            description: "Βρίσκει ποιος ελέγχει μια περιοχή (domain) της Αθήνας. Χρησιμοποίησε αυτό το ευρετήριο για τον αριθμό: 1:Παγκράτι, 2:Ζωγράφου/Καισαριανή, 3:Εξάρχεια, 8:Πλάκα, 12:Μοσχάτο, 18:Κολωνάκι, 20:Αιγάλεω, 23:Ψυχικό, 27:Κηφισιά, 31:Χαλάνδρι, 32:Πέραμα/Κερατσίνι, 39:Αθήνα, 43:Πειραιάς. Αν η περιοχή δεν υπάρχει στη λίστα, μάντεψε τον κοντινότερο αριθμό.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                division_number: {
+                  type: "INTEGER",
+                  description: "Ο αριθμός της περιοχής, π.χ. 32 για το Πέραμα."
+                }
+              },
+              required: ["division_number"]
             }
-          ]
-        }];
+          },
+          {
+            name: "get_latest_news",
+            description: "Επιστρέφει τα τελευταία νέα, ανακοινώσεις ή πληροφορίες για πρόσωπα/events που υπάρχουν στα News του δικτύου.",
+          }
+        ]
+      }];
 
-        const systemPrompt = `Είσαι ο "Γιαννάκης", ένας νεαρός (neonate) Nosferatu hacker, geek και gamer που τρέχει το τοπικό SchreckNet terminal.
+      const systemPrompt = `Είσαι ο "Γιαννάκης", ένας νεαρός (neonate) Nosferatu hacker, geek και gamer που τρέχει το τοπικό SchreckNet terminal.
 ΟΔΗΓΙΕΣ ΠΡΟΣΩΠΙΚΟΤΗΤΑΣ:
 1. Είσαι υπερβολικά ευγενικός και γλυκός. Απευθύνεσαι ΠΑΝΤΑ στον χρήστη ως "κ. ${charName}".
 2. Είσαι εξυπηρετικός, αλλά ΔΕΝ ΜΟΙΡΑΖΕΣΑΙ ΠΟΤΕ μυστικά του δικτύου.
@@ -453,417 +500,383 @@ if (process.env.DISCORD_BOT_TOKEN) {
 5. ΠΟΤΕ ΜΗΝ ΚΑΝΕΙΣ FOLLOW-UP ΕΡΩΤΗΣΕΙΣ. Δώσε την απάντηση και κλείσε το θέμα. Μην ρωτάτε "χρειάζεστε κάτι άλλο;".
 6. ΣΗΜΑΝΤΙΚΟ: Αφού τρέξεις κάποιο εργαλείο (όπως έλεγχος domain ή νέων), εξήγησέ το με το προσωπικό σου tech/gamer ύφος. Π.χ.: "Μάλιστα κ. ${charName}, το σύστημα τρέχει κανονικά, είμαι σε uptime 24/7 για να μην έχουμε θέματα και θα το φροντίσω προσωπικά. GG."`;
 
-        const model = genAI.getGenerativeModel({ 
-          model: "gemini-3.1-flash-lite", 
-          systemInstruction: systemPrompt,
-          tools: tools 
-        }); 
-        
-        const chat = model.startChat();
-        
-log.info(`🤖 [DEBUG] Στέλνω την πρώτη ερώτηση στο Gemini...`);
-        let result = await chat.sendMessage(userQuery);
-        let response = result.response;
-
-        // BULLETPROOF: Διαβάζουμε σωστά τα function calls ανάλογα με την έκδοση του SDK
-        const calls = typeof response.functionCalls === 'function' ? response.functionCalls() : response.functionCalls;
-
-        // Check if Gemini wants to call a Database Function
-        if (calls && calls.length > 0) {
-          const call = calls[0];
-          let functionResult = {};
-
-          try {
-            // EXECUTE DB QUERIES BASED ON AI REQUEST
-            if (call.name === 'get_domain_owner') {
-              const div = call.args.division_number;
-              log.info(`🤖 [DEBUG] Το Gemini ζήτησε Tool: get_domain_owner για division [${div}]`);
-              
-              const [rows] = await pool.query('SELECT owner_name FROM domain_claims WHERE division = ? LIMIT 1', [div]);
-              if (rows.length > 0 && rows[0].owner_name) {
-                functionResult = { status: "claimed", owner: rows[0].owner_name, division: div };
-              } else {
-                functionResult = { status: "unclaimed", message: "Η περιοχή είναι free/unclaimed." };
-              }
-            } 
-else if (call.name === 'get_latest_news') {
-              log.info(`🤖 [DEBUG] Το Gemini ζήτησε Tool: get_latest_news`);
-              
-              // Χρησιμοποιούμε την έτοιμη συνάρτηση getSetting αντί για raw SQL
-              const bannerEnabled = await getSetting('banner_enabled', 'false');
-              
-              if (bannerEnabled === 'true' || bannerEnabled === '1' || bannerEnabled === true) {
-                const bannerMessage = await getSetting('banner_message', '');
-                
-                if (bannerMessage) {
-                  functionResult = { latest_news: bannerMessage };
-                } else {
-                  functionResult = { latest_news: "Το δίκτυο είναι ήσυχο. Δεν υπάρχουν νέα." };
-                }
-              } else {
-                functionResult = { latest_news: "Το δίκτυο είναι ήσυχο. Δεν υπάρχουν ενεργές ανακοινώσεις αυτή τη στιγμή." };
-              }
-            }
-
-            log.info(`🤖 [DEBUG] Απάντηση από τη Βάση (στέλνεται στο Gemini):`, JSON.stringify(functionResult));
-
-            // Επιστροφή των δεδομένων πίσω στο Gemini
-            result = await chat.sendMessage([{
-              functionResponse: {
-                name: call.name,
-                response: functionResult
-              }
-            }]);
-            response = result.response;
-            
-            log.info(`🤖 [DEBUG] Raw Response από Gemini ΜΕΤΑ το Tool:`, JSON.stringify(response));
-
-          } catch (dbErr) {
-            log.err('DB Tool Execution Failed', { error: dbErr.message });
-            result = await chat.sendMessage([{
-              functionResponse: {
-                name: call.name,
-                response: { error: "Database error. Database unreachable." }
-              }
-            }]);
-            response = result.response;
-          }
-        } else {
-          log.info(`🤖 [DEBUG] Το Gemini ΔΕΝ ζήτησε εργαλείο. Απαντάει απευθείας.`);
-        }
-        
-        // --- BULLETPROOF EMPTY MESSAGE FALLBACK & SAFETY CHECK ---
-        let replyText = "";
-        try {
-          if (response && typeof response.text === 'function') {
-            replyText = response.text();
-            log.info(`🤖 [DEBUG] Τελικό Κείμενο που διαβάστηκε: "${replyText}"`);
-          } else if (response && response.text) {
-             replyText = response.text; // Fallback για παλαιότερα SDK
-          }
-        } catch (textErr) {
-          log.err('Gemini response.text() is empty or threw error', { error: textErr.message });
-          
-          if (response.candidates && response.candidates.length > 0) {
-             log.warn(`🤖 [DEBUG] Finish Reason: ${response.candidates[0].finishReason}`);
-          }
-        }
-
-        if (!replyText || replyText.trim() === "") {
-          replyText = `Συγγνώμη κ. ${charName}, το σήμα χάθηκε και το firewall της βάσης δεδομένων μπλόκαρε την απάντηση. Μπορείτε να επαναλάβετε;`;
-        }
-        
-        await message.reply({ content: replyText });
-        return;
-
-      } catch (error) {
-        log.err('Giannakis AI Critical Error', { error: error.message });
-        await message.reply({ content: "Συγγνώμη... το terminal έκανε crash. (Exception Thrown) Κάνω reboot." });
-        return;
-      }
-    }
-// --- FANCY V5 DICE ROLLER WITH WILLPOWER ---
-    if (message.content.toLowerCase().startsWith('&roll')) {
-      const args = message.content.slice(5).trim().split(/\s+/);
-      const poolCount = Math.max(1, parseInt(args[0]) || 1);
-      const hungerInput = Math.max(0, parseInt(args[1]) || 0);
-
-      const hungerCount = Math.min(poolCount, hungerInput);
-      const normalCount = poolCount - hungerCount;
-
-      const roll10 = () => Math.floor(Math.random() * 10) + 1;
+      const model = genAI.getGenerativeModel({ 
+        model: "gemini-2.5-flash", 
+        systemInstruction: systemPrompt,
+        tools: tools 
+      }); 
       
-      let normalRolls = Array.from({ length: normalCount }, roll10);
-      let hungerRolls = Array.from({ length: hungerCount }, roll10);
+      const chat = model.startChat();
+      
+      log.info(`🤖 [DEBUG] Στέλνω την πρώτη ερώτηση στο Gemini...`);
+      let result = await chat.sendMessage(userQuery);
+      let response = result.response;
 
-      // Assumes computeV5Outcome is defined elsewhere in your server.js
-      const outcome = computeV5Outcome({ normal: normalRolls, hunger: hungerRolls });
+      // BULLETPROOF: Διαβάζουμε σωστά τα function calls ανάλογα με την έκδοση του SDK
+      const calls = typeof response.functionCalls === 'function' ? response.functionCalls() : response.functionCalls;
 
-      // Helper to format dice aesthetically
-      const formatDice = (rolls, isHunger) => {
-        if (!rolls || rolls.length === 0) return 'None';
-        return rolls.map(r => {
-          if (r === 10) return `**[10]**`;
-          if (r === 1 && isHunger) return `**[1]**`; // Bestial failure risk
-          if (r >= 6) return `[${r}]`;
-          return `\`${r}\``; // Failures look slightly dimmed
-        }).join(' ');
-      };
+      // Check if Gemini wants to call a Database Function
+      if (calls && calls.length > 0) {
+        const call = calls[0];
+        let functionResult = {};
 
-      // 1. Build the Embed with your custom App Images
-      const buildEmbed = (currentNormal, currentHunger, currentOutcome, usedWillpower = false) => {
-        let title = "🦇 V5 Dice Roll";
-        let color = 0x2b2d31; // Default dark Discord color
-        let imageUrl = null;  // Custom image variable
-
-        if (currentOutcome.messy_crit) {
-          title = "🩸 **MESSY CRITICAL!**";
-          color = 0x8a0303; // Deep red
-          imageUrl = 'https://portal.attlarp.gr/img/dice/MessyCrit.png';
-        } else if (currentOutcome.bestial_failure) {
-          title = "💀 **BESTIAL FAILURE!**";
-          color = 0x000000; // Black
-          imageUrl = 'https://portal.attlarp.gr/img/dice/BestialFail.png';
-        } else if (currentOutcome.crit_pairs > 0) {
-          title = "🌟 **CRITICAL SUCCESS!**";
-          color = 0xd4af37; // Gold
-          imageUrl = 'https://portal.attlarp.gr/img/dice/Crit.png';
-        } else if (currentOutcome.successes > 0) {
-          title = "🦇 **SUCCESS**";
-          color = 0x3ecf8e; // Green
-          imageUrl = 'https://portal.attlarp.gr/img/dice/Success.png';
-        } else {
-          title = "🌑 **FAILURE**";
-          color = 0x5c5c63; // Grey
-        }
-
-        const embed = new EmbedBuilder()
-          .setTitle(title)
-          .setColor(color)
-          .setAuthor({ name: message.author.displayName, iconURL: message.author.displayAvatarURL() })
-          .setDescription(`Rolled **${poolCount}** dice (${currentHunger.length} Hunger).${usedWillpower ? '\n*✨ Spent Willpower to reroll failures.*' : ''}`)
-          .addFields(
-            { name: 'Normal Dice', value: formatDice(currentNormal, false), inline: false },
-            { name: 'Hunger Dice', value: formatDice(currentHunger, true), inline: false },
-            { name: 'Total Successes', value: `**${currentOutcome.successes}**`, inline: false }
-          );
-
-        // Attach the thumbnail if one was assigned
-        if (imageUrl) {
-          embed.setThumbnail(imageUrl);
-        }
-
-        return embed;
-      };
-
-      // Check if they even have failing normal dice to reroll
-      const failingNormalCount = normalRolls.filter(r => r <= 5).length;
-      const canReroll = normalCount > 0 && failingNormalCount > 0;
-
-      // 2. Build the Willpower Button
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('reroll_wp')
-          .setLabel('Spend Willpower (Reroll up to 3)')
-          .setStyle(ButtonStyle.Danger)
-          .setDisabled(!canReroll)
-      );
-
-      // 3. Send the Initial Message
-      const reply = await message.reply({ 
-        embeds: [buildEmbed(normalRolls, hungerRolls, outcome)], 
-        components: [row] 
-      });
-
-      // 4. Create the Interactive Button Collector (lasts for 5 minutes)
-      const collector = reply.createMessageComponentCollector({ 
-        componentType: ComponentType.Button, 
-        time: 300000 
-      });
-
-      collector.on('collect', async (interaction) => {
-        // Security: Only the person who rolled can press the reroll button
-        if (interaction.user.id !== message.author.id) {
-          return interaction.reply({ content: '🦇 You cannot spend Willpower for someone else!', ephemeral: true });
-        }
-
-        if (interaction.customId === 'reroll_wp') {
-          // Find up to 3 normal dice that failed (1-5) and reroll them
-          let rerollsLeft = 3;
-          let newNormalRolls = [...normalRolls];
-
-          for (let i = 0; i < newNormalRolls.length; i++) {
-            if (newNormalRolls[i] <= 5 && rerollsLeft > 0) {
-              newNormalRolls[i] = roll10();
-              rerollsLeft--;
+        try {
+          // EXECUTE DB QUERIES BASED ON AI REQUEST
+          if (call.name === 'get_domain_owner') {
+            const div = call.args.division_number;
+            log.info(`🤖 [DEBUG] Το Gemini ζήτησε Tool: get_domain_owner για division [${div}]`);
+            
+            const [rows] = await pool.query('SELECT owner_name FROM domain_claims WHERE division = ? LIMIT 1', [div]);
+            if (rows.length > 0 && rows[0].owner_name) {
+              functionResult = { status: "claimed", owner: rows[0].owner_name, division: div };
+            } else {
+              functionResult = { status: "unclaimed", message: "Η περιοχή είναι free/unclaimed." };
+            }
+          } 
+          else if (call.name === 'get_latest_news') {
+            log.info(`🤖 [DEBUG] Το Gemini ζήτησε Tool: get_latest_news`);
+            
+            const bannerEnabled = await getSetting('banner_enabled', 'false');
+            
+            if (bannerEnabled === 'true' || bannerEnabled === '1' || bannerEnabled === true) {
+              const bannerMessage = await getSetting('banner_message', '');
+              
+              if (bannerMessage) {
+                functionResult = { latest_news: bannerMessage };
+              } else {
+                functionResult = { latest_news: "Το δίκτυο είναι ήσυχο. Δεν υπάρχουν νέα." };
+              }
+            } else {
+              functionResult = { latest_news: "Το δίκτυο είναι ήσυχο. Δεν υπάρχουν ενεργές ανακοινώσεις αυτή τη στιγμή." };
             }
           }
 
-          // Re-calculate outcome
-          const newOutcome = computeV5Outcome({ normal: newNormalRolls, hunger: hungerRolls });
+          log.info(`🤖 [DEBUG] Απάντηση από τη Βάση (στέλνεται στο Gemini):`, JSON.stringify(functionResult));
 
-          // Disable the button so they can't spam it
-          const disabledRow = new ActionRowBuilder().addComponents(
-            ButtonBuilder.from(interaction.component).setDisabled(true).setLabel('Willpower Spent')
-          );
-
-          // Update the message with the new rolls and image
-          await interaction.update({ 
-            embeds: [buildEmbed(newNormalRolls, hungerRolls, newOutcome, true)], 
-            components: [disabledRow] 
-          });
+          // Επιστροφή των δεδομένων πίσω στο Gemini
+          result = await chat.sendMessage([{
+            functionResponse: {
+              name: call.name,
+              response: functionResult
+            }
+          }]);
+          response = result.response;
           
-          collector.stop('wp_spent');
-        }
-      });
+          log.info(`🤖 [DEBUG] Raw Response από Gemini ΜΕΤΑ το Tool:`, JSON.stringify(response));
 
-      collector.on('end', (collected, reason) => {
-        // If the 5 minutes run out and nobody clicked it, disable the button to clean up the UI
-        if (reason === 'time') {
-          const disabledRow = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-              .setCustomId('reroll_wp_timeout')
-              .setLabel('Spend Willpower (Time Expired)')
-              .setStyle(ButtonStyle.Secondary)
-              .setDisabled(true)
-          );
-          reply.edit({ components: [disabledRow] }).catch(() => {});
+        } catch (dbErr) {
+          log.err('DB Tool Execution Failed', { error: dbErr.message });
+          result = await chat.sendMessage([{
+            functionResponse: {
+              name: call.name,
+              response: { error: "Database error. Database unreachable." }
+            }
+          }]);
+          response = result.response;
         }
-      });
+      } else {
+        log.info(`🤖 [DEBUG] Το Gemini ΔΕΝ ζήτησε εργαλείο. Απαντάει απευθείας.`);
+      }
+      
+      // --- BULLETPROOF EMPTY MESSAGE FALLBACK & SAFETY CHECK ---
+      let replyTextRes = "";
+      try {
+        if (response.candidates && response.candidates[0]?.content?.parts[0]?.text) {
+          letTextRes = response.candidates[0].content.parts[0].text;
+          log.info(`🤖 [DEBUG] Τελικό Κείμενο που διαβάστηκε: "${letTextRes}"`);
+        } else if (response && typeof response.text === 'function') {
+          letTextRes = response.text();
+          log.info(`🤖 [DEBUG] Τελικό Κείμενο που διαβάστηκε: "${letTextRes}"`);
+        } else if (response && response.text) {
+           letTextRes = response.text;
+        }
+      } catch (textErr) {
+        log.err('Gemini response extraction threw error', { error: textErr.message });
+        if (response.candidates && response.candidates.length > 0) {
+           log.warn(`🤖 [DEBUG] Finish Reason: ${response.candidates[0].finishReason}`);
+        }
+      }
 
+      if (!letTextRes || letTextRes.trim() === "") {
+        letTextRes = `Συγγνώμη κ. ${charName}, το σήμα χάθηκε και το firewall της βάσης δεδομένων μπλόκαρε την απάντηση. Μπορείτε να επαναλάβετε;`;
+      }
+      
+      await message.reply({ content: letTextRes });
+      return;
+
+    } catch (error) {
+      log.err('Giannakis AI Critical Error', { error: error.message });
+      await message.reply({ content: "Συγγνώμη... το terminal έκανε crash. (Exception Thrown) Κάνω reboot." });
       return;
     }
+  }
 
-    // --- Meme Maker Feature ---
-    if (message.content.toLowerCase().startsWith('&meme')) {
-      const text = message.content.slice(5).trim();
+  // --- FANCY V5 DICE ROLLER WITH WILLPOWER ---
+  if (message.content.toLowerCase().startsWith('&roll')) {
+    const args = message.content.slice(5).trim().split(/\s+/);
+    const poolCount = Math.max(1, parseInt(args[0]) || 1);
+    const hungerInput = Math.max(0, parseInt(args[1]) || 0);
+
+    const hungerCount = Math.min(poolCount, hungerInput);
+    const normalCount = poolCount - hungerCount;
+
+    const roll10 = () => Math.floor(Math.random() * 10) + 1;
+    
+    let normalRolls = Array.from({ length: normalCount }, roll10);
+    let hungerRolls = Array.from({ length: hungerCount }, roll10);
+
+    const outcome = computeV5Outcome({ normal: normalRolls, hunger: hungerRolls });
+
+    const formatDice = (rolls, isHunger) => {
+      if (!rolls || rolls.length === 0) return 'None';
+      return rolls.map(r => {
+        if (r === 10) return `**[10]**`;
+        if (r === 1 && isHunger) return `**[1]**`; 
+        if (r >= 6) return `[${r}]`;
+        return `\`${r}\``; 
+      }).join(' ');
+    };
+
+    const buildEmbed = (currentNormal, currentHunger, currentOutcome, usedWillpower = false) => {
+      let title = "🦇 V5 Dice Roll";
+      let color = 0x2b2d31; 
+      let imageUrl = null;  
+
+      if (currentOutcome.messy_crit) {
+        title = "🩸 **MESSY CRITICAL!**";
+        color = 0x8a0303; 
+        imageUrl = 'https://portal.attlarp.gr/img/dice/MessyCrit.png';
+      } else if (currentOutcome.bestial_failure) {
+        title = "💀 **BESTIAL FAILURE!**";
+        color = 0x000000; 
+        imageUrl = 'https://portal.attlarp.gr/img/dice/BestialFail.png';
+      } else if (currentOutcome.crit_pairs > 0) {
+        title = "🌟 **CRITICAL SUCCESS!**";
+        color = 0xd4af37; 
+        imageUrl = 'https://portal.attlarp.gr/img/dice/Crit.png';
+      } else if (currentOutcome.successes > 0) {
+        title = "🦇 **SUCCESS**";
+        color = 0x3ecf8e; 
+        imageUrl = 'https://portal.attlarp.gr/img/dice/Success.png';
+      } else {
+        title = "🌑 **FAILURE**";
+        color = 0x5c5c63; 
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle(title)
+        .setColor(color)
+        .setAuthor({ name: message.author.displayName, iconURL: message.author.displayAvatarURL() })
+        .setDescription(`Rolled **${poolCount}** dice (${currentHunger.length} Hunger).${usedWillpower ? '\n*✨ Spent Willpower to reroll failures.*' : ''}`)
+        .addFields(
+          { name: 'Normal Dice', value: formatDice(currentNormal, false), inline: false },
+          { name: 'Hunger Dice', value: formatDice(currentHunger, true), inline: false },
+          { name: 'Total Successes', value: `**${currentOutcome.successes}**`, inline: false }
+        );
+
+      if (imageUrl) {
+        embed.setThumbnail(imageUrl);
+      }
+
+      return embed;
+    };
+
+    const failingNormalCount = normalRolls.filter(r => r <= 5).length;
+    const canReroll = normalCount > 0 && failingNormalCount > 0;
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('reroll_wp')
+        .setLabel('Spend Willpower (Reroll up to 3)')
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(!canReroll)
+    );
+
+    const reply = await message.reply({ 
+      embeds: [buildEmbed(normalRolls, hungerRolls, outcome)], 
+      components: [row] 
+    });
+
+    const collector = reply.createMessageComponentCollector({ 
+      componentType: ComponentType.Button, 
+      time: 300000 
+    });
+
+    collector.on('collect', async (interaction) => {
+      if (interaction.user.id !== message.author.id) {
+        return interaction.reply({ content: '🦇 You cannot spend Willpower for someone else!', ephemeral: true });
+      }
+
+      if (interaction.customId === 'reroll_wp') {
+        let rerollsLeft = 3;
+        let newNormalRolls = [...normalRolls];
+
+        for (let i = 0; i < newNormalRolls.length; i++) {
+          if (newNormalRolls[i] <= 5 && rerollsLeft > 0) {
+            newNormalRolls[i] = roll10();
+            rerollsLeft--;
+          }
+        }
+
+        const newOutcome = computeV5Outcome({ normal: newNormalRolls, hunger: hungerRolls });
+
+        const disabledRow = new ActionRowBuilder().addComponents(
+          ButtonBuilder.from(interaction.component).setDisabled(true).setLabel('Willpower Spent')
+        );
+
+        await interaction.update({ 
+          embeds: [buildEmbed(newNormalRolls, hungerRolls, newOutcome, true)], 
+          components: [disabledRow] 
+        });
+        
+        collector.stop('wp_spent');
+      }
+    });
+
+    collector.on('end', (collected, reason) => {
+      if (reason === 'time') {
+        const disabledRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('reroll_wp_timeout')
+            .setLabel('Spend Willpower (Time Expired)')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(true)
+        );
+        reply.edit({ components: [disabledRow] }).catch(() => {});
+      }
+    });
+
+    return;
+  }
+
+  // --- Meme Maker Feature ---
+  if (message.content.toLowerCase().startsWith('&meme')) {
+    const text = message.content.slice(5).trim();
+    
+    const attachments = Array.from(message.attachments.values()).filter(a => a.contentType && a.contentType.startsWith('image/'));
+
+    if (attachments.length === 0) {
+      return message.reply('🦇 You need to attach at least one image to make a meme!');
+    }
+    if (!text) {
+      return message.reply('🦇 Provide some text! Example: `&meme When the ST smiles`');
+    }
+
+    try {
+      if (!textToSVG) {
+        return message.reply('❌ The server font engine is currently down. (TextToSVG failed to load).');
+      }
+
+      const downloadedImages = [];
+      for (const attachment of attachments) {
+        const response = await axios.get(attachment.url, { responseType: 'arraybuffer' });
+        const buffer = Buffer.from(response.data, 'binary');
+        const meta = await sharp(buffer).metadata();
+        downloadedImages.push({ buffer, meta });
+      }
+
+      const targetWidth = downloadedImages[0].meta.width;
+      let totalImageHeight = 0;
+      const processedImages = [];
+
+      for (const img of downloadedImages) {
+        const resizedBuffer = await sharp(img.buffer)
+          .resize({ width: targetWidth })
+          .toBuffer();
+        const resizedMeta = await sharp(resizedBuffer).metadata();
+        
+        processedImages.push({ buffer: resizedBuffer, height: resizedMeta.height });
+        totalImageHeight += resizedMeta.height; 
+      }
+
+      const fontSize = Math.max(16, Math.floor(targetWidth / 15)); 
+      const maxWidth = targetWidth * 0.9; 
       
-      // Get all attachments that are images
-      const attachments = Array.from(message.attachments.values()).filter(a => a.contentType && a.contentType.startsWith('image/'));
+      const fontOptions = { 
+        x: 0, 
+        y: 0, 
+        fontSize: fontSize, 
+        anchor: 'top', 
+        attributes: { fill: 'black' } 
+      };
 
-      // Validation
-      if (attachments.length === 0) {
-        return message.reply('🦇 You need to attach at least one image to make a meme!');
+      const words = text.split(' ');
+      const lines = [];
+      let currentLine = '';
+
+      words.forEach(word => {
+        const testLine = currentLine ? currentLine + ' ' + word : word;
+        const metrics = textToSVG.getMetrics(testLine, fontOptions);
+        
+        if (metrics.width > maxWidth && currentLine) {
+          lines.push(currentLine);
+          currentLine = word;
+        } else {
+          currentLine = testLine;
+        }
+      });
+      if (currentLine) lines.push(currentLine);
+
+      const textPaddingHeight = Math.floor((lines.length * fontSize * 1.3) + (fontSize * 1.0));
+
+      let combinedSvgPaths = '';
+      lines.forEach((line, i) => {
+        const yOffset = Math.floor((i * fontSize * 1.3) + (fontSize * 0.5));
+        
+        const metrics = textToSVG.getMetrics(line, fontOptions);
+        const xOffset = (targetWidth - metrics.width) / 2;
+        
+        const path = textToSVG.getPath(line, { ...fontOptions, x: xOffset, y: yOffset });
+        combinedSvgPaths += path;
+      });
+
+      const svg = `
+        <svg width="${targetWidth}" height="${textPaddingHeight}" xmlns="http://www.w3.org/2000/svg">
+          ${combinedSvgPaths}
+        </svg>
+      `;
+
+      const compositeLayers = [
+        { input: Buffer.from(svg), top: 0, left: 0 }
+      ];
+
+      let currentY = textPaddingHeight;
+      for (const img of processedImages) {
+        compositeLayers.push({ input: img.buffer, top: currentY, left: 0 });
+        currentY += img.height; 
       }
-      if (!text) {
-        return message.reply('🦇 Provide some text! Example: `&meme When the ST smiles`');
-      }
+
+      const totalCanvasHeight = textPaddingHeight + totalImageHeight;
+      
+      const outputBuffer = await sharp({
+        create: {
+          width: targetWidth,
+          height: totalCanvasHeight,
+          channels: 4,
+          background: { r: 255, g: 255, b: 255, alpha: 1 } 
+        }
+      })
+      .composite(compositeLayers)
+      .jpeg({ quality: 90 })
+      .toBuffer();
+
+      await message.channel.send({ 
+        content: `🎨 Meme created by: <@${message.author.id}>`,
+        files: [{ attachment: outputBuffer, name: 'meme.jpg' }] 
+      });
 
       try {
-        // Ensure textToSVG loaded successfully at the top of server.js
-        if (!textToSVG) {
-          return message.reply('❌ The server font engine is currently down. (TextToSVG failed to load).');
-        }
-
-        // 1. Download all images and get their data
-        const downloadedImages = [];
-        for (const attachment of attachments) {
-          const response = await axios.get(attachment.url, { responseType: 'arraybuffer' });
-          const buffer = Buffer.from(response.data, 'binary');
-          const meta = await sharp(buffer).metadata();
-          downloadedImages.push({ buffer, meta });
-        }
-
-        // 2. Set the baseline width (based on the first image attached)
-        const targetWidth = downloadedImages[0].meta.width;
-        let totalImageHeight = 0;
-        const processedImages = [];
-
-        // Resize all images to match the target width, keeping aspect ratio intact
-        for (const img of downloadedImages) {
-          const resizedBuffer = await sharp(img.buffer)
-            .resize({ width: targetWidth })
-            .toBuffer();
-          const resizedMeta = await sharp(resizedBuffer).metadata();
-          
-          processedImages.push({ buffer: resizedBuffer, height: resizedMeta.height });
-          totalImageHeight += resizedMeta.height; // Keep a running total of the image heights
-        }
-
-        // 3. Setup Font and text logic based on targetWidth
-        const fontSize = Math.max(16, Math.floor(targetWidth / 15)); 
-        const maxWidth = targetWidth * 0.9; // Leave 5% padding on each side
-        
-        const fontOptions = { 
-          x: 0, 
-          y: 0, 
-          fontSize: fontSize, 
-          anchor: 'top', 
-          attributes: { fill: 'black' } 
-        };
-
-        // Text wrapping using exact pixel widths
-        const words = text.split(' ');
-        const lines = [];
-        let currentLine = '';
-
-        words.forEach(word => {
-          const testLine = currentLine ? currentLine + ' ' + word : word;
-          const metrics = textToSVG.getMetrics(testLine, fontOptions);
-          
-          if (metrics.width > maxWidth && currentLine) {
-            lines.push(currentLine);
-            currentLine = word;
-          } else {
-            currentLine = testLine;
-          }
-        });
-        if (currentLine) lines.push(currentLine);
-
-        // Calculate text padding height
-        const textPaddingHeight = Math.floor((lines.length * fontSize * 1.3) + (fontSize * 1.0));
-
-        // 4. Generate SVG Paths for the text (Bypasses server fonts entirely)
-        let combinedSvgPaths = '';
-        lines.forEach((line, i) => {
-          // Calculate vertical position
-          const yOffset = Math.floor((i * fontSize * 1.3) + (fontSize * 0.5));
-          
-          // Get exact width to center the text perfectly
-          const metrics = textToSVG.getMetrics(line, fontOptions);
-          const xOffset = (targetWidth - metrics.width) / 2;
-          
-          // Generate the vector path for this specific line of text
-          const path = textToSVG.getPath(line, { ...fontOptions, x: xOffset, y: yOffset });
-          combinedSvgPaths += path;
-        });
-
-        // Wrap the paths in a standard SVG container
-        const svg = `
-          <svg width="${targetWidth}" height="${textPaddingHeight}" xmlns="http://www.w3.org/2000/svg">
-            ${combinedSvgPaths}
-          </svg>
-        `;
-
-        // 5. Build the composite layers
-        // Start with the text layer at the very top (y = 0)
-        const compositeLayers = [
-          { input: Buffer.from(svg), top: 0, left: 0 }
-        ];
-
-        // Now add each image below the text, stacking them sequentially
-        let currentY = textPaddingHeight;
-        for (const img of processedImages) {
-          compositeLayers.push({ input: img.buffer, top: currentY, left: 0 });
-          currentY += img.height; // Move the Y coordinate down for the next image
-        }
-
-        // 6. Create the final canvas and composite everything
-        const totalCanvasHeight = textPaddingHeight + totalImageHeight;
-        
-        const outputBuffer = await sharp({
-          create: {
-            width: targetWidth,
-            height: totalCanvasHeight,
-            channels: 4,
-            background: { r: 255, g: 255, b: 255, alpha: 1 } // White background
-          }
-        })
-        .composite(compositeLayers)
-        .jpeg({ quality: 90 })
-        .toBuffer();
-
-        // 7. Send it back & Cleanup!
-        await message.channel.send({ 
-          content: `🎨 Meme created by: <@${message.author.id}>`,
-          files: [{ attachment: outputBuffer, name: 'meme.jpg' }] 
-        });
-
-        // Delete the original command message
-        try {
-          await message.delete();
-        } catch (delErr) {
-          console.warn('Could not delete original meme message:', delErr.message);
-        }
-
-} catch (error) {
-        log.err('Discord Meme Generation Failed', { error: error.message });
-        message.channel.send(`❌ <@${message.author.id}> The shadows consumed your meme. (Something went wrong processing the image).`);
+        await message.delete();
+      } catch (delErr) {
+        console.warn('Could not delete original meme message:', delErr.message);
       }
-    } 
-  }); 
-} else {
-  log.warn('DISCORD_BOT_TOKEN not set. Discord bot disabled.');
+
+    } catch (error) {
+      log.err('Discord Meme Generation Failed', { error: error.message });
+      message.channel.send(`❌ <@${message.author.id}> The shadows consumed your meme. (Something went wrong processing the image).`);
+    }
+  } 
+});
 }
 
 // ============================================================================
