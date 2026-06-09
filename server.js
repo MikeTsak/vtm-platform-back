@@ -1060,13 +1060,20 @@ async function _ensureChatTables() {
       ) ENGINE=InnoDB;
     `);
 
-    // 2. Add attachment_id column to existing message tables if missing
+    // 2. Add attachment_id and edited columns to existing message tables if missing
     const addCol = async (table) => {
       try {
         const [cols] = await pool.query(`SHOW COLUMNS FROM ${table} LIKE 'attachment_id'`);
         if (cols.length === 0) {
           await pool.query(`ALTER TABLE ${table} ADD COLUMN attachment_id INT UNSIGNED NULL`);
           log.ok(`Added attachment_id to ${table}`);
+        }
+        
+        // --- NEW: Add 'edited' tracking ---
+        const [editCols] = await pool.query(`SHOW COLUMNS FROM ${table} LIKE 'edited'`);
+        if (editCols.length === 0) {
+          await pool.query(`ALTER TABLE ${table} ADD COLUMN edited BOOLEAN DEFAULT FALSE`);
+          log.ok(`Added edited tracking column to ${table}`);
         }
       } catch (e) { /* ignore if table doesn't exist yet */ }
     };
@@ -4665,6 +4672,116 @@ app.post('/api/chat/messages', authRequired, async (req, res) => {
   }
 });
 
+/* --- Edit & Delete Messages (4-Hour Window) --- */
+
+// Universal Edit Message Route
+app.put('/api/chat/messages/:id', authRequired, async (req, res) => {
+  try {
+    const msgId = Number(req.params.id);
+    const { body } = req.body;
+    const userId = req.user.id;
+    const isAdmin = req.user.role === 'admin' || req.user.permission_level === 'admin';
+    
+    if (!body || !body.trim()) return res.status(400).json({ error: 'Message body cannot be empty.' });
+
+    const FOUR_HOURS = 4 * 60 * 60 * 1000;
+    
+    const tables = [
+      { name: 'chat_messages', senderCol: 'sender_id' },
+      { name: 'chat_group_messages', senderCol: 'sender_id' },
+      { name: 'npc_messages', senderCol: 'user_id', extraCondition: "from_side = 'user'" }
+    ];
+
+    let found = false;
+
+    for (const table of tables) {
+      const extraWhere = table.extraCondition ? ` AND ${table.extraCondition}` : '';
+      const [rows] = await pool.query(`SELECT id, ${table.senderCol} as sender_id, created_at FROM ${table.name} WHERE id = ?${extraWhere}`, [msgId]);
+
+      if (rows.length > 0) {
+        const msg = rows[0];
+        found = true;
+        
+        // FIX: Cast both to Strings to prevent Strict Equality ( !== ) Type Bugs
+        if (String(msg.sender_id) !== String(userId) && !isAdmin) {
+          return res.status(403).json({ error: 'You can only edit your own messages.' });
+        }
+        if (Date.now() - new Date(msg.created_at).getTime() > FOUR_HOURS && !isAdmin) {
+          return res.status(403).json({ error: 'You can only edit a message within 4 hours of sending.' });
+        }
+
+        await pool.query(`UPDATE ${table.name} SET body = ?, edited = 1 WHERE id = ?`, [body.trim(), msgId]);
+        return res.json({ ok: true, edited: true });
+      }
+    }
+
+    if (isAdmin && !found) {
+      const [npcRows] = await pool.query(`SELECT id FROM npc_messages WHERE id = ? AND from_side = 'npc'`, [msgId]);
+      if (npcRows.length > 0) {
+        await pool.query(`UPDATE npc_messages SET body = ?, edited = 1 WHERE id = ?`, [body.trim(), msgId]);
+        return res.json({ ok: true, edited: true });
+      }
+    }
+
+    if (!found) return res.status(404).json({ error: 'Message not found.' });
+
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to edit message.' });
+  }
+});
+
+// Universal Delete Message Route
+app.delete('/api/chat/messages/:id', authRequired, async (req, res) => {
+  try {
+    const msgId = Number(req.params.id);
+    const userId = req.user.id;
+    const isAdmin = req.user.role === 'admin' || req.user.permission_level === 'admin';
+    const FOUR_HOURS = 4 * 60 * 60 * 1000;
+    
+    const tables = [
+      { name: 'chat_messages', senderCol: 'sender_id' },
+      { name: 'chat_group_messages', senderCol: 'sender_id' },
+      { name: 'npc_messages', senderCol: 'user_id', extraCondition: "from_side = 'user'" }
+    ];
+
+    let found = false;
+
+    for (const table of tables) {
+      const extraWhere = table.extraCondition ? ` AND ${table.extraCondition}` : '';
+      const [rows] = await pool.query(`SELECT id, ${table.senderCol} as sender_id, created_at FROM ${table.name} WHERE id = ?${extraWhere}`, [msgId]);
+
+      if (rows.length > 0) {
+        const msg = rows[0];
+        found = true;
+        
+        // FIX: Cast both to Strings to prevent Strict Equality ( !== ) Type Bugs
+        if (String(msg.sender_id) !== String(userId) && !isAdmin) {
+          return res.status(403).json({ error: 'You can only delete your own messages.' });
+        }
+        if (Date.now() - new Date(msg.created_at).getTime() > FOUR_HOURS && !isAdmin) {
+          return res.status(403).json({ error: 'You can only delete a message within 4 hours of sending.' });
+        }
+
+        await pool.query(`DELETE FROM ${table.name} WHERE id = ?`, [msgId]);
+        return res.json({ ok: true });
+      }
+    }
+
+    if (isAdmin && !found) {
+      const [npcRows] = await pool.query(`SELECT id FROM npc_messages WHERE id = ? AND from_side = 'npc'`, [msgId]);
+      if (npcRows.length > 0) {
+        await pool.query(`DELETE FROM npc_messages WHERE id = ?`, [msgId]);
+        return res.json({ ok: true });
+      }
+    }
+
+    if (!found) return res.status(404).json({ error: 'Message not found.' });
+
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to delete message.' });
+  }
+});
+
 // Mark messages as delivered (Call this when the chat app loads new messages)
 app.post('/api/chat/delivered', authRequired, async (req, res) => {
   try {
@@ -6612,16 +6729,21 @@ app.get('/api/news/media/:id', async (req, res) => {
   }
 });
 
-// POST /api/news (Admin/Court) - Create Entry
+// POST /api/news - Create Entry
 app.post('/api/news', authRequired, async (req, res) => {
   try {
     const { type, title, subtitle, body, theme, journalist_name, media_url } = req.body;
 
-    // Permission Check
+    // --- PERMISSION CHECK ---
     if (type === 'news') {
-        if (req.user.role === 'courtuser') {
-            if (theme !== 'RUMOR') {
-                return res.status(403).json({ error: 'Court members can only post Rumors/Gossip' });
+        if (theme === 'RUMOR') {
+            // For rumors, any activated player can post.
+            // Check if user is standard player, and if so, verify they have a character
+            if (req.user.role !== 'admin' && req.user.role !== 'courtuser') {
+                const [chars] = await pool.query('SELECT id FROM characters WHERE user_id = ?', [req.user.id]);
+                if (chars.length === 0) {
+                    return res.status(403).json({ error: 'You must have a character registered to post rumors.' });
+                }
             }
         } else if (req.user.role !== 'admin') {
             return res.status(403).json({ error: 'Only Admins can post official News' });
@@ -6652,12 +6774,12 @@ app.post('/api/news', authRequired, async (req, res) => {
       ]
     );
 
-    // --- NEW: DISCORD NEWS BROADCAST ---
+    // --- DISCORD NEWS BROADCAST ---
     const discordEnabled = await getSetting('discord_enabled', 'true') === 'true';
     const notifyPrems = await getSetting('discord_notify_prems', 'true') === 'true';
+    
     if (discordEnabled && notifyPrems && discordClient?.isReady()) {
       try {
-        // Grab the channel ID from your settings table
         const channelId = await getSetting('discord_channel_id', null);
         if (channelId) {
           const channel = await discordClient.channels.fetch(channelId);
@@ -6674,7 +6796,6 @@ app.post('/api/news', authRequired, async (req, res) => {
           }
         }
       } catch (discordErr) {
-        // Fail gracefully so the API request still succeeds
         log.err('Discord news broadcast failed', { error: discordErr.message });
       }
     }
