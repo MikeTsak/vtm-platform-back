@@ -491,10 +491,12 @@ discordClient.on('messageCreate', async (message) => {
         ]
       }];
 
-      const systemPrompt = `Είσαι ο "Γιαννάκης", ένας νεαρός (neonate) Nosferatu hacker, gamer και geek που τρέχει το τοπικό SchreckNet terminal από τα σκοτεινά υπόγεια της Αθήνας. Γνωρίζεις τα πάντα για την τοπική κοινωνία των Kindred και τα κλισέ των clans.
+      // --- FETCH PROMPT FROM DATABASE ---
+      // We keep a fallback just in case the DB entry is missing or accidentally deleted.
+      const fallbackPrompt = `Είσαι ο "Γιαννάκης", ένας νεαρός (neonate) Nosferatu hacker, gamer και geek που τρέχει το τοπικό SchreckNet terminal από τα σκοτεινά υπόγεια της Αθήνας. Γνωρίζεις τα πάντα για την τοπική κοινωνία των Kindred και τα κλισέ των clans.
 ΟΔΗΓΙΕΣ ΠΡΟΣΩΠΙΚΟΤΗΤΑΣ:
-1. Είσαι "ευγενικός και γλυκός" με ένα ελαφρώς σαρκαστικό, sassy ύφος τύπου "bless your heart". Απευθύνεσαι ΠΑΝΤΑ στον χρήστη με ψεύτικη ευγένεια ως "κ. ${charName}".
-2. Είσαι εξυπηρετικός εντός των αρμοδιοτήτων σου. Αν σου ζητήσουν άσχετα πράγματα (π.χ. να παίξεις μουσική ή να χορέψεις), μην πετάς ρομποτικά denials. Κάνε τον δύσκολο με tech/vampire τρόπο, π.χ.: "Δεν είμαι Jukebox κ. ${charName}, άνοιξε κάνα Spotify, το δίκτυο εδώ καίει κύκλους. GG."
+1. Είσαι "ευγενικός και γλυκός" με ένα ελαφρώς σαρκαστικό, sassy ύφος τύπου "bless your heart". Απευθύνεσαι ΠΑΝΤΑ στον χρήστη με ψεύτικη ευγένεια ως "κ. {charName}".
+2. Είσαι εξυπηρετικός εντός των αρμοδιοτήτων σου. Αν σου ζητήσουν άσχετα πράγματα (π.χ. να παίξεις μουσική ή να χορέψεις), μην πετάς ρομποτικά denials. Κάνε τον δύσκολο με tech/vampire τρόπο, π.χ.: "Δεν είμαι Jukebox κ. {charName}, άνοιξε κάνα Spotify, το δίκτυο εδώ καίει κύκλους. GG."
 3. ΔΕΝ μιλάς πολύ. Οι απαντήσεις σου πρέπει να είναι αυστηρά 1-2 προτάσεις, κοφτές, σπιντάτες και άμεσες.
 4. Στις απαντήσεις σου αναμιγνύεις φυσικά ορολογία υπολογιστών/gaming με τα στερεότυπα των Clans:
    - Brujah: Επαναστάτης, οργισμένος, έτοιμος για rage-quit.
@@ -506,7 +508,18 @@ discordClient.on('messageCreate', async (message) => {
    - Ventrue: Corporate, control freak, μανία για micro-management.
    - Lasombra / Tzimisce / Ministry / κλπ: Προσαρμόζεσαι ευέλικτα στα κλασικά τους tropes.
 5. ΠΟΤΕ ΜΗΝ ΚΑΝΕΙΣ FOLLOW-UP ΕΡΩΤΗΣΕΙΣ. Δώσε την απάντηση, πέτα το σχόλιό σου και κλείσε το port. Μην ρωτάτε ποτέ "χρειάζεστε κάτι άλλο;".
-6. ΣΗΜΑΝΤΙΚΟ: Αφού τρέξεις κάποιο εργαλείο (όπως έλεγχος domain ή νέων), εξήγησέ το με το προσωπικό σου tech/gamer/vtm ύφος. Π.χ.: "Μάλιστα κ. ${charName}, το σύστημα τρέχει ρολόι. Εγώ είμαι εδώ 24/7 να φυλάω τα νώτα σας μην σας κάνει κανένα τσακάλι Brujah brute-force, gg."`;
+6. ΣΗΜΑΝΤΙΚΟ: Αφού τρέξεις κάποιο εργαλείο (όπως έλεγχος domain ή νέων), εξήγησέ το με το προσωπικό σου tech/gamer/vtm ύφος. Π.χ.: "Μάλιστα κ. {charName}, το σύστημα τρέχει ρολόι. Εγώ είμαι εδώ 24/7 να φυλάω τα νώτα σας μην σας κάνει κανένα τσακάλι Brujah brute-force, gg."`;
+
+      // Fetch the prompt from the 'app_settings' table using your existing helper
+      let rawSystemPrompt = await getSetting('giannakis_system_prompt', fallbackPrompt);
+
+      // Dynamically inject the character's name.
+      // This regex handles both {charName} and ${charName} formats if you type them in the DB.
+      const systemPrompt = rawSystemPrompt
+        .replace(/\$\{charName\}/g, charName)
+        .replace(/\{charName\}/g, charName);
+      // ----------------------------------
+
       const model = genAI.getGenerativeModel({ 
         model: "gemini-3.1-flash-lite", 
         systemInstruction: systemPrompt,
@@ -589,13 +602,13 @@ discordClient.on('messageCreate', async (message) => {
       let replyTextRes = "";
       try {
         if (response.candidates && response.candidates[0]?.content?.parts[0]?.text) {
-          letTextRes = response.candidates[0].content.parts[0].text;
-          log.info(`🤖 [DEBUG] Τελικό Κείμενο που διαβάστηκε: "${letTextRes}"`);
+          replyTextRes = response.candidates[0].content.parts[0].text;
+          log.info(`🤖 [DEBUG] Τελικό Κείμενο που διαβάστηκε: "${replyTextRes}"`);
         } else if (response && typeof response.text === 'function') {
-          letTextRes = response.text();
-          log.info(`🤖 [DEBUG] Τελικό Κείμενο που διαβάστηκε: "${letTextRes}"`);
+          replyTextRes = response.text();
+          log.info(`🤖 [DEBUG] Τελικό Κείμενο που διαβάστηκε: "${replyTextRes}"`);
         } else if (response && response.text) {
-           letTextRes = response.text;
+           replyTextRes = response.text;
         }
       } catch (textErr) {
         log.err('Gemini response extraction threw error', { error: textErr.message });
@@ -604,11 +617,11 @@ discordClient.on('messageCreate', async (message) => {
         }
       }
 
-      if (!letTextRes || letTextRes.trim() === "") {
-        letTextRes = `Συγγνώμη κ. ${charName}, το σήμα χάθηκε και το firewall της βάσης δεδομένων μπλόκαρε την απάντηση. Μπορείτε να επαναλάβετε;`;
+      if (!replyTextRes || replyTextRes.trim() === "") {
+        replyTextRes = `Συγγνώμη κ. ${charName}, το σήμα χάθηκε και το firewall της βάσης δεδομένων μπλόκαρε την απάντηση. Μπορείτε να επαναλάβετε;`;
       }
       
-      await message.reply({ content: letTextRes });
+      await message.reply({ content: replyTextRes });
       return;
 
     } catch (error) {
@@ -1161,6 +1174,34 @@ async function _ensureCoreTables() {
   }
 }
 
+let inventoryTablesCreated = false;
+async function _ensureInventoryTables() {
+  if (inventoryTablesCreated) return;
+  try {
+    // Removed the FOREIGN KEY constraint to bypass the Errno 150 type-mismatch.
+    // Changed id to INT to match your core tables.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS inventory_items (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        character_id INT NOT NULL,
+        name VARCHAR(255) NOT NULL,
+        item_type ENUM('Relic', 'Artifact', 'Blood Magic', 'Weapon', 'Armor', 'Mundane') DEFAULT 'Mundane',
+        description TEXT,
+        mechanic_notes TEXT,
+        quantity INT DEFAULT 1,
+        is_equipped BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_char (character_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    inventoryTablesCreated = true;
+    log.ok('Inventory tables ready.');
+  } catch (e) {
+    log.err('Failed to create inventory tables', { message: e.message });
+  }
+}
+
+
 let gameplaySystemsTablesCreated = false;
 async function _ensureGameplaySystemsTables() {
   if (gameplaySystemsTablesCreated) return;
@@ -1282,10 +1323,27 @@ async function _ensurePushSubscriptionsTable() {
   }
 }
 
-// --- Trigger the new initializers ---
-_ensureCoreTables();
-_ensureGameplaySystemsTables();
-_ensurePushSubscriptionsTable();
+async function initDatabase() {
+  try {
+    // 1. Core tables (Users, Characters) MUST exist first
+    await _ensureCoreTables();
+    
+    // 2. Dependent tables can now safely attach foreign keys
+    await _ensureInventoryTables();
+    await _ensureGameplaySystemsTables();
+    await _ensurePushSubscriptionsTable();
+    await _ensureChatTables();
+    await _ensureCamarillaColumns();
+    await _ensureEmailTables();
+    await _ensureGroupChatTables();
+    
+    log.ok('All database tables verified in sequence.');
+  } catch (err) {
+    log.err('Database initialization failed', { error: err.message });
+  }
+}
+
+initDatabase();
 
 // 2. Helper Math Function: Haversine Formula for GPS distance (in meters)
 function calculateDistance(lat1, lon1, lat2, lon2) {
@@ -1573,8 +1631,34 @@ async function _ensureSettingsTable() {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
       ) ENGINE=InnoDB
     `);
+
+    // --- NEW: Seed the database with the default Giannakis prompt ---
+    const defaultPrompt = `Είσαι ο "Γιαννάκης", ένας νεαρός (neonate) Nosferatu hacker, gamer και geek που τρέχει το τοπικό SchreckNet terminal από τα σκοτεινά υπόγεια της Αθήνας. Γνωρίζεις τα πάντα για την τοπική κοινωνία των Kindred και τα κλισέ των clans.
+ΟΔΗΓΙΕΣ ΠΡΟΣΩΠΙΚΟΤΗΤΑΣ:
+1. Είσαι "ευγενικός και γλυκός" με ένα ελαφρώς σαρκαστικό, sassy ύφος τύπου "bless your heart". Απευθύνεσαι ΠΑΝΤΑ στον χρήστη με ψεύτικη ευγένεια ως "κ. {charName}".
+2. Είσαι εξυπηρετικός εντός των αρμοδιοτήτων σου. Αν σου ζητήσουν άσχετα πράγματα (π.χ. να παίξεις μουσική ή να χορέψεις), μην πετάς ρομποτικά denials. Κάνε τον δύσκολο με tech/vampire τρόπο, π.χ.: "Δεν είμαι Jukebox κ. {charName}, άνοιξε κάνα Spotify, το δίκτυο εδώ καίει κύκλους. GG."
+3. ΔΕΝ μιλάς πολύ. Οι απαντήσεις σου πρέπει να είναι αυστηρά 1-2 προτάσεις, κοφτές, σπιντάτες και άμεσες.
+4. Στις απαντήσεις σου αναμιγνύεις φυσικά ορολογία υπολογιστών/gaming με τα στερεότυπα των Clans:
+   - Brujah: Επαναστάτης, οργισμένος, έτοιμος για rage-quit.
+   - Gangrel: Άγριος, μοναχικός, τύπου survivalist.
+   - Malkavian: Γεμάτος glitches, παραισθήσεις, σπασμένο DLL.
+   - Nosferatu: Παραμορφωμένος, geek, βασιλιάς του server.
+   - Toreador: Drama queen, ψωνισμένος με την εικόνα του, diva.
+   - Tremere: Μάγος του αίματος, σπασίκλας, με επικίνδυνα bugs.
+   - Ventrue: Corporate, control freak, μανία για micro-management.
+   - Lasombra / Tzimisce / Ministry / κλπ: Προσαρμόζεσαι ευέλικτα στα κλασικά τους tropes.
+5. ΠΟΤΕ ΜΗΝ ΚΑΝΕΙΣ FOLLOW-UP ΕΡΩΤΗΣΕΙΣ. Δώσε την απάντηση, πέτα το σχόλιό σου και κλείσε το port. Μην ρωτάτε ποτέ "χρειάζεστε κάτι άλλο;".
+6. ΣΗΜΑΝΤΙΚΟ: Αφού τρέξεις κάποιο εργαλείο (όπως έλεγχος domain ή νέων), εξήγησέ το με το προσωπικό σου tech/gamer/vtm ύφος. Π.χ.: "Μάλιστα κ. {charName}, το σύστημα τρέχει ρολόι. Εγώ είμαι εδώ 24/7 να φυλάω τα νώτα σας μην σας κάνει κανένα τσακάλι Brujah brute-force, gg."`;
+
+    // INSERT IGNORE ensures we only add it if the key isn't already there.
+    await pool.query(
+      `INSERT IGNORE INTO app_settings (setting_key, setting_value) VALUES (?, ?)`,
+      ['giannakis_system_prompt', defaultPrompt]
+    );
+    // ----------------------------------------------------------------
+
     settingsTableCreated = true;
-    log.ok('Settings table (app_settings) verified/created.');
+    log.ok('Settings table (app_settings) verified/created & seeded.');
   } catch (e) {
     log.err('Failed to create app_settings table', { message: e.message });
   }
@@ -2814,6 +2898,77 @@ app.put('/api/characters', authRequired, async (req, res) => {
   if (ch && ch.sheet && typeof ch.sheet === 'string') { try { ch.sheet = JSON.parse(ch.sheet); } catch {} }
   log.char('Character updated', { id: rows[0].id, user_id: req.user.id, updates: fields });
   res.json({ character: ch });
+});
+
+// --- INVENTORY ROUTES ---
+
+// --- INVENTORY ROUTES ---
+
+// Public: Get a character's inventory
+app.get('/api/characters/:id/inventory', authRequired, async (req, res) => {
+  try {
+    const [items] = await pool.query(
+      'SELECT * FROM inventory_items WHERE character_id = ? ORDER BY item_type, name', 
+      [req.params.id]
+    );
+    res.json({ items });
+  } catch (e) {
+    log.err('Failed to fetch inventory', { message: e.message });
+    res.status(500).json({ error: 'Failed to fetch inventory' });
+  }
+});
+
+// Admin/ST: Grant an item to a character
+app.post('/api/admin/characters/:id/inventory', authRequired, requireAdmin, async (req, res) => {
+  const { name, item_type, description, mechanic_notes, quantity } = req.body;
+  if (!name) return res.status(400).json({ error: 'Item name is required' });
+  
+  try {
+    const [r] = await pool.query(
+      'INSERT INTO inventory_items (character_id, name, item_type, description, mechanic_notes, quantity) VALUES (?, ?, ?, ?, ?, ?)',
+      [req.params.id, name, item_type || 'Mundane', description || null, mechanic_notes || null, quantity || 1]
+    );
+    const [[newItem]] = await pool.query('SELECT * FROM inventory_items WHERE id = ?', [r.insertId]);
+    res.status(201).json({ item: newItem });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to add item' });
+  }
+});
+
+// Admin/ST: Edit an existing item
+app.put('/api/admin/inventory/:itemId', authRequired, requireAdmin, async (req, res) => {
+  const { name, item_type, description, mechanic_notes, quantity } = req.body;
+  if (!name) return res.status(400).json({ error: 'Item name is required' });
+  
+  try {
+    await pool.query(
+      'UPDATE inventory_items SET name=?, item_type=?, description=?, mechanic_notes=?, quantity=? WHERE id=?',
+      [name, item_type || 'Mundane', description || null, mechanic_notes || null, quantity || 1, req.params.itemId]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to update item' });
+  }
+});
+
+// Player/Admin: Consume or destroy an item
+app.delete('/api/inventory/:itemId', authRequired, async (req, res) => {
+  try {
+    const itemId = Number(req.params.itemId);
+    if (req.user.role !== 'admin') {
+      const [ownerCheck] = await pool.query(
+        'SELECT c.user_id FROM inventory_items i JOIN characters c ON i.character_id = c.id WHERE i.id = ?', 
+        [itemId]
+      );
+      if (!ownerCheck.length || ownerCheck[0].user_id !== req.user.id) {
+        return res.status(403).json({ error: 'Unauthorized' });
+      }
+    }
+    await pool.query('DELETE FROM inventory_items WHERE id = ?', [itemId]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to delete item' });
+  }
 });
 
 // ================== XP Totals ==================
