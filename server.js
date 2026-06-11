@@ -388,39 +388,41 @@ discordClient.on('messageCreate', async (message) => {
   if (message.content.startsWith(botMentionPrefix)) {
     const commandText = message.content.replace(botMentionPrefix, '').trim().toLowerCase();
     
-    if (commandText === 'whoami') {
-      try {
-        // 1. Cross-reference users table via discord_id
-        const [userRows] = await pool.query(
-          'SELECT id, display_name FROM users WHERE discord_id = ? LIMIT 1', 
-          [message.author.id]
-        );
+if (commandText === 'whoami') {
+          try {
+            // 1. Cross-reference users table via discord_id
+            const [userRows] = await pool.query(
+              'SELECT id, display_name FROM users WHERE discord_id = ? LIMIT 1', 
+              [message.author.id]
+            );
 
-        if (userRows.length === 0) {
-          return await message.reply('❌ Δεν βρέθηκε εγγραφή χρήστη συνδεδεμένη με το Discord ID σου.');
+            if (userRows.length === 0) {
+              return await message.reply('❌ Δεν βρέθηκε εγγραφή χρήστη συνδεδεμένη με το Discord ID σου.');
+            }
+
+            const user = userRows[0];
+
+            // 2. Match user id from characters table to get character name AND clan
+            const [charRows] = await pool.query(
+              'SELECT name, clan FROM characters WHERE user_id = ? LIMIT 1', 
+              [user.id]
+            );
+
+            const charName = charRows.length > 0 ? charRows[0].name : 'Δεν βρέθηκε ενεργός χαρακτήρας';
+            const charClan = (charRows.length > 0 && charRows[0].clan) ? charRows[0].clan : 'Άγνωστη Clan';
+
+            return await message.reply({
+              content: `👤 **SchreckNet Identity Verification**\n` +
+                       `> **Discord User:** \`${message.author.username}\`\n` +
+                       `> **Portal Display Name:** \`${user.display_name}\`\n` +
+                       `> **Character Name:** \`${charName}\`\n` +
+                       `> **Clan:** \`${charClan}\``
+            });
+          } catch (e) {
+            log.err('Whoami command failure', { error: e.message });
+            return await message.reply('❌ Σφάλμα ανάκτησης στοιχείων από τον server.');
+          }
         }
-
-        const user = userRows[0];
-
-        // 2. Match user id from characters table to get character name
-        const [charRows] = await pool.query(
-          'SELECT name FROM characters WHERE user_id = ? LIMIT 1', 
-          [user.id]
-        );
-
-        const charName = charRows.length > 0 ? charRows[0].name : 'Δεν βρέθηκε ενεργός χαρακτήρας';
-
-        return await message.reply({
-          content: `👤 **SchreckNet Identity Verification**\n` +
-                   `> **Discord User:** \`${message.author.username}\`\n` +
-                   `> **Portal Display Name:** \`${user.display_name}\`\n` +
-                   `> **Character Name:** \`${charName}\``
-        });
-      } catch (e) {
-        log.err('Whoami command failure', { error: e.message });
-        return await message.reply('❌ Σφάλμα ανάκτησης στοιχείων από τον server.');
-      }
-    }
   }
 
   // --- SCHRECKNET NODE AI - "ΓΙΑΝΝΑΚΗΣ" (WITH IMPROVED DB CROSS-REFERENCING) ---
@@ -430,6 +432,7 @@ discordClient.on('messageCreate', async (message) => {
 
       // Ultimate Fallback: Discord Username
       let charName = message.author.username;
+      let charClan = 'Unknown';
 
       // Chained Database Lookup: users -> characters
       try {
@@ -442,14 +445,15 @@ discordClient.on('messageCreate', async (message) => {
           const dbUser = userRows[0];
           charName = dbUser.display_name; // Fallback to portal name
 
-          // Match character using the user.id
+          // Match character using the user.id - NEW: Added 'clan' to the SELECT
           const [charRows] = await pool.query(
-            'SELECT name FROM characters WHERE user_id = ? LIMIT 1', 
+            'SELECT name, clan FROM characters WHERE user_id = ? LIMIT 1', 
             [dbUser.id]
           );
 
-          if (charRows.length > 0 && charRows[0].name) {
-            charName = charRows[0].name;
+          if (charRows.length > 0) {
+            if (charRows[0].name) charName = charRows[0].name;
+            if (charRows[0].clan) charClan = charRows[0].clan; // <-- NEW: Store the clan
           }
         }
       } catch (dbLookupErr) {
@@ -457,7 +461,7 @@ discordClient.on('messageCreate', async (message) => {
       }
 
       const userQuery = message.content.replace(`<@${discordClient.user.id}>`, '').trim();
-      log.info(`🤖 [DEBUG] Ο/Η ${charName} ρώτησε τον Γιαννάκη: "${userQuery}"`);
+      log.info(`🤖 [DEBUG] Ο/Η ${charName} (${charClan}) ρώτησε τον Γιαννάκη: "${userQuery}"`);
 
       const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
 
@@ -494,7 +498,9 @@ discordClient.on('messageCreate', async (message) => {
       // --- FETCH PROMPT FROM DATABASE ---
 
 
-// Τράβηγμα του prompt απευθείας από τη βάση δεδομένων
+// --- FETCH PROMPT FROM DATABASE ---
+
+      // Τράβηγμα του prompt απευθείας από τη βάση δεδομένων
       let rawSystemPrompt = await getSetting('giannakis_system_prompt');
 
       if (!rawSystemPrompt) {
@@ -502,10 +508,15 @@ discordClient.on('messageCreate', async (message) => {
         return message.reply({ content: "Συγγνώμη κ. Administrator... έχασα τα αρχεία ρυθμίσεων της προσωπικότητάς μου." });
       }
 
-      // Δυναμική εισαγωγή του ονόματος χαρακτήρα
-      const systemPrompt = rawSystemPrompt
+      // Δυναμική εισαγωγή του ονόματος χαρακτήρα και της Clan
+      let systemPrompt = rawSystemPrompt
         .replace(/\$\{charName\}/g, charName)
-        .replace(/\{charName\}/g, charName);
+        .replace(/\{charName\}/g, charName)
+        .replace(/\$\{charClan\}/g, charClan) 
+        .replace(/\{charClan\}/g, charClan);
+
+      // <-- NEW: Hardcode the context into the system prompt so the AI never misses it
+      systemPrompt += `\n\n[SYSTEM CONTEXT: The user you are currently talking to is named "${charName}" and belongs to Clan "${charClan}". Adapt your response, slang, and attitude towards them based on their Clan's stereotypes.]`;
 
       const model = genAI.getGenerativeModel({ 
         model: "gemini-3.1-flash-lite", 
