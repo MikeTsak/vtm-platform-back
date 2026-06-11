@@ -4,9 +4,22 @@ Express + MariaDB backend API for the **Vampire: The Masquerade V5 LARP** platfo
 
 It provides authentication, character management, XP economy (including discipline power assignment), downtimes, domains/claims, and admin tooling (users, XP tools, and NPCs).
 
-- Frontend repo: **MikeTsak/vtm-platform-front**
+- Frontend: Located in the `front/` directory of this repository
 - API base (local default): `http://localhost:3001/api`
 - Swagger UI (if enabled): `http://localhost:3001/api-docs`
+
+## Project Ecosystem
+
+This backend is part of the Vampire Platform monorepo, which includes:
+
+- `front/` - React single-page application for player and Storyteller/admin interfaces
+- `hunt/` - Hunt tracker application for managing hunting chronicles
+- `erebus-mobile/` - Mobile companion app for in-character (SchreckNet) and out-of-character (Surface Web) communication
+- `larp-badges/` - Tool for generating printable character badges
+- `attlarp.gr/` - Athens Through Time chronicle website (lore, setting, gallery)
+- `db/` - Database schemas and sample data
+
+All components communicate with this backend API to provide a full-featured LARP management platform.
 
 ---
 
