@@ -54,8 +54,11 @@ const corsOrigin = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
   : true; // Development: allow all origins
 app.use(cors({ origin: corsOrigin, credentials: true }));
-app.use(express.json({ limit: '1mb' }));
+// app.use(express.json({ limit: '1mb' }));
 app.set('trust proxy', true);
+// Increase payload limit to 70MB for Base64 image uploads
+app.use(express.json({ limit: '70mb' }));
+app.use(express.urlencoded({ limit: '70mb', extended: true }));
 
 // Disable caching for all admin API routes to prevent 304 errors
 app.use('/api/admin', (req, res, next) => {
@@ -2954,11 +2957,11 @@ app.put('/api/characters', authRequired, async (req, res) => {
   res.json({ character: ch });
 });
 
-// --- INVENTORY ROUTES ---
+// ==========================================
+// INVENTORY ROUTES
+// ==========================================
 
-// --- INVENTORY ROUTES ---
-
-// Public: Get a character's inventory
+// GET: Fetch a character's inventory
 app.get('/api/characters/:id/inventory', authRequired, async (req, res) => {
   try {
     const [items] = await pool.query(
@@ -2972,55 +2975,76 @@ app.get('/api/characters/:id/inventory', authRequired, async (req, res) => {
   }
 });
 
-// Admin/ST: Grant an item to a character
-app.post('/api/admin/characters/:id/inventory', authRequired, requireAdmin, async (req, res) => {
-  const { name, item_type, description, mechanic_notes, quantity } = req.body;
+// POST: Add a new item
+app.post('/api/characters/:id/inventory', authRequired, async (req, res) => {
+  const charId = Number(req.params.id);
+  const { name, item_type, description, mechanic_notes, quantity, image, researched } = req.body;
+
   if (!name) return res.status(400).json({ error: 'Item name is required' });
-  
+
   try {
+    if (req.user.role !== 'admin') {
+      const [charRows] = await pool.query('SELECT id FROM characters WHERE id = ? AND user_id = ?', [charId, req.user.id]);
+      if (!charRows.length) return res.status(403).json({ error: 'Unauthorized' });
+    }
+
     const [r] = await pool.query(
-      'INSERT INTO inventory_items (character_id, name, item_type, description, mechanic_notes, quantity) VALUES (?, ?, ?, ?, ?, ?)',
-      [req.params.id, name, item_type || 'Mundane', description || null, mechanic_notes || null, quantity || 1]
+      `INSERT INTO inventory_items (character_id, name, item_type, description, mechanic_notes, quantity, image, researched) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [charId, name, item_type || 'Mundane', description || null, mechanic_notes || null, quantity || 1, image || null, researched ? 1 : 0]
     );
+
     const [[newItem]] = await pool.query('SELECT * FROM inventory_items WHERE id = ?', [r.insertId]);
     res.status(201).json({ item: newItem });
   } catch (e) {
+    log.err('Failed to add inventory item', { message: e.message });
     res.status(500).json({ error: 'Failed to add item' });
   }
 });
 
-// Admin/ST: Edit an existing item
-app.put('/api/admin/inventory/:itemId', authRequired, requireAdmin, async (req, res) => {
-  const { name, item_type, description, mechanic_notes, quantity } = req.body;
+// PUT: Edit an existing item
+app.put('/api/characters/:id/inventory/:itemId', authRequired, async (req, res) => {
+  const charId = Number(req.params.id);
+  const itemId = Number(req.params.itemId);
+  const { name, item_type, description, mechanic_notes, quantity, image, researched } = req.body;
+
   if (!name) return res.status(400).json({ error: 'Item name is required' });
-  
+
   try {
+    if (req.user.role !== 'admin') {
+      const [charRows] = await pool.query('SELECT id FROM characters WHERE id = ? AND user_id = ?', [charId, req.user.id]);
+      if (!charRows.length) return res.status(403).json({ error: 'Unauthorized' });
+    }
+
     await pool.query(
-      'UPDATE inventory_items SET name=?, item_type=?, description=?, mechanic_notes=?, quantity=? WHERE id=?',
-      [name, item_type || 'Mundane', description || null, mechanic_notes || null, quantity || 1, req.params.itemId]
+      `UPDATE inventory_items 
+       SET name=?, item_type=?, description=?, mechanic_notes=?, quantity=?, image=?, researched=? 
+       WHERE id=? AND character_id=?`,
+      [name, item_type || 'Mundane', description || null, mechanic_notes || null, quantity || 1, image || null, researched ? 1 : 0, itemId, charId]
     );
-    res.json({ ok: true });
+
+    res.json({ success: true });
   } catch (e) {
+    log.err('Failed to update inventory item', { message: e.message });
     res.status(500).json({ error: 'Failed to update item' });
   }
 });
 
-// Player/Admin: Consume or destroy an item
-app.delete('/api/inventory/:itemId', authRequired, async (req, res) => {
+// DELETE: Remove an item
+app.delete('/api/characters/:id/inventory/:itemId', authRequired, async (req, res) => {
+  const charId = Number(req.params.id);
+  const itemId = Number(req.params.itemId);
+
   try {
-    const itemId = Number(req.params.itemId);
     if (req.user.role !== 'admin') {
-      const [ownerCheck] = await pool.query(
-        'SELECT c.user_id FROM inventory_items i JOIN characters c ON i.character_id = c.id WHERE i.id = ?', 
-        [itemId]
-      );
-      if (!ownerCheck.length || ownerCheck[0].user_id !== req.user.id) {
-        return res.status(403).json({ error: 'Unauthorized' });
-      }
+      const [charRows] = await pool.query('SELECT id FROM characters WHERE id = ? AND user_id = ?', [charId, req.user.id]);
+      if (!charRows.length) return res.status(403).json({ error: 'Unauthorized' });
     }
-    await pool.query('DELETE FROM inventory_items WHERE id = ?', [itemId]);
-    res.json({ ok: true });
+
+    await pool.query('DELETE FROM inventory_items WHERE id=? AND character_id=?', [itemId, charId]);
+    res.json({ success: true });
   } catch (e) {
+    log.err('Failed to delete inventory item', { message: e.message });
     res.status(500).json({ error: 'Failed to delete item' });
   }
 });
