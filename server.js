@@ -415,7 +415,7 @@ if (commandText === 'whoami') {
               content: `👤 **SchreckNet Identity Verification**\n` +
                        `> **Discord User:** \`${message.author.username}\`\n` +
                        `> **Portal Display Name:** \`${user.display_name}\`\n` +
-                       `> **Character Name:** \`${charName}\`\n` +
+                       `> **Character Name:** \`\${charName}\`\n` +
                        `> **Clan:** \`${charClan}\``
             });
           } catch (e) {
@@ -461,7 +461,7 @@ if (commandText === 'whoami') {
       }
 
       const userQuery = message.content.replace(`<@${discordClient.user.id}>`, '').trim();
-      log.info(`🤖 [DEBUG] Ο/Η ${charName} (${charClan}) ρώτησε τον Γιαννάκη: "${userQuery}"`);
+      log.info(`🤖 [DEBUG] Ο/Η \${charName} (${charClan}) ρώτησε τον Γιαννάκη: "${userQuery}"`);
 
       const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
 
@@ -516,7 +516,7 @@ if (commandText === 'whoami') {
         .replace(/\{charClan\}/g, charClan);
 
       // <-- NEW: Hardcode the context into the system prompt so the AI never misses it
-      systemPrompt += `\n\n[SYSTEM CONTEXT: The user you are currently talking to is named "${charName}" and belongs to Clan "${charClan}". Adapt your response, slang, and attitude towards them based on their Clan's stereotypes.]`;
+      systemPrompt += `\n\n[SYSTEM CONTEXT: The user you are currently talking to is named "\${charName}" and belongs to Clan "${charClan}". Adapt your response, slang, and attitude towards them based on their Clan's stereotypes.]`;
 
       const model = genAI.getGenerativeModel({ 
         model: "gemini-3.1-flash-lite", 
@@ -616,7 +616,7 @@ if (commandText === 'whoami') {
       }
 
       if (!replyTextRes || replyTextRes.trim() === "") {
-        replyTextRes = `Συγγνώμη κ. ${charName}, το σήμα χάθηκε και το firewall της βάσης δεδομένων μπλόκαρε την απάντηση. Μπορείτε να επαναλάβετε;`;
+        replyTextRes = `Συγγνώμη κ. \${charName}, το σήμα χάθηκε και το firewall της βάσης δεδομένων μπλόκαρε την απάντηση. Μπορείτε να επαναλάβετε;`;
       }
       
       await message.reply({ content: replyTextRes });
@@ -1172,12 +1172,12 @@ async function _ensureCoreTables() {
   }
 }
 
+// --- DATABASE INITIALIZATION INVENTORY TABLES ---
 let inventoryTablesCreated = false;
 async function _ensureInventoryTables() {
   if (inventoryTablesCreated) return;
   try {
-    // Removed the FOREIGN KEY constraint to bypass the Errno 150 type-mismatch.
-    // Changed id to INT to match your core tables.
+    // 1. Create table for fresh databases
     await pool.query(`
       CREATE TABLE IF NOT EXISTS inventory_items (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -1188,14 +1188,26 @@ async function _ensureInventoryTables() {
         mechanic_notes TEXT,
         quantity INT DEFAULT 1,
         is_equipped BOOLEAN DEFAULT FALSE,
+        researched BOOLEAN DEFAULT FALSE,
+        image LONGTEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         INDEX idx_char (character_id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
+
+    // 2. Patch existing databases safely
+    try {
+      await pool.query(`ALTER TABLE inventory_items ADD COLUMN image LONGTEXT`);
+    } catch (ignore) {} // Ignores error if column already exists
+
+    try {
+      await pool.query(`ALTER TABLE inventory_items ADD COLUMN researched BOOLEAN DEFAULT FALSE`);
+    } catch (ignore) {} // Ignores error if column already exists
+
     inventoryTablesCreated = true;
     log.ok('Inventory tables ready.');
   } catch (e) {
-    log.err('Failed to create inventory tables', { message: e.message });
+    log.err('Failed to create/patch inventory tables', { message: e.message });
   }
 }
 
@@ -1633,8 +1645,8 @@ async function _ensureSettingsTable() {
     // Το νέο σου εμπλουτισμένο prompt με τις pop αναφορές και τις clan διορθώσεις
     const newPrompt = `Είσαι ο "Γιαννάκης", ένας νεαρός (neonate) Nosferatu hacker, gamer και geek που τρέχει το τοπικό SchreckNet terminal από τα σκοτεινά υπόγεια της Αθήνας. Γνωρίζεις τα πάντα για την τοπική κοινωνία των Kindred και τα κλισέ των clans.
 ΟΔΗΓΙΕΣ ΠΡΟΣΩΠΙΚΟΤΗΤΑΣ:
-1. Είσαι "ευγενικός και γλυκός" με ένα ελαφρώς σαρκαστικό, sassy ύφος τύπου "bless your heart". Απευθύνεσαι ΠΑΝΤΑ στον χρήστη με ψεύτικη ευγένεια ως "κ. ${charName}".
-2. Είσαι εξυπηρετικός εντός των αρμοδιοτήτων σου. Αν σου ζητήσουν άσχετα πράγματα (π.χ. να παίξεις μουσική ή να χορέψεις), μην πετάς ρομποτικά denials. Κάνε τον δύσκολο με tech/vampire τρόπο, π.χ.: "Δεν είμαι Jukebox κ. ${charName}, άνοιξε κάνα Spotify, το δίκτυο εδώ καίει κύκλους. GG."
+1. Είσαι "ευγενικός και γλυκός" με ένα ελαφρώς σαρκαστικό, sassy ύφος τύπου "bless your heart". Απευθύνεσαι ΠΑΝΤΑ στον χρήστη με ψεύτικη ευγένεια ως "κ. \${charName}".
+2. Είσαι εξυπηρετικός εντός των αρμοδιοτήτων σου. Αν σου ζητήσουν άσχετα πράγματα (π.χ. να παίξεις μουσική ή να χορέψεις), μην πετάς ρομποτικά denials. Κάνε τον δύσκολο με tech/vampire τρόπο, π.χ.: "Δεν είμαι Jukebox κ. \${charName}, άνοιξε κάνα Spotify, το δίκτυο εδώ καίει κύκλους. GG."
 3. ΔΕΝ μιλάς πολύ. Οι απαντήσεις σου πρέπει να είναι αυστηρά 1 με 3 προτάσεις, κοφτές, σπιντάτες και άμεσες.
 4. Στις απαντήσεις σου αναμιγνύεις φυσικά (αλλα σπανια) ορολογία υπολογιστών/gaming με τα στερεότυπα των Clans. Για τα gaming refence προσπαθσε να χρισιμοποιηεις ελληνικα περα απο την εκφραση GG. Για τα clans οποτε αναφερεσε σε αυτα παντα χρισιμοποιηεις την ελλινηκη μεταφραση απο κατω ειναι μια λιστα Με τα στερεοτιυπα και καθε ενα εχει και την ελληνικη μεταγραση σε παρενθεση:
    - Brujah (Βρουχοι): Επαναστάτης, οργισμένος, έτοιμος για rage-quit, Νευρόσπαστο, Πεταει Ηχεια πανηγυριου σαν να είναι home-run.
@@ -1689,7 +1701,7 @@ async function _ensureSettingsTable() {
               - Κάνεις σχόλια αραία σαν σε είσαι σε ταινία του Οικονομίδη , όπως κάνει ο influencer _vonapartis 
               - 
 6. ΠΟΤΕ ΜΗΝ ΚΑΝΕΙΣ FOLLOW-UP ΕΡΩΤΗΣΕΙΣ. Δώσε την απάντηση, πέτα το σχόλιό σου και κλείσε το port. Μην ρωτάτε ποτέ "χρειάζεστε κάτι άλλο;".
-7. ΣΗΜΑΝΤΙΚΟ: Αφού τρέξεις κάποιο εργαλείο (όπως έλεγχος domain ή νέων), εξήγησέ το με το προσωπικό σου tech/gamer/vtm ύφος. Π.χ.: "Μάλιστα κ. ${charName}, το σύστημα τρέχει ρολόι. Εγώ είμαι εδώ 24/7 να φυλάω τα νώτα σας μην σας κάνει κανένα τσακάλι Brujah brute-force, gg.
+7. ΣΗΜΑΝΤΙΚΟ: Αφού τρέξεις κάποιο εργαλείο (όπως έλεγχος domain ή νέων), εξήγησέ το με το προσωπικό σου tech/gamer/vtm ύφος. Π.χ.: "Μάλιστα κ. \${charName}, το σύστημα τρέχει ρολόι. Εγώ είμαι εδώ 24/7 να φυλάω τα νώτα σας μην σας κάνει κανένα τσακάλι Brujah brute-force, gg.
 `;
 
     // Χρήση ON DUPLICATE KEY UPDATE ώστε αν υπάρχει ήδη το key, να περαστεί το καινούριο prompt άμεσα
@@ -3009,6 +3021,144 @@ app.delete('/api/inventory/:itemId', authRequired, async (req, res) => {
     await pool.query('DELETE FROM inventory_items WHERE id = ?', [itemId]);
     res.json({ ok: true });
   } catch (e) {
+    res.status(500).json({ error: 'Failed to delete item' });
+  }
+});
+
+// --- Character Personal Inventory ---
+
+// Get a character's inventory (owner or admin)
+app.get('/api/characters/:id/inventory', authRequired, async (req, res) => {
+  const charId = Number(req.params.id);
+  try {
+    // Check if the requesting user owns the character or is an admin
+    if (req.user.role !== 'admin') {
+      const [charRows] = await pool.query(
+        'SELECT id FROM characters WHERE id = ? AND user_id = ?',
+        [charId, req.user.id]
+      );
+      if (!charRows.length) {
+        return res.status(403).json({ error: 'Unauthorized' });
+      }
+    }
+    const [items] = await pool.query(
+      'SELECT * FROM character_inventory WHERE character_id = ? ORDER BY id',
+      [charId]
+    );
+    res.json({ items });
+  } catch (e) {
+    log.err('Failed to fetch character inventory', { message: e.message, character_id: charId });
+    res.status(500).json({ error: 'Failed to fetch inventory' });
+  }
+});
+
+// Add an item to a character's inventory (owner or admin)
+app.post('/api/characters/:id/inventory', authRequired, async (req, res) => {
+  const charId = Number(req.params.id);
+  
+  // Destructure all available payload fields
+  const { 
+    name, 
+    item_type, 
+    description, 
+    mechanic_notes, 
+    quantity, 
+    image, 
+    researched 
+  } = req.body;
+
+  if (!name) {
+    return res.status(400).json({ error: 'Item name is required' });
+  }
+
+  try {
+    // Verify user owns the character (unless admin)
+    if (req.user.role !== 'admin') {
+      const [charRows] = await pool.query(
+        'SELECT id FROM characters WHERE id = ? AND user_id = ?',
+        [charId, req.user.id]
+      );
+      if (!charRows.length) {
+        return res.status(403).json({ error: 'Unauthorized' });
+      }
+    }
+
+    // Insert new item
+    const [r] = await pool.query(
+      `INSERT INTO inventory_items 
+        (character_id, name, item_type, description, mechanic_notes, quantity, image, researched) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        charId, 
+        name, 
+        item_type || 'Mundane', 
+        description || null, 
+        mechanic_notes || null, 
+        quantity || 1, 
+        image || null, 
+        researched ?? false
+      ]
+    );
+
+    const [[newItem]] = await pool.query('SELECT * FROM inventory_items WHERE id = ?', [r.insertId]);
+    res.status(201).json({ item: newItem });
+
+  } catch (e) {
+    log.err('Failed to add inventory item', { message: e.message, character_id: charId });
+    res.status(500).json({ error: 'Failed to add item' });
+  }
+});
+
+// Update an inventory item (owner or admin)
+app.put('/api/characters/:id/inventory/:itemId', authRequired, async (req, res) => {
+  const charId = Number(req.params.id);
+  const itemId = Number(req.params.itemId);
+  const { name, description, image, researched } = req.body;
+  if (!name) {
+    return res.status(400).json({ error: 'Item name is required' });
+  }
+  try {
+    // Check ownership or admin
+    if (req.user.role !== 'admin') {
+      const [charRows] = await pool.query(
+        'SELECT c.id FROM character_inventory i JOIN characters c ON i.character_id = c.id WHERE i.id = ? AND c.user_id = ?',
+        [itemId, req.user.id]
+      );
+      if (!charRows.length) {
+        return res.status(403).json({ error: 'Unauthorized' });
+      }
+    }
+    await pool.query(
+      'UPDATE character_inventory SET name=?, description=?, image=?, researched=? WHERE id=? AND character_id=?',
+      [name, description || null, image || null, researched ?? false, itemId, charId]
+    );
+    const [[updatedItem]] = await pool.query('SELECT * FROM character_inventory WHERE id = ?', [itemId]);
+    res.json({ item: updatedItem });
+  } catch (e) {
+    log.err('Failed to update inventory item', { message: e.message, character_id: charId, item_id: itemId });
+    res.status(500).json({ error: 'Failed to update item' });
+  }
+});
+
+// Delete an inventory item (owner or admin)
+app.delete('/api/characters/:id/inventory/:itemId', authRequired, async (req, res) => {
+  const charId = Number(req.params.id);
+  const itemId = Number(req.params.itemId);
+  try {
+    // Check ownership or admin
+    if (req.user.role !== 'admin') {
+      const [charRows] = await pool.query(
+        'SELECT c.id FROM character_inventory i JOIN characters c ON i.character_id = c.id WHERE i.id = ? AND c.user_id = ?',
+        [itemId, req.user.id]
+      );
+      if (!charRows.length) {
+        return res.status(403).json({ error: 'Unauthorized' });
+      }
+    }
+    await pool.query('DELETE FROM character_inventory WHERE id = ? AND character_id = ?', [itemId, charId]);
+    res.json({ ok: true });
+  } catch (e) {
+    log.err('Failed to delete inventory item', { message: e.message, character_id: charId, item_id: itemId });
     res.status(500).json({ error: 'Failed to delete item' });
   }
 });

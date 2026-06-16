@@ -1,0 +1,110 @@
+// --- Character Personal Inventory ---
+
+// Get a character's inventory (owner or admin)
+app.get('/api/characters/:id/inventory', authRequired, async (req, res) => {
+  const charId = Number(req.params.id);
+  try {
+    // Check if the requesting user owns the character or is an admin
+    if (req.user.role !== 'admin') {
+      const [charRows] = await pool.query(
+        'SELECT id FROM characters WHERE id = ? AND user_id = ?',
+        [charId, req.user.id]
+      );
+      if (!charRows.length) {
+        return res.status(403).json({ error: 'Unauthorized' });
+      }
+    }
+    const [items] = await pool.query(
+      'SELECT * FROM character_inventory WHERE character_id = ? ORDER BY id',
+      [charId]
+    );
+    res.json({ items });
+  } catch (e) {
+    log.err('Failed to fetch character inventory', { message: e.message, character_id: charId });
+    res.status(500).json({ error: 'Failed to fetch inventory' });
+  }
+});
+
+// Add an item to a character's inventory (owner or admin)
+app.post('/api/characters/:id/inventory', authRequired, async (req, res) => {
+  const charId = Number(req.params.id);
+  const { name, description, image, researched } = req.body;
+  if (!name) {
+    return res.status(400).json({ error: 'Item name is required' });
+  }
+  try {
+    // Check ownership or admin
+    if (req.user.role !== 'admin') {
+      const [charRows] = await pool.query(
+        'SELECT id FROM characters WHERE id = ? AND user_id = ?',
+        [charId, req.user.id]
+      );
+      if (!charRows.length) {
+        return res.status(403).json({ error: 'Unauthorized' });
+      }
+    }
+    const [r] = await pool.query(
+      'INSERT INTO character_inventory (character_id, name, description, image, researched) VALUES (?, ?, ?, ?, ?)',
+      [charId, name, description || null, image || null, researched ?? false]
+    );
+    const [[newItem]] = await pool.query('SELECT * FROM character_inventory WHERE id = ?', [r.insertId]);
+    res.status(201).json({ item: newItem });
+  } catch (e) {
+    log.err('Failed to add inventory item', { message: e.message, character_id: charId });
+    res.status(500).json({ error: 'Failed to add item' });
+  }
+});
+
+// Update an inventory item (owner or admin)
+app.put('/api/characters/:id/inventory/:itemId', authRequired, async (req, res) => {
+  const charId = Number(req.params.id);
+  const itemId = Number(req.params.itemId);
+  const { name, description, image, researched } = req.body;
+  if (!name) {
+    return res.status(400).json({ error: 'Item name is required' });
+  }
+  try {
+    // Check ownership or admin
+    if (req.user.role !== 'admin') {
+      const [charRows] = await pool.query(
+        'SELECT c.id FROM character_inventory i JOIN characters c ON i.character_id = c.id WHERE i.id = ? AND c.user_id = ?',
+        [itemId, req.user.id]
+      );
+      if (!charRows.length) {
+        return res.status(403).json({ error: 'Unauthorized' });
+      }
+    }
+    await pool.query(
+      'UPDATE character_inventory SET name=?, description=?, image=?, researched=? WHERE id=? AND character_id=?',
+      [name, description || null, image || null, researched ?? false, itemId, charId]
+    );
+    const [[updatedItem]] = await pool.query('SELECT * FROM character_inventory WHERE id = ?', [itemId]);
+    res.json({ item: updatedItem });
+  } catch (e) {
+    log.err('Failed to update inventory item', { message: e.message, character_id: charId, item_id: itemId });
+    res.status(500).json({ error: 'Failed to update item' });
+  }
+});
+
+// Delete an inventory item (owner or admin)
+app.delete('/api/characters/:id/inventory/:itemId', authRequired, async (req, res) => {
+  const charId = Number(req.params.id);
+  const itemId = Number(req.params.itemId);
+  try {
+    // Check ownership or admin
+    if (req.user.role !== 'admin') {
+      const [charRows] = await pool.query(
+        'SELECT c.id FROM character_inventory i JOIN characters c ON i.character_id = c.id WHERE i.id = ? AND c.user_id = ?',
+        [itemId, req.user.id]
+      );
+      if (!charRows.length) {
+        return res.status(403).json({ error: 'Unauthorized' });
+      }
+    }
+    await pool.query('DELETE FROM character_inventory WHERE id = ? AND character_id = ?', [itemId, charId]);
+    res.json({ ok: true });
+  } catch (e) {
+    log.err('Failed to delete inventory item', { message: e.message, character_id: charId, item_id: itemId });
+    res.status(500).json({ error: 'Failed to delete item' });
+  }
+});
