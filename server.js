@@ -194,10 +194,11 @@ try {
 }
 
 // Create a multer instance that stores files in memory as buffers
-// Limit file size to 5MB
+// Limit file size to 50MB to match the JSON payload limits
 const storage = multer.memoryStorage();
 const memoryUpload = multer({ 
   storage: storage,
+  limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
 });
 
 // Add the request logger middleware. It will log every incoming request and its response.
@@ -1350,6 +1351,15 @@ async function initDatabase() {
     await _ensureEmailTables();
     await _ensureGroupChatTables();
     
+    // 3. Apply 50MB LONGBLOB patches to existing media tables
+    try {
+      await pool.query('ALTER TABLE chat_media MODIFY COLUMN data LONGBLOB NOT NULL');
+      await pool.query('ALTER TABLE premonition_media MODIFY COLUMN data LONGBLOB NOT NULL');
+      await pool.query('ALTER TABLE news_media MODIFY COLUMN data LONGBLOB NOT NULL');
+    } catch (e) {
+      // Silently ignore if tables don't exist yet
+    }
+
     log.ok('All database tables verified in sequence.');
   } catch (err) {
     log.err('Database initialization failed', { error: err.message });
@@ -8083,7 +8093,7 @@ app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
     reportErrorToDiscord(`Multer Upload Error: ${err.code}`, err);
     if (err.code === 'LIMIT_FILE_SIZE') {
-      return res.status(413).json({ error: 'File too large. Maximum size is 5MB.' });
+      return res.status(413).json({ error: 'File too large. Maximum size is 50MB.' });
     }
     return res.status(400).json({ error: `Upload error: ${err.message}` });
   }
