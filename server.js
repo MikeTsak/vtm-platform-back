@@ -1,5 +1,6 @@
 // server.js (with advanced logging)
 require('dotenv').config();
+const os = require('os');
 
 // Import the new logger and its utility functions
 const { log, attachRequestLogger, expressErrorHandler, installProcessHandlers } = require('./logger');
@@ -2340,6 +2341,54 @@ app.get('/', async (req, res) => {
     errors.push('Email: Missing EmailJS environment variables (SERVICE_ID, TEMPLATE_ID, or PUBLIC_KEY).');
   }
 
+  // Collect enhanced system information
+  const enhancedInfo = {};
+  try {
+    // OS Info
+    enhancedInfo.os = {
+      platform: os.platform(),
+      arch: os.arch(),
+      hostname: os.hostname(),
+      totalmem: os.totalmem(),
+      freemem: os.freemem(),
+      loadavg: os.loadavg()
+    };
+
+    // CPU Info
+    const cpus = os.cpus();
+    if (cpus.length > 0) {
+      enhancedInfo.cpu = {
+        count: cpus.length,
+        model: cpus[0].model,
+        speed: `${cpus[0].speed} MHz`
+      };
+    }
+
+    // Process Info
+    enhancedInfo.process = {
+      memoryUsage: process.memoryUsage(),
+      versions: process.versions,
+      uptime: process.uptime()
+    };
+
+    // Try to get package version
+    try {
+      const packageJson = require('./package.json');
+      enhancedInfo.app = {
+        version: packageJson.version,
+        name: packageJson.name
+      };
+    } catch (e) {
+      enhancedInfo.app = {
+        version: 'unknown',
+        name: 'back'
+      };
+    }
+  } catch (e) {
+    // If we can't collect enhanced info, continue with basic info
+    console.warn('Could not collect enhanced system info:', e.message);
+  }
+
   // Determine overall system health
   const systemStatus = (dbStatus === 'OK' && discordClass !== 'bad' && emailClass !== 'bad') ? 'OK' : 'DEGRADED';
   const systemClass = systemStatus === 'OK' ? 'ok' : 'bad';
@@ -2417,6 +2466,61 @@ app.get('/', async (req, res) => {
       <div class="v ${emailClass}">${emailStatus}</div>
       
       <div class="k">Health JSON</div><div class="v"><a href="/api/health">/api/health</a></div>
+
+      ${typeof enhancedInfo.app !== 'undefined' && enhancedInfo.app.version ? `
+        <div class="k">API Docs</div><div class="v"><a href="/api-docs">/api-docs</a></div>
+      ` : ''}
+
+      <div class="section-header"></div>
+      <div class="section-title">System Resources</div>
+
+      <div class="k">Platform</div>
+      <div class="v"><code>${enhancedInfo.os?.platform || 'N/A'} ${enhancedInfo.os?.arch || ''}</code></div>
+
+      <div class="k">Hostname</div>
+      <div class="v"><code>${enhancedInfo.os?.hostname || 'N/A'}</code></div>
+
+      <div class="k">CPU</div>
+      <div class="v">${((enhancedInfo.cpu || {}).count || 'N/A')}× ${((enhancedInfo.cpu || {}).model || 'N/A').substring(0, 30)}${((enhancedInfo.cpu || {}).model || 'N/A').length > 30 ? '...' : ''}</div>
+
+      <div class="k">Memory</div>
+      <div class="v">
+        ${Math.floor(((enhancedInfo.os || {}).totalmem || 0) / 1024 / 1024)} MB Total •
+        ${Math.floor(((enhancedInfo.os || {}).freemem || 0) / 1024 / 1024)} MB Free •
+        ${Math.round(100 - (((enhancedInfo.os || {}).freemem || 0) / ((enhancedInfo.os || {}).totalmem || 1)) * 100) / 100}% Used
+      </div>
+
+      <div class="k">Load Avg</div>
+      <div class="v">
+        ${Array.isArray((enhancedInfo.os || {}).loadavg) ?
+          `${((enhancedInfo.os || {}).loadavg[0] || 0).toFixed(2)}, ${((enhancedInfo.os || {}).loadavg[1] || 0).toFixed(2)}, ${((enhancedInfo.os || {}).loadavg[2] || 0).toFixed(2)}` :
+          'N/A'}
+      </div>
+
+      <div class="section-header"></div>
+      <div class="section-title">Process Information</div>
+
+      <div class="k">Node.js</div>
+      <div class="v"><code>${process.version}</code></div>
+
+      <div class="k">V8</div>
+      <div class="v"><code>${process.versions.v8 || 'N/A'}</code></div>
+
+      <div class="k">Memory Usage</div>
+      <div class="v">
+        ${Math.floor((enhancedInfo.process?.memoryUsage?.heapUsed || 0) / 1024 / 1024)} MB Heap Used /
+        ${Math.floor((enhancedInfo.process?.memoryUsage?.heapTotal || 0) / 1024 / 1024)} MB Heap Total •
+        ${Math.floor((enhancedInfo.process?.memoryUsage?.rss || 0) / 1024 / 1024)} MB RSS
+      </div>
+
+      <div class="section-header"></div>
+      <div class="section-title">Application Info</div>
+
+      <div class="k">Name</div>
+      <div class="v"><code>${((enhancedInfo.app || {}).name || 'back')}</code></div>
+
+      <div class="k">Version</div>
+      <div class="v"><code>${((enhancedInfo.app || {}).version || '0.0.0')}</code></div>
     </div>
 
     ${errors.length > 0 ? `
@@ -4674,10 +4778,18 @@ app.put('/api/downtimes/:id', authRequired, async (req, res) => {
       return res.status(400).json({ error: 'You can only edit actions that are strictly in a submitted state' });
     }
 
-    // 3. Check against global downtime deadline setting
-    const deadlineStr = await getSetting('downtime_deadline', null);
+    // 3. Check against the CORRECT global deadline setting
+    // Determine if the action being edited is a project based on its current title
+    const isProject = submission.title && submission.title.startsWith('[PROJECT]');
+    const deadlineKey = isProject ? 'project_deadline' : 'downtime_deadline';
+    
+    const deadlineStr = await getSetting(deadlineKey, null);
+    
+    // Check if the specific deadline for this type of action has passed
     if (deadlineStr && new Date(deadlineStr) < new Date()) {
-      return res.status(400).json({ error: 'The deadline for action submissions has passed' });
+      return res.status(400).json({ 
+        error: `The deadline for ${isProject ? 'project' : 'action'} submissions has passed.` 
+      });
     }
 
     // 4. Perform update
