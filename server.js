@@ -24,9 +24,39 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 // For meme generation
 const sharp = require('sharp');
 const TextToSVG = require('text-to-svg');
+const rateLimit = require('express-rate-limit');
 // --- Swagger Imports ---
 const swaggerUi = require('swagger-ui-express');
 const swaggerSpec = require('./swagger.config');
+
+// Rate limiting
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // limit each IP to 5 requests per windowMs
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const moderateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 30, // limit each IP to 30 requests per windowMs
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const uploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // limit each IP to 10 uploads per windowMs
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 const LOG_CHANNEL_ID = '1469033259806625874';
 
@@ -59,6 +89,8 @@ app.set('trust proxy', true);
 // Increase payload limit to 70MB for Base64 image uploads
 app.use(express.json({ limit: '70mb' }));
 app.use(express.urlencoded({ limit: '70mb', extended: true }));
+// Rate limiting
+app.use(globalLimiter);
 
 // Disable caching for all admin API routes to prevent 304 errors
 app.use('/api/admin', (req, res, next) => {
@@ -1082,6 +1114,16 @@ async function _ensureCoreTables() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
+    // Add index on discord_id for faster lookups by discord_id
+    try {
+      await pool.query(`ALTER TABLE users ADD INDEX idx_discord_id (discord_id)`);
+    } catch (e) {
+      // Ignore error if index already exists
+      if (!e.message.includes('Duplicate key name') && !e.message.includes('Duplicate index')) {
+        throw e;
+      }
+    }
+
     // ✅ AUTOMATICALLY ENSURE THE THEME COLUMN EXISTS
     const [userCols] = await pool.query("SHOW COLUMNS FROM users LIKE 'theme'");
     if (userCols.length === 0) {
@@ -1108,6 +1150,16 @@ async function _ensureCoreTables() {
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
+
+    // Add index on user_id for faster lookups by user_id
+    try {
+      await pool.query(`ALTER TABLE characters ADD INDEX idx_user_id (user_id)`);
+    } catch (e) {
+      // Ignore error if index already exists
+      if (!e.message.includes('Duplicate key name') && !e.message.includes('Duplicate index')) {
+        throw e;
+      }
+    }
 
     // 3. NPCs
     await pool.query(`
@@ -1141,6 +1193,23 @@ async function _ensureCoreTables() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
+    // Add indexes for chat_messages
+    try {
+      await pool.query(`ALTER TABLE chat_messages ADD INDEX idx_sender_id (sender_id)`);
+    } catch (e) {
+      if (!e.message.includes('Duplicate key name') && !e.message.includes('Duplicate index')) throw e;
+    }
+    try {
+      await pool.query(`ALTER TABLE chat_messages ADD INDEX idx_recipient_id (recipient_id)`);
+    } catch (e) {
+      if (!e.message.includes('Duplicate key name') && !e.message.includes('Duplicate index')) throw e;
+    }
+    try {
+      await pool.query(`ALTER TABLE chat_messages ADD INDEX idx_recipient_read_at (recipient_id, read_at)`);
+    } catch (e) {
+      if (!e.message.includes('Duplicate key name') && !e.message.includes('Duplicate index')) throw e;
+    }
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS npc_messages (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -1153,6 +1222,23 @@ async function _ensureCoreTables() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
+
+    // Add indexes for npc_messages
+    try {
+      await pool.query(`ALTER TABLE npc_messages ADD INDEX idx_npc_id (npc_id)`);
+    } catch (e) {
+      if (!e.message.includes('Duplicate key name') && !e.message.includes('Duplicate index')) throw e;
+    }
+    try {
+      await pool.query(`ALTER TABLE npc_messages ADD INDEX idx_user_id (user_id)`);
+    } catch (e) {
+      if (!e.message.includes('Duplicate key name') && !e.message.includes('Duplicate index')) throw e;
+    }
+    try {
+      await pool.query(`ALTER TABLE npc_messages ADD INDEX idx_user_read_at (user_id, read_at)`);
+    } catch (e) {
+      if (!e.message.includes('Duplicate key name') && !e.message.includes('Duplicate index')) throw e;
+    }
 
     // 5. XP Logs
     await pool.query(`
@@ -1330,10 +1416,21 @@ async function _ensurePushSubscriptionsTable() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
+
+    // Add index on user_id for faster lookups by user
+    try {
+      await pool.query(`ALTER TABLE push_subscriptions ADD INDEX idx_user_id (user_id)`);
+    } catch (e) {
+      // Ignore error if index already exists
+      if (!e.message.includes('Duplicate key name') && !e.message.includes('Duplicate index')) {
+        throw e;
+      }
+    }
+
     pushSubscriptionTableCreated = true;
     log.ok('Push subscriptions table verified/created.');
   } catch (e) {
-    log.err('Failed to create push_subscriptions table', { message: e.message });
+    log.err('Failed to init push_subscriptions', { error: e.message });
   }
 }
 
@@ -2403,7 +2500,7 @@ app.get('/', async (req, res) => {
  *             schema:
  *               $ref: '#/components/schemas/Error'
  */
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', authLimiter, async (req, res) => {
   try {
     const { email, display_name, password } = req.body;
     if (!email || !display_name || !password) {
@@ -2502,7 +2599,7 @@ app.post('/api/auth/register', async (req, res) => {
  *             schema:
  *               $ref: '#/components/schemas/Error'
  */
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authLimiter, async (req, res) => {
   // best-effort client IP (works with proxies/CDNs)
   const ip =
     req.headers['cf-connecting-ip'] ||
@@ -2697,7 +2794,7 @@ app.post('/api/auth/forgot', async (req, res) => {
 
 
 
-app.post('/api/auth/reset', async (req, res) => {
+app.post('/api/auth/reset', authLimiter, async (req, res) => {
     // (Your existing route)
     const { token, password } = req.body || {};
     if (typeof token !== 'string' || typeof password !== 'string' || password.length < 8) {
@@ -2846,7 +2943,7 @@ app.put('/api/characters/me', authRequired, async (req, res) => {
  *               $ref: '#/components/schemas/Error'
  */
 // Create character (stores sheet JSON and xp=50)
-app.post('/api/characters', authRequired, async (req, res) => {
+app.post('/api/characters', authRequired, moderateLimiter, async (req, res) => {
   const { name, clan, sheet } = req.body;
   if (!name || !clan) {
     log.warn('Create character missing fields', { user_id: req.user.id });
@@ -3863,7 +3960,7 @@ app.get('/api/chat/my-recent', authRequired, async (req, res) => {
 });
 
 // Upload Image & Audio
-app.post('/api/chat/upload', authRequired, memoryUpload.single('file'), async (req, res) => {
+app.post('/api/chat/upload', authRequired, uploadLimiter, memoryUpload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file provided' });
     
@@ -4904,7 +5001,7 @@ app.post('/api/chat/groups/:id/read', authRequired, async (req, res) => {
 });
 
 // Create a new group
-app.post('/api/chat/groups', authRequired, async (req, res) => {
+app.post('/api/chat/groups', authRequired, moderateLimiter, async (req, res) => {
   const conn = await pool.getConnection();
   try {
     const { name, members = [] } = req.body; // members is array of user_ids
@@ -6842,7 +6939,7 @@ async function getSessionInternalId(codeOrId) {
 }
 
 // Create a new live session (Generates an 8-character Code) - CHANGED TO requireCourt
-app.post('/api/live-session', authRequired, requireCourt, async (req, res) => {
+app.post('/api/live-session', authRequired, requireCourt, moderateLimiter, async (req, res) => {
   try {
     const { name } = req.body;
     
