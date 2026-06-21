@@ -86,7 +86,7 @@ const corsOrigin = process.env.CORS_ORIGIN
   : true; // Development: allow all origins
 app.use(cors({ origin: corsOrigin, credentials: true }));
 // app.use(express.json({ limit: '1mb' }));
-app.set('trust proxy', true);
+app.set('trust proxy', false);
 // Increase payload limit to 70MB for Base64 image uploads
 app.use(express.json({ limit: '70mb' }));
 app.use(express.urlencoded({ limit: '70mb', extended: true }));
