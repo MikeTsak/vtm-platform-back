@@ -12,17 +12,13 @@ const swaggerOptions = {
       description: 'API documentation for the Vampire: The Masquerade RPG portal. This API provides endpoints for user authentication, character management, and game interactions.',
       contact: {
         name: 'API Support',
-        url: 'https://vtm.back.miketsak.gr',
+        url: process.env.API_BASE_URL || '/',
       },
     },
     servers: [
       {
-        url: 'http://localhost:3001',
-        description: 'Development Server',
-      },
-      {
-        url: 'https://vtm.back.miketsak.gr',
-        description: 'Production Server',
+        url: process.env.API_BASE_URL || '/',
+        description: 'API Server',
       },
     ],
     components: {
