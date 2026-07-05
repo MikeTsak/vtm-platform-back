@@ -14,7 +14,7 @@ const crypto = require('crypto');
 const pool = require('./db'); // export pool.promise() from db.js
 const { authRequired, requireAdmin } = require('./authMiddleware');
 const axios = require('axios');
-const webpush = require('web-push');
+
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer'); // Import multer
@@ -238,16 +238,7 @@ const memoryUpload = multer({
 // Place it right after express.json() to ensure it can log request bodies.
 app.use(attachRequestLogger());
 
-if (vapidPublicKey && vapidPrivateKey) {
-  webpush.setVapidDetails(
-    'mailto:your-email@example.com', // Your contact email
-    vapidPublicKey,
-    vapidPrivateKey
-  );
-  log.start('Web-push configured');
-} else {
-  log.warn('VAPID keys not set. Push notifications will be disabled.');
-}
+
 
 // Helper: Report errors to the defined Discord channel
 async function reportErrorToDiscord(source, error) {
@@ -291,49 +282,43 @@ function _maskEmail(email) {
 }
 
 // --- UNIVERSAL PUSH HELPER ---
+// Function for base64 encoding headers
+const encodeHeader = (str) => `=?UTF-8?B?${Buffer.from(str).toString('base64')}?=`;
+
 async function sendPushNotification(userId, title, body, data = {}) {
   try {
+    // 1. Send to ntfy.sh
+    const topic = crypto.createHash('md5').update('vampire_' + userId + (process.env.JWT_SECRET || 'secret')).digest('hex');
+    const clickUrl = data.url ? data.url : '/comms';
+    const clickFullUrl = process.env.CORS_ORIGIN ? (process.env.CORS_ORIGIN.split(',')[0] + clickUrl) : clickUrl;
+    
+    await axios.post('https://ntfy.sh/' + topic, body, {
+      headers: {
+        'Title': encodeHeader(title),
+        'Tags': 'vampire,bell',
+        'Click': clickFullUrl
+      }
+    }).catch(err => log.err('ntfy push failed', { err: err.message }));
+
+    // 2. Retain Mobile Devices (Expo)
     const [subs] = await pool.query('SELECT id, subscription_json FROM push_subscriptions WHERE user_id=?', [userId]);
     if (!subs.length) return;
 
     const expoTokens = [];
-    const webSubs =[];
-
-    // Separate mobile tokens from browser tokens
     for (const row of subs) {
       try {
         const sub = JSON.parse(row.subscription_json);
         if (sub.expoPushToken) expoTokens.push(sub.expoPushToken);
-        else webSubs.push({ id: row.id, sub });
       } catch (e) {}
     }
 
-    // 1. Send to Mobile Devices (Expo)
     if (expoTokens.length > 0) {
       const expoMessages = expoTokens.map(token => ({
-        to: token,
-        sound: 'default',
-        title: title,
-        body: body,
-        data: data,
+        to: token, sound: 'default', title: title, body: body, data: data,
       }));
       await axios.post('https://exp.host/--/api/v2/push/send', expoMessages, {
         headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' }
       }).catch(err => log.err('Expo push failed', { err: err.message }));
-    }
-
-    // 2. Send to Web Browsers (Web-Push)
-    if (vapidPublicKey && vapidPrivateKey && webSubs.length > 0) {
-      const payload = JSON.stringify({ title, body, data });
-      for (const { id, sub } of webSubs) {
-        try {
-          await webpush.sendNotification(sub, payload);
-        } catch (err) {
-          if (err.statusCode === 410) { // Token expired/unsubscribed
-            await pool.query('DELETE FROM push_subscriptions WHERE id=?', [id]);
-          }
-        }
-      }
     }
   } catch (e) {
     log.err('Failed to execute push notification', { error: e.message });
@@ -6280,42 +6265,21 @@ app.post('/api/push/unsubscribe', authRequired, async (req, res) => {
 // Fire a test push to current user (auth required)
 app.post('/api/push/test', authRequired, async (req, res) => {
   try {
-    if (!vapidPublicKey || !vapidPrivateKey) {
-      return res.status(503).json({ error: 'Push not configured (VAPID keys missing)' });
-    }
-
-    const [subs] = await pool.query(
-      'SELECT id, subscription_json FROM push_subscriptions WHERE user_id=?',
-      [req.user.id]
-    );
-    if (subs.length === 0) {
-      return res.status(404).json({ error: 'No push subscriptions for this user' });
-    }
-
-    const payload = JSON.stringify({
-      title: '🔔 Push Test',
-      body: 'If you can read this, background push works!',
-      data: { url: '/comms', tag: 'push-test' }
-    });
-
-    await Promise.all(subs.map(async (row) => {
-      try {
-        const sub = JSON.parse(row.subscription_json);
-        await webpush.sendNotification(sub, payload);
-      } catch (err) {
-        if (err.statusCode === 410) {
-          log.warn('Stale push sub removed during test', { sub_id: row.id, user_id: req.user.id });
-          await pool.query('DELETE FROM push_subscriptions WHERE id=?', [row.id]);
-        } else {
-          log.err('Push test send failed', { message: err.message, status: err.statusCode });
-        }
-      }
-    }));
-
+    await sendPushNotification(req.user.id, '🔔 Push Test', 'If you can read this, background push works!', { url: '/comms', tag: 'push-test' });
     res.json({ ok: true });
   } catch (e) {
     log.err('Push test failed', { message: e.message });
     res.status(500).json({ error: 'Failed to send test push' });
+  }
+});
+
+// GET /api/push/ntfy-topic
+app.get('/api/push/ntfy-topic', authRequired, async (req, res) => {
+  try {
+    const topic = crypto.createHash('md5').update('vampire_' + req.user.id + (process.env.JWT_SECRET || 'secret')).digest('hex');
+    res.json({ topic });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to generate topic' });
   }
 });
 
