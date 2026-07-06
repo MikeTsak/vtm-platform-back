@@ -5375,6 +5375,7 @@ app.get('/api/chat/users', authRequired, async (req, res) => {
         MAX(c.id)   AS char_id,
         MAX(c.name) AS char_name,
         MAX(c.clan) AS clan,
+        MAX(c.image_url) AS image_url,
         (
           SELECT created_at 
           FROM chat_messages 
@@ -5421,7 +5422,7 @@ app.get('/api/chat/npcs', authRequired, async (req, res) => {
 
     if (isAdmin) {
       // Admins see if ANY player has sent an unread message to the NPC
-      query = `SELECT n.id, n.name, n.clan,
+      query = `SELECT n.id, n.name, n.clan, n.image_url,
         (SELECT created_at FROM npc_messages WHERE npc_id = n.id ORDER BY created_at DESC LIMIT 1) as last_message_at,
         (SELECT COUNT(*) FROM npc_messages WHERE npc_id = n.id AND from_side = 'user' AND read_at IS NULL) as unread_count
        FROM npcs n
@@ -5429,7 +5430,7 @@ app.get('/api/chat/npcs', authRequired, async (req, res) => {
       params = [];
     } else {
       // Players see if the NPC has sent them an unread message
-      query = `SELECT n.id, n.name, n.clan,
+      query = `SELECT n.id, n.name, n.clan, n.image_url,
         (SELECT created_at FROM npc_messages WHERE npc_id = n.id AND user_id = ? ORDER BY created_at DESC LIMIT 1) as last_message_at,
         (SELECT COUNT(*) FROM npc_messages WHERE npc_id = n.id AND user_id = ? AND from_side = 'npc' AND read_at IS NULL) as unread_count
        FROM npcs n
