@@ -59,6 +59,12 @@ const uploadLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// Configure Multer for Avatar uploads
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB limit
+});
+
 const LOG_CHANNEL_ID = '1469033259806625874';
 
 // --- Setup ---
@@ -1095,6 +1101,7 @@ async function _ensureCoreTables() {
         password_hash VARCHAR(255) NOT NULL,
         role VARCHAR(50) DEFAULT 'user',
         discord_id VARCHAR(50),
+        avatar LONGBLOB,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -1115,6 +1122,13 @@ async function _ensureCoreTables() {
     if (userCols.length === 0) {
       await pool.query("ALTER TABLE users ADD COLUMN theme VARCHAR(50) DEFAULT 'camarilla'");
       log.ok('Added theme column to users table');
+    }
+
+    // ✅ AUTOMATICALLY ENSURE THE AVATAR COLUMN EXISTS
+    const [avatarCols] = await pool.query("SHOW COLUMNS FROM users LIKE 'avatar'");
+    if (avatarCols.length === 0) {
+      await pool.query("ALTER TABLE users ADD COLUMN avatar LONGBLOB");
+      log.ok('Added avatar column to users table');
     }
 
     // 2. Characters
@@ -8263,6 +8277,41 @@ app.post('/api/hunts/submit', authRequired, async (req, res) => {
     res.status(500).json({ error: 'Internal server error while verifying submission.' });
   }
 });
+/* -------------------- Avatar Routes -------------------- */
+
+app.get('/api/users/:id/avatar', async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT avatar FROM users WHERE id = ?', [req.params.id]);
+    if (rows.length === 0 || !rows[0].avatar) {
+      return res.status(404).send('Avatar not found');
+    }
+    res.set('Content-Type', 'image/jpeg');
+    res.send(rows[0].avatar);
+  } catch (e) {
+    log.err('Avatar GET error', { message: e.message });
+    res.status(500).json({ error: 'Server error retrieving avatar.' });
+  }
+});
+
+app.put('/api/users/:id/avatar', authRequired, upload.single('avatar'), async (req, res) => {
+  try {
+    if (req.user.id !== parseInt(req.params.id) && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Forbidden. You can only update your own avatar.' });
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: 'No image file provided.' });
+    }
+    
+    const buffer = req.file.buffer;
+
+    await pool.query('UPDATE users SET avatar = ? WHERE id = ?', [buffer, req.params.id]);
+    res.json({ success: true, message: 'Avatar updated successfully.' });
+  } catch (e) {
+    log.err('Avatar PUT error', { message: e.message });
+    res.status(500).json({ error: 'Server error updating avatar.' });
+  }
+});
+
 /* -------------------- Error Handlers -------------------- */
 // Multer error handler (must be before general error handler)
 app.use((err, req, res, next) => {
