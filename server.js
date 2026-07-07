@@ -1175,9 +1175,16 @@ async function _ensureCoreTables() {
         is_ex BOOLEAN DEFAULT FALSE,
         is_deceased BOOLEAN DEFAULT FALSE,
         is_hidden BOOLEAN DEFAULT FALSE,
+        avatar LONGBLOB NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
+
+    try {
+      await pool.query("ALTER TABLE npcs ADD COLUMN avatar LONGBLOB");
+    } catch (e) {
+      if (e.code !== 'ER_DUP_FIELDNAME') throw e;
+    }
 
     // 4. Base Chat Messages (Group chat is handled separately)
     await pool.query(`
@@ -4575,10 +4582,10 @@ app.post('/api/admin/chat/npc/messages', authRequired, requireAdmin, async (req,
 app.get('/api/admin/camarilla/roster', authRequired, requireAdmin, async (req, res) => {
   try {
     const [players] = await pool.query(
-      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, 'player' as type FROM characters"
+      "SELECT id, user_id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, 'player' as type FROM characters"
     );
     const [npcs] = await pool.query(
-      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, 'npc' as type FROM npcs"
+      "SELECT id, NULL as user_id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, 'npc' as type FROM npcs"
     );
     
     const format = (list) => list.map(item => ({
@@ -4599,14 +4606,42 @@ app.get('/api/admin/camarilla/roster', authRequired, requireAdmin, async (req, r
   }
 });
 
+app.get('/api/npcs/:id/avatar', async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT avatar FROM npcs WHERE id = ?', [req.params.id]);
+    if (rows.length === 0 || !rows[0].avatar) {
+      return res.status(404).send('Avatar not found');
+    }
+    res.set('Content-Type', 'image/jpeg');
+    res.send(rows[0].avatar);
+  } catch (e) {
+    log.err('NPC Avatar GET error', { message: e.message });
+    res.status(500).json({ error: 'Server error retrieving avatar.' });
+  }
+});
+
+app.put('/api/npcs/:id/avatar', authRequired, requireAdmin, upload.single('avatar'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No image file provided.' });
+    }
+    const buffer = req.file.buffer;
+    await pool.query('UPDATE npcs SET avatar = ? WHERE id = ?', [buffer, req.params.id]);
+    res.json({ success: true, message: 'NPC Avatar updated successfully.' });
+  } catch (e) {
+    log.err('NPC Avatar PUT error', { message: e.message });
+    res.status(500).json({ error: 'Server error updating npc avatar.' });
+  }
+});
+
 // GET: Publicly accessible roster
 app.get('/api/camarilla/roster', authRequired, async (req, res) => {
   try {
     const [players] = await pool.query(
-      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, 'player' as type FROM characters"
+      "SELECT id, user_id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, 'player' as type FROM characters"
     );
     const [npcs] = await pool.query(
-      "SELECT id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, 'npc' as type FROM npcs"
+      "SELECT id, NULL as user_id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, 'npc' as type FROM npcs"
     );
     
     const format = (list) => list.map(item => ({
