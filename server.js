@@ -1961,9 +1961,16 @@ async function _ensureGroupChatTables() {
         id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
         name VARCHAR(100) NOT NULL,
         created_by INT NOT NULL,
+        avatar LONGBLOB NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
+
+    try {
+      await pool.query("ALTER TABLE chat_groups ADD COLUMN avatar LONGBLOB");
+    } catch (e) {
+      if (e.code !== 'ER_DUP_FIELDNAME') throw e;
+    }
     
     // 2. Δημιουργία πίνακα chat_group_members (Με την νέα στήλη last_read_at)
     await pool.query(`
