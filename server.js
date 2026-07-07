@@ -7451,9 +7451,11 @@ app.get('/api/news', authRequired, async (req, res) => {
   try {
     // Join with users to get the real name for Announcements
     const [rows] = await pool.query(`
-      SELECT n.*, u.display_name as author_real_name
+      SELECT n.*, u.display_name as author_real_name,
+             c.name as char_name, c.camarilla_titles as char_titles, c.image_url as char_image
       FROM news_entries n
       LEFT JOIN users u ON n.author_id = u.id
+      LEFT JOIN characters c ON c.user_id = u.id
       ORDER BY n.created_at DESC
       LIMIT 100
     `);
