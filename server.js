@@ -131,7 +131,7 @@ async function _ensurePasswordResetsTable() {
 }
 
 // Call it at the top level of server.js with your other inits
-_ensurePasswordResetsTable();
+
 
 /* -------------------- LIVE SESSION TABLES -------------------- */
 let liveSessionTablesCreated = false;
@@ -208,7 +208,6 @@ async function _ensureLiveSessionTables() {
   }
 }
 
-_ensureLiveSessionTables();
 
 // --- Load Custom Font for Memes ---
 let memeFontBase64 = '';
@@ -1046,7 +1045,7 @@ async function _ensureHuntTables() {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS hunt_groups (
           id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-          hunt_id INT NOT NULL,
+          hunt_id INT UNSIGNED NOT NULL,
           name VARCHAR(255) NOT NULL,
           invite_code VARCHAR(10) NOT NULL UNIQUE,
           created_by INT NOT NULL,
@@ -1081,7 +1080,6 @@ async function _ensureHuntTables() {
     log.err('Failed to create hunt tables', { message: e.message });
   }
 }
-_ensureHuntTables();
 
 /* ------------------------------------------------------------------
    Core & Assumed Tables Initialization
@@ -1443,19 +1441,32 @@ async function _ensurePushSubscriptionsTable() {
 
 async function initDatabase() {
   try {
-    // 1. Core tables (Users, Characters) MUST exist first
+    // 1. Core tables
     await _ensureCoreTables();
     
-    // 2. Dependent tables can now safely attach foreign keys
+    // 2. Additional Core Columns
+    await _ensureCamarillaColumns();
+    await _ensureDiscordColumn();
+
+    // 3. Dependent Tables (Group chat first, as it creates chat_group_messages)
+    await _ensureGroupChatTables();
+    await _ensureChatTables();
     await _ensureInventoryTables();
     await _ensureGameplaySystemsTables();
     await _ensurePushSubscriptionsTable();
-    await _ensureChatTables();
-    await _ensureCamarillaColumns();
     await _ensureEmailTables();
-    await _ensureGroupChatTables();
+    await _ensurePasswordResetsTable();
+
+    // 4. Feature Tables
+    await _ensureSettingsTable();
+    await _ensureLiveSessionTables();
+    await _ensureHuntTables();
+    await _ensurePremonitionsTables();
+    await _ensurePremonitionsMediaTables();
+    await _ensureDiceTable();
+    await _ensureNewsTables();
     
-    // 3. Apply 50MB LONGBLOB patches to existing media tables
+    // 5. Apply 50MB LONGBLOB patches to existing media tables
     try {
       await pool.query('ALTER TABLE chat_media MODIFY COLUMN data LONGBLOB NOT NULL');
       await pool.query('ALTER TABLE premonition_media MODIFY COLUMN data LONGBLOB NOT NULL');
@@ -1498,9 +1509,9 @@ async function _ensureChatTables() {
         filename VARCHAR(255),
         mime VARCHAR(100) NOT NULL,
         size INT UNSIGNED NOT NULL,
-        data MEDIUMBLOB NOT NULL,
+        data LONGBLOB NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB;
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
     // 2. Add attachment_id and edited columns to existing message tables if missing
@@ -1533,7 +1544,6 @@ async function _ensureChatTables() {
     log.err('Chat schema update failed', { message: e.message });
   }
 }
-_ensureChatTables();
 
 /* ------------------ Camarilla Columns Check ------------------ */
 let camarillaColsChecked = false;
@@ -1572,7 +1582,6 @@ async function _ensureCamarillaColumns() {
     log.err("Camarilla columns check failed", { message: e.message });
   }
 }
-_ensureCamarillaColumns();
 
 // Global variable to prevent double-sending within the same minute
 let lastDailyCheckDate = '';
@@ -1740,7 +1749,6 @@ async function _ensureDiscordColumn() {
     log.err("Discord column check failed", { message: e.message });
   }
 }
-_ensureDiscordColumn();
 
 /* -------------------- Settings Helpers -------------------- */
 // server.js
@@ -1931,9 +1939,9 @@ async function _ensurePremonitionsMediaTables() {
         filename VARCHAR(255),
         mime VARCHAR(100) NOT NULL,
         size INT UNSIGNED NOT NULL,
-        data MEDIUMBLOB NOT NULL,
+        data LONGBLOB NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB;
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
     premonitionMediaTableCreated = true;
     log.ok('Premonition media table (premonition_media) verified/created.');
@@ -1943,12 +1951,7 @@ async function _ensurePremonitionsMediaTables() {
 }
 
 // run once on boot
-_ensurePremonitionsTables().catch(err =>
-  log.err('premonitions init failed', { message: err.message })
-);
-_ensurePremonitionsMediaTables().catch(err =>
-  log.err('premonition media init failed', { message: err.message })
-);
+// (Initialization is now handled centrally in initDatabase)
 
 /* ------------------ Group Chat Tables (NEW) ------------------ */
 let groupChatTablesCreated = false;
@@ -2010,7 +2013,6 @@ async function _ensureGroupChatTables() {
     log.err('Group chat tables init failed', { message: e.message });
   }
 }
-_ensureGroupChatTables();
 
 
 /* ------------------ Email System Tables (FIX FOR YOUR ERROR) ------------------ */
@@ -2062,7 +2064,7 @@ async function _ensureEmailTables() {
   }
 }
 // Initialize the email tables!
-_ensureEmailTables();
+
 
 
 
@@ -7539,9 +7541,9 @@ async function _ensureNewsTables() {
         filename VARCHAR(255),
         mime VARCHAR(100) NOT NULL,
         size INT UNSIGNED NOT NULL,
-        data MEDIUMBLOB NOT NULL,
+        data LONGBLOB NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB;
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
     newsTableCreated = true;
@@ -7552,7 +7554,7 @@ async function _ensureNewsTables() {
 }
 
 // Run init
-_ensureNewsTables();
+
 
 // GET /api/news (Public/Auth) - Fetch all items
 app.get('/api/news', authRequired, async (req, res) => {
