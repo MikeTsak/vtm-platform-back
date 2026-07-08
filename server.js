@@ -19,6 +19,12 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer'); // Import multer
 const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require('discord.js');
+const webpush = require('web-push');
+
+// Configure Web Push
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BI7rfJ8M56Md66_JfP7gTbPyNEhnhsPzXK63hAD-NSP2eXzgeHmcj412N0urchrrW7mOTwLvyeKUUfJQ0e0fxxA';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'za0fUJF4koF5n25WMZtlrSKtHbKbqVJ77M5ojqKUSls';
+webpush.setVapidDetails('mailto:admin@attlarp.gr', VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, NoSubscriberBehavior } = require('@discordjs/voice');
 const play = require('play-dl');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
@@ -290,20 +296,44 @@ function _maskEmail(email) {
 // Function for base64 encoding headers
 const encodeHeader = (str) => `=?UTF-8?B?${Buffer.from(str).toString('base64')}?=`;
 
-async function sendPushNotification(userId, title, body, data = {}) {
+async function sendPushNotification(userId, title, body, data = {}, category = 'system') {
   try {
-    // 1. Send to ntfy.sh
-    const topic = crypto.createHash('md5').update('vampire_' + userId + (process.env.JWT_SECRET || 'secret')).digest('hex');
+    // Check user push settings
+    const [userRows] = await pool.query('SELECT push_settings FROM users WHERE id=?', [userId]);
+    if (!userRows.length) return;
+    
+    const settings = userRows[0].push_settings || {};
+    // If settings are false for this category, do not send web push (off by default)
+    const isEnabled = !!settings[category];
+
     const clickUrl = data.url ? data.url : '/comms';
     const clickFullUrl = process.env.CORS_ORIGIN ? (process.env.CORS_ORIGIN.split(',')[0] + clickUrl) : clickUrl;
-    
-    await axios.post('https://ntfy.sh/' + topic, body, {
-      headers: {
-        'Title': encodeHeader(title),
-        'Tags': 'vampire,bell',
-        'Click': clickFullUrl
+
+    if (isEnabled) {
+      // Send Web Push
+      const [webSubs] = await pool.query('SELECT endpoint, p256dh, auth FROM user_push_subscriptions WHERE user_id=?', [userId]);
+      const payload = JSON.stringify({
+        title,
+        body,
+        data: { url: clickFullUrl }
+      });
+
+      for (const row of webSubs) {
+        const pushSubscription = {
+          endpoint: row.endpoint,
+          keys: { p256dh: row.p256dh, auth: row.auth }
+        };
+        try {
+          await webpush.sendNotification(pushSubscription, payload);
+        } catch (err) {
+          if (err.statusCode === 404 || err.statusCode === 410) {
+            await pool.query('DELETE FROM user_push_subscriptions WHERE endpoint=?', [row.endpoint]);
+          } else {
+            log.err('Web push failed', { err: err.message });
+          }
+        }
       }
-    }).catch(err => log.err('ntfy push failed', { err: err.message }));
+    }
 
     // 2. Retain Mobile Devices (Expo)
     const [subs] = await pool.query('SELECT id, subscription_json FROM push_subscriptions WHERE user_id=?', [userId]);
@@ -1100,8 +1130,22 @@ async function _ensureCoreTables() {
         role VARCHAR(50) DEFAULT 'user',
         discord_id VARCHAR(50),
         avatar LONGBLOB,
+        push_settings JSON,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Create Push Subscriptions Table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS user_push_subscriptions (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT UNSIGNED NOT NULL,
+        endpoint VARCHAR(512) NOT NULL UNIQUE,
+        p256dh VARCHAR(255) NOT NULL,
+        auth VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
@@ -1111,6 +1155,17 @@ async function _ensureCoreTables() {
     } catch (e) {
       // Ignore error if index already exists
       if (!e.message.includes('Duplicate key name') && !e.message.includes('Duplicate index')) {
+        throw e;
+      }
+    }
+
+    // Add push_settings column if it doesn't exist
+    try {
+      await pool.query(`ALTER TABLE users ADD COLUMN push_settings JSON`);
+      // Set default values for existing users
+      await pool.query(`UPDATE users SET push_settings = '{"chat": false, "system": false}' WHERE push_settings IS NULL`);
+    } catch (e) {
+      if (!e.message.includes('Duplicate column name')) {
         throw e;
       }
     }
@@ -4088,10 +4143,25 @@ app.post('/api/chat/upload', authRequired, uploadLimiter, memoryUpload.single('f
       return res.status(400).json({ error: 'Invalid file type. Only images and audio allowed.' });
     }
 
+    let finalBuffer = req.file.buffer;
+    let finalMime = req.file.mimetype;
+    let finalSize = req.file.size;
+    let finalFilename = req.file.originalname;
+
+    if (req.file.mimetype.startsWith('image/')) {
+      finalBuffer = await sharp(req.file.buffer)
+        .resize(1000, 1000, { fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: 80 })
+        .toBuffer();
+      finalMime = 'image/webp';
+      finalSize = finalBuffer.length;
+      finalFilename = finalFilename.replace(/\.[^/.]+$/, "") + ".webp";
+    }
+
     // Insert into DB
     const [ins] = await pool.query(
       'INSERT INTO chat_media (uploader_id, filename, mime, size, data) VALUES (?,?,?,?,?)',
-      [req.user.id, req.file.originalname, req.file.mimetype, req.file.size, req.file.buffer]
+      [req.user.id, finalFilename, finalMime, finalSize, finalBuffer]
     );
 
     log.ok('Chat media uploaded', { user_id: req.user.id, media_id: ins.insertId });
@@ -5384,7 +5454,7 @@ app.post('/api/chat/groups/:id/messages', authRequired, async (req, res) => {
 
       // 4. Στέλνουμε push notification στο κάθε μέλος
       for (const member of members) {
-        await sendPushNotification(member.user_id, notifTitle, notifBody).catch(() => {});
+        await sendPushNotification(member.user_id, notifTitle, notifBody, { url: '/schrecknet' }, 'chat').catch(() => {});
       }
     } catch (pushErr) {
       log.err('Failed to notify group members', { error: pushErr.message });
@@ -6376,7 +6446,9 @@ app.post('/api/push/unsubscribe', authRequired, async (req, res) => {
 // Fire a test push to current user (auth required)
 app.post('/api/push/test', authRequired, async (req, res) => {
   try {
-    await sendPushNotification(req.user.id, '🔔 Push Test', 'If you can read this, background push works!', { url: '/comms', tag: 'push-test' });
+    const { category } = req.body || {};
+    const notifCategory = category === 'chat' ? 'chat' : 'system';
+    await sendPushNotification(req.user.id, `🔔 Test: ${notifCategory.toUpperCase()}`, `If you can read this, background ${notifCategory} push works!`, { url: '/comms', tag: 'push-test' }, notifCategory);
     res.json({ ok: true });
   } catch (e) {
     log.err('Push test failed', { message: e.message });
@@ -6384,13 +6456,59 @@ app.post('/api/push/test', authRequired, async (req, res) => {
   }
 });
 
-// GET /api/push/ntfy-topic
-app.get('/api/push/ntfy-topic', authRequired, async (req, res) => {
+// GET /api/push/vapidPublicKey
+app.get('/api/push/vapidPublicKey', (req, res) => {
+  res.json({ publicKey: VAPID_PUBLIC_KEY });
+});
+
+// GET /api/push/settings
+app.get('/api/push/settings', authRequired, async (req, res) => {
   try {
-    const topic = crypto.createHash('md5').update('vampire_' + req.user.id + (process.env.JWT_SECRET || 'secret')).digest('hex');
-    res.json({ topic });
+    const [rows] = await pool.query('SELECT push_settings FROM users WHERE id=?', [req.user.id]);
+    res.json(rows[0].push_settings || { chat: false, system: false });
   } catch (e) {
-    res.status(500).json({ error: 'Failed to generate topic' });
+    res.status(500).json({ error: 'Failed to fetch settings' });
+  }
+});
+
+// PUT /api/push/settings
+app.put('/api/push/settings', authRequired, async (req, res) => {
+  try {
+    const { settings } = req.body;
+    
+    // Fetch existing settings
+    const [rows] = await pool.query('SELECT push_settings FROM users WHERE id=?', [req.user.id]);
+    const currentSettings = rows[0].push_settings || { chat: false, system: false };
+    
+    // Merge new settings
+    const newSettings = { ...currentSettings, ...settings };
+    
+    await pool.query('UPDATE users SET push_settings=? WHERE id=?', [JSON.stringify(newSettings), req.user.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to save settings' });
+  }
+});
+
+// PWA Web Push Subscription (auth required)
+app.post('/api/push/web-subscribe', authRequired, async (req, res) => {
+  try {
+    const { subscription } = req.body || {};
+    if (!subscription || !subscription.endpoint) {
+      return res.status(400).json({ error: 'Valid subscription required' });
+    }
+
+    await pool.query(
+      `INSERT INTO user_push_subscriptions (user_id, endpoint, p256dh, auth)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE user_id=VALUES(user_id)`,
+      [req.user.id, subscription.endpoint, subscription.keys.p256dh, subscription.keys.auth]
+    );
+
+    res.status(201).json({ ok: true });
+  } catch (e) {
+    log.err('Web Push subscribe failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to save subscription' });
   }
 });
 
