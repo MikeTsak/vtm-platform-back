@@ -62,7 +62,7 @@ const uploadLimiter = rateLimit({
 // Configure Multer for Avatar uploads
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB limit
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB limit
 });
 
 const LOG_CHANNEL_ID = '1469033259806625874';
@@ -4619,7 +4619,8 @@ app.get('/api/npcs/:id/avatar', async (req, res) => {
     if (rows.length === 0 || !rows[0].avatar) {
       return res.status(404).send('Avatar not found');
     }
-    res.set('Content-Type', 'image/jpeg');
+    res.set('Content-Type', 'image/webp');
+    res.set('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
     res.send(rows[0].avatar);
   } catch (e) {
     log.err('NPC Avatar GET error', { message: e.message });
@@ -4632,7 +4633,11 @@ app.put('/api/npcs/:id/avatar', authRequired, requireAdmin, upload.single('avata
     if (!req.file) {
       return res.status(400).json({ error: 'No image file provided.' });
     }
-    const buffer = req.file.buffer;
+    const buffer = await sharp(req.file.buffer)
+      .resize(500, 500, { fit: 'cover' })
+      .webp({ quality: 80 })
+      .toBuffer();
+      
     await pool.query('UPDATE npcs SET avatar = ? WHERE id = ?', [buffer, req.params.id]);
     res.json({ success: true, message: 'NPC Avatar updated successfully.' });
   } catch (e) {
@@ -4979,16 +4984,52 @@ app.delete('/api/admin/domains/:id/members/:character_id', authRequired, require
   res.json({ ok: true });
 });
 
+/* -------------------- Identity Avatars -------------------- */
+
+app.get('/api/identities/:id/avatar', async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT avatar FROM email_identities WHERE id = ?', [req.params.id]);
+    if (rows.length === 0 || !rows[0].avatar) {
+      return res.status(404).send('Avatar not found');
+    }
+    res.setHeader('Content-Type', 'image/webp');
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.send(rows[0].avatar);
+  } catch (err) {
+    log.err('Identity avatar fetch error', err);
+    res.status(500).send('Error fetching avatar');
+  }
+});
+
+app.put('/api/identities/:id/avatar', authRequired, requireAdmin, upload.single('avatar'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No image file provided.' });
+    }
+    const buffer = await sharp(req.file.buffer)
+      .resize(500, 500, { fit: 'cover', position: 'top' })
+      .webp({ quality: 80 })
+      .toBuffer();
+
+    await pool.query('UPDATE email_identities SET avatar = ? WHERE id = ?', [buffer, req.params.id]);
+    log.adm('Identity avatar updated', { identity_id: req.params.id, admin_id: req.user.id });
+    res.json({ ok: true, message: 'Identity avatar updated successfully' });
+  } catch (err) {
+    log.err('Identity avatar upload error', err);
+    res.status(500).json({ error: 'Error processing or saving avatar' });
+  }
+});
+
 /* -------------------- Boons (FIXED) -------------------- */
 
-// GET /api/boons/entities (Court/Admin only)
-// Get all players and NPCs for dropdowns
-app.get('/api/boons/entities', authRequired, requireCourt, async (req, res) => {
+// GET /api/boons/entities (All logged-in users need this to resolve avatars)
+app.get('/api/boons/entities', authRequired, async (req, res) => {
   try {
-    const [characters] = await pool.query('SELECT id, name, clan FROM characters ORDER BY name ASC');
+    const [characters] = await pool.query('SELECT id, user_id, name, clan FROM characters ORDER BY name ASC');
     const [npcs] = await pool.query('SELECT id, name, clan FROM npcs ORDER BY name ASC');
     
-    const players = characters.map(c => ({ type: 'player', id: c.id, name: `${c.name} (${c.clan || 'Unknown'})` }));
+    // Using user_id for players because avatars are tied to users, not characters
+    const players = characters.map(c => ({ type: 'player', id: c.user_id, name: `${c.name} (${c.clan || 'Unknown'})` }));
     const nonPlayers = npcs.map(n => ({ type: 'npc', id: n.id, name: `${n.name} (NPC)` }));
     
     res.json({ entities: [...players, ...nonPlayers] });
@@ -6074,9 +6115,11 @@ app.patch('/api/admin/downtimes/:id', authRequired, requireAdmin, async (req, re
 /* -------------------- Domain Claims -------------------- */
 /** List all claims (public for logged-in users) */
 app.get('/api/domain-claims', authRequired, async (_req, res) => {
-  const [rows] = await pool.query(
-    'SELECT division, owner_name, color, owner_character_id, claimed_at FROM domain_claims'
-  );
+  const [rows] = await pool.query(`
+    SELECT d.division, d.owner_name, d.color, d.owner_character_id, d.owner_npc_id, d.claimed_at, c.user_id 
+    FROM domain_claims d
+    LEFT JOIN characters c ON d.owner_character_id = c.id
+  `);
   res.json({ claims: rows });
 });
 
@@ -6114,7 +6157,7 @@ app.post('/api/domain-claims/claim', authRequired, async (req, res) => {
 // --- Admin: override/transfer a claim (safe upsert) ---
 app.patch('/api/admin/domain-claims/:division', authRequired, requireAdmin, async (req, res) => {
   const division = Number(req.params.division);
-  const { owner_name, color, owner_character_id } = req.body;
+  const { owner_name, color, owner_character_id, owner_npc_id } = req.body;
 
   const fields = [];
   const vals = [];
@@ -6129,6 +6172,14 @@ app.patch('/api/admin/domain-claims/:division', authRequired, requireAdmin, asyn
   } else if (owner_character_id !== undefined) {
     if (!Number.isInteger(owner_character_id)) return res.status(400).json({ error: 'owner_character_id must be integer or null' });
     fields.push('owner_character_id=?'); vals.push(owner_character_id);
+    fields.push('owner_npc_id=NULL'); // mutual exclusivity
+  }
+  if (owner_npc_id === null) {
+    fields.push('owner_npc_id=NULL');
+  } else if (owner_npc_id !== undefined) {
+    if (!Number.isInteger(owner_npc_id)) return res.status(400).json({ error: 'owner_npc_id must be integer or null' });
+    fields.push('owner_npc_id=?'); vals.push(owner_npc_id);
+    fields.push('owner_character_id=NULL'); // mutual exclusivity
   }
 
   if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
@@ -6143,10 +6194,11 @@ app.patch('/api/admin/domain-claims/:division', authRequired, requireAdmin, asyn
       owner_name: (typeof owner_name === 'string' && owner_name.trim()) ? owner_name.trim() : 'Admin Set',
       color: (typeof color === 'string') ? color : '#888888',
       owner_character_id: (owner_character_id === null || owner_character_id === undefined) ? null : Number(owner_character_id),
+      owner_npc_id: (owner_npc_id === null || owner_npc_id === undefined) ? null : Number(owner_npc_id),
     };
     await pool.query(
-      'INSERT INTO domain_claims (division, owner_name, color, owner_character_id) VALUES (?,?,?,?)',
-      [division, base.owner_name, base.color, base.owner_character_id]
+      'INSERT INTO domain_claims (division, owner_name, color, owner_character_id, owner_npc_id) VALUES (?,?,?,?,?)',
+      [division, base.owner_name, base.color, base.owner_character_id, base.owner_npc_id]
     );
   }
 
@@ -8327,7 +8379,8 @@ app.get('/api/users/:id/avatar', async (req, res) => {
     if (rows.length === 0 || !rows[0].avatar) {
       return res.status(404).send('Avatar not found');
     }
-    res.set('Content-Type', 'image/jpeg');
+    res.set('Content-Type', 'image/webp');
+    res.set('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
     res.send(rows[0].avatar);
   } catch (e) {
     log.err('Avatar GET error', { message: e.message });
@@ -8344,7 +8397,10 @@ app.put('/api/users/:id/avatar', authRequired, upload.single('avatar'), async (r
       return res.status(400).json({ error: 'No image file provided.' });
     }
     
-    const buffer = req.file.buffer;
+    const buffer = await sharp(req.file.buffer)
+      .resize(500, 500, { fit: 'cover' })
+      .webp({ quality: 80 })
+      .toBuffer();
 
     await pool.query('UPDATE users SET avatar = ? WHERE id = ?', [buffer, req.params.id]);
     res.json({ success: true, message: 'Avatar updated successfully.' });
