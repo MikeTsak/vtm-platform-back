@@ -12,6 +12,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const pool = require('./db'); // export pool.promise() from db.js
+const { validateRetainerSheet } = require('./utils/retainerValidation');
 const { authRequired, requireAdmin } = require('./authMiddleware');
 const axios = require('axios');
 
@@ -483,7 +484,7 @@ if (commandText === 'whoami') {
   }
 
   // --- SCHRECKNET NODE AI - "ΓΙΑΝΝΑΚΗΣ" (WITH IMPROVED DB CROSS-REFERENCING) ---
-  if (message.mentions.has(discordClient.user)) {
+  if (message.mentions.has(discordClient.user, { ignoreRoles: true, ignoreEveryone: true })) {
     try {
       await message.channel.sendTyping();
 
@@ -1494,6 +1495,32 @@ async function _ensurePushSubscriptionsTable() {
   }
 }
 
+async function _ensureRetainersTable() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS retainers (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        character_id INT UNSIGNED NOT NULL,
+        name VARCHAR(255) NOT NULL,
+        tier INT DEFAULT 1,
+        sheet JSON NULL,
+        xp INT DEFAULT 0,
+        avatar LONGBLOB NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    try {
+      await pool.query("ALTER TABLE retainers ADD COLUMN avatar LONGBLOB NULL");
+    } catch (e) {
+      if (e.code !== 'ER_DUP_FIELDNAME') console.warn("Notice adding avatar to retainers:", e.message);
+    }
+    log.ok('Retainers table verified/created.');
+  } catch (e) {
+    log.err('Failed to init retainers table', { error: e.message });
+  }
+}
+
 async function initDatabase() {
   try {
     // 1. Core tables
@@ -1520,6 +1547,7 @@ async function initDatabase() {
     await _ensurePremonitionsMediaTables();
     await _ensureDiceTable();
     await _ensureNewsTables();
+    await _ensureRetainersTable();
     
     // 5. Apply 50MB LONGBLOB patches to existing media tables
     try {
@@ -3465,6 +3493,107 @@ app.delete('/api/characters/:id/inventory/:itemId', authRequired, async (req, re
   } catch (e) {
     log.err('Failed to delete inventory item', { message: e.message, character_id: charId, item_id: itemId });
     res.status(500).json({ error: 'Failed to delete item' });
+  }
+});
+
+// ================== Retainers ==================
+app.get('/api/characters/:id/retainers', authRequired, async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT id, character_id, name, tier, sheet, xp, created_at FROM retainers WHERE character_id=?', [req.params.id]);
+    res.json(rows);
+  } catch (e) {
+    log.err('Failed to get retainers', { message: e.message, character_id: req.params.id });
+    res.status(500).json({ error: 'Failed to fetch retainers' });
+  }
+});
+
+app.post('/api/characters/:id/retainers', authRequired, async (req, res) => {
+  try {
+    const { name, tier, sheet, xp } = req.body;
+    const [result] = await pool.query(
+      'INSERT INTO retainers (character_id, name, tier, sheet, xp) VALUES (?, ?, ?, ?, ?)',
+      [req.params.id, name, tier || 1, JSON.stringify(sheet || {}), xp || 0]
+    );
+    res.json({ id: result.insertId, character_id: req.params.id, name, tier, sheet, xp });
+  } catch (e) {
+    log.err('Failed to create retainer', { message: e.message, character_id: req.params.id });
+    res.status(500).json({ error: 'Failed to create retainer' });
+  }
+});
+
+app.put('/api/retainers/:retainerId', authRequired, async (req, res) => {
+  try {
+    const { name, tier, sheet, xp } = req.body;
+    
+    // Strict V5 Validation
+    const isGhoul = sheet?.isGhoul === true;
+    const validationError = validateRetainerSheet(Number(tier), sheet, isGhoul);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
+    }
+
+    await pool.query(
+      'UPDATE retainers SET name=?, tier=?, sheet=?, xp=? WHERE id=?',
+      [name, tier, JSON.stringify(sheet), xp, req.params.retainerId]
+    );
+    res.json({ success: true });
+  } catch (e) {
+    log.err('Failed to update retainer', { message: e.message, retainer_id: req.params.retainerId });
+    res.status(500).json({ error: 'Failed to update retainer' });
+  }
+});
+
+app.delete('/api/retainers/:retainerId', authRequired, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM retainers WHERE id=?', [req.params.retainerId]);
+    res.json({ success: true });
+  } catch (e) {
+    log.err('Failed to delete retainer', { message: e.message, retainer_id: req.params.retainerId });
+    res.status(500).json({ error: 'Failed to delete retainer' });
+  }
+});
+
+// Admin endpoint for retainers
+app.get('/api/admin/retainers', requireAdmin, async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT r.id, r.character_id, r.name, r.tier, r.sheet, r.created_at, c.name as domitor_name 
+      FROM retainers r
+      JOIN characters c ON r.character_id = c.id
+    `);
+    res.json(rows);
+  } catch (e) {
+    log.err('Failed to get all retainers for admin', { error: e.message });
+    res.status(500).json({ error: 'Failed to fetch retainers' });
+  }
+});
+
+// GET retainer avatar
+app.get('/api/retainers/:id/avatar', async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT avatar FROM retainers WHERE id = ?', [req.params.id]);
+    if (rows.length === 0 || !rows[0].avatar) {
+      return res.status(404).send('No avatar found');
+    }
+    res.set('Content-Type', 'image/jpeg');
+    res.set('Cache-Control', 'public, max-age=31557600');
+    res.send(rows[0].avatar);
+  } catch (e) {
+    log.err('Failed to get retainer avatar', { error: e.message });
+    res.status(500).send('Server Error');
+  }
+});
+
+// PUT retainer avatar
+app.put('/api/retainers/:id/avatar', authRequired, upload.single('avatar'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const processedBuffer = await _processImage(req.file.buffer, { width: 500, height: 500, fit: 'cover' });
+    await pool.query('UPDATE retainers SET avatar = ? WHERE id = ?', [processedBuffer, req.params.id]);
+    res.json({ success: true });
+  } catch (e) {
+    log.err('Failed to update retainer avatar', { error: e.message });
+    res.status(500).json({ error: 'Failed to update avatar' });
   }
 });
 
