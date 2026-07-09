@@ -3923,6 +3923,25 @@ app.get('/api/admin/characters', authRequired, requireAdmin, async (req, res) =>
   }
 });
 
+// --- Admin: fetch all ghouls ---
+app.get('/api/admin/ghouls', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const [ghouls] = await pool.query(`
+      SELECT 
+        r.id, r.name as retainer_name, r.tier, r.sheet, r.created_at, 
+        c.id as domitor_id, c.name as domitor_name
+      FROM retainers r
+      JOIN characters c ON r.character_id = c.id
+      WHERE r.is_ghoul = 1
+      ORDER BY r.created_at DESC
+    `);
+    res.json({ ghouls });
+  } catch (e) {
+    console.error('Failed to fetch all ghouls:', e);
+    res.status(500).json({ error: 'Failed to fetch ghouls' });
+  }
+});
+
 // --- Admin: edit character ---
 app.patch('/api/admin/characters/:id', authRequired, requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
