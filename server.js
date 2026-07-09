@@ -3521,7 +3521,43 @@ app.post('/api/characters/:id/retainers', authRequired, async (req, res) => {
   }
 });
 
-app.put('/api/retainers/:retainerId', authRequired, async (req, res) => {
+
+app.put('/api/retainers/:retainerId/upgrade', authRequired, async (req, res) => {
+  try {
+    const { name, tier, sheet, xp } = req.body;
+    
+    // Check ownership
+    const [rows] = await pool.query(
+      'SELECT r.* FROM retainers r JOIN characters c ON r.character_id = c.id WHERE r.id = ? AND c.user_id = ?',
+      [req.params.retainerId, req.user.id]
+    );
+    if (rows.length === 0) return res.status(403).json({ error: 'Not authorized or retainer not found' });
+    const oldRetainer = rows[0];
+
+    // Ensure tier is only going up or staying the same
+    if (tier < oldRetainer.tier) {
+      return res.status(400).json({ error: 'Cannot downgrade tier via upgrade route.' });
+    }
+
+    // Strict V5 Validation
+    const isGhoul = sheet?.isGhoul === true;
+    const validationError = validateRetainerSheet(Number(tier), sheet, isGhoul);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
+    }
+
+    await pool.query(
+      'UPDATE retainers SET tier=?, sheet=? WHERE id=?',
+      [tier, JSON.stringify(sheet), req.params.retainerId]
+    );
+    res.json({ success: true });
+  } catch (e) {
+    log.err('Failed to upgrade retainer', { message: e.message, retainer_id: req.params.retainerId });
+    res.status(500).json({ error: 'Failed to upgrade retainer' });
+  }
+});
+
+app.put('/api/retainers/:retainerId', authRequired, requireAdmin, async (req, res) => {
   try {
     const { name, tier, sheet, xp } = req.body;
     
@@ -3588,7 +3624,10 @@ app.get('/api/retainers/:id/avatar', async (req, res) => {
 app.put('/api/retainers/:id/avatar', authRequired, upload.single('avatar'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    const processedBuffer = await _processImage(req.file.buffer, { width: 500, height: 500, fit: 'cover' });
+    const processedBuffer = await sharp(req.file.buffer)
+      .resize(500, 500, { fit: 'cover' })
+      .webp({ quality: 80 })
+      .toBuffer();
     await pool.query('UPDATE retainers SET avatar = ? WHERE id = ?', [processedBuffer, req.params.id]);
     res.json({ success: true });
   } catch (e) {
@@ -3929,7 +3968,7 @@ app.get('/api/admin/ghouls', authRequired, requireAdmin, async (req, res) => {
     const [ghouls] = await pool.query(`
       SELECT 
         r.id, r.name as retainer_name, r.tier, r.sheet, r.created_at, 
-        c.id as domitor_id, c.name as domitor_name
+        c.id as domitor_id, c.name as domitor_name, c.clan as domitor_clan, c.xp as domitor_xp
       FROM retainers r
       JOIN characters c ON r.character_id = c.id
       WHERE r.is_ghoul = 1
@@ -8698,6 +8737,35 @@ app.use(expressErrorHandler);
 // Serve the Swagger UI at /api-docs endpoint
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 log.start('Swagger UI available at /api-docs');
+
+/* -------------------- Database Setup -------------------- */
+async function _ensureDatabaseSchema() {
+  try {
+    try {
+      await pool.query(`ALTER TABLE users ADD COLUMN push_settings JSON`);
+      await pool.query(`UPDATE users SET push_settings = '{"chat": false, "system": false}' WHERE push_settings IS NULL`);
+      log.info("Added push_settings column");
+    } catch (e) {
+      if (!e.message.includes('Duplicate column name')) log.err("Error adding column:", { message: e.message });
+    }
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS user_push_subscriptions (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT UNSIGNED NOT NULL,
+        endpoint VARCHAR(512) NOT NULL UNIQUE,
+        p256dh VARCHAR(255) NOT NULL,
+        auth VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    log.info("Push subscriptions table verified.");
+  } catch (err) {
+    log.err("Error ensuring database schema:", { message: err.message });
+  }
+}
+_ensureDatabaseSchema();
 
 /* -------------------- Start Server -------------------- */
 const PORT = process.env.PORT || 3001;
