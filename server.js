@@ -1457,6 +1457,17 @@ async function _ensureGameplaySystemsTables() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
+    // 5. Events
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS events (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        title VARCHAR(255) NOT NULL,
+        date DATETIME NOT NULL,
+        description TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
     gameplaySystemsTablesCreated = true;
     log.ok('Gameplay systems (domains, downtimes, coteries, boons) verified/created.');
   } catch (e) {
@@ -2345,11 +2356,13 @@ app.get('/api/system/banner', async (req, res) => {
     const enabled = await getSetting('banner_enabled', 'false');
     const message = await getSetting('banner_message', '');
     const countdown = await getSetting('banner_countdown', '');
+    const threat = await getSetting('masquerade_threat_level', '1');
     
     res.json({
       banner_enabled: enabled === 'true',
       banner_message: message,
-      banner_countdown: countdown
+      banner_countdown: countdown,
+      masquerade_threat_level: parseInt(threat, 10)
     });
   } catch (e) {
     res.status(500).json({ error: 'Failed to fetch banner config' });
@@ -3968,10 +3981,12 @@ app.get('/api/admin/ghouls', authRequired, requireAdmin, async (req, res) => {
     const [ghouls] = await pool.query(`
       SELECT 
         r.id, r.name as retainer_name, r.tier, r.sheet, r.created_at, 
-        c.id as domitor_id, c.name as domitor_name, c.clan as domitor_clan, c.xp as domitor_xp
+        c.id as domitor_id, c.name as domitor_name, c.clan as domitor_clan, c.xp as domitor_xp, c.image_url as domitor_image_url,
+        u.display_name as player_name, u.id as user_id
       FROM retainers r
       JOIN characters c ON r.character_id = c.id
-      WHERE r.is_ghoul = 1
+      JOIN users u ON c.user_id = u.id
+      WHERE JSON_EXTRACT(r.sheet, '$.isGhoul') = true
       ORDER BY r.created_at DESC
     `);
     res.json({ ghouls });
@@ -7575,9 +7590,19 @@ app.post('/api/live-session/:id/rolls', authRequired, async (req, res) => {
         outcome.crit_pairs,
         outcome.messy_crit ? 1 : 0,
         outcome.bestial_failure ? 1 : 0,
-        safeNote
       ]
     );
+
+    if (outcome.messy_crit && characterId) {
+      try {
+        const [doms] = await pool.query('SELECT domain_id FROM domain_members WHERE character_id=?', [characterId]);
+        if (doms.length > 0) {
+          const domId = doms[0].domain_id;
+          await pool.query('UPDATE domains SET safety_rating = GREATEST(safety_rating - 1, 0) WHERE id=?', [domId]);
+          await pool.query('INSERT INTO admin_audit_logs (admin_id, action, details) VALUES (?, ?, ?)', [0, 'SYSTEM_MESSY_CRIT', `Character ${characterId} rolled a Messy Critical. Domain ${domId} safety reduced.`]);
+        }
+      } catch(e) { log.err('Messy crit safety reduction failed', { error: e.message }); }
+    }
 
     res.json({ ok: true });
   } catch (e) {
@@ -8717,6 +8742,191 @@ app.put('/api/users/:id/avatar', authRequired, upload.single('avatar'), async (r
   }
 });
 
+// --- ADMIN NEW FEATURES ---
+app.get('/api/admin/boons', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const [boons] = await pool.query('SELECT * FROM boons ORDER BY created_at DESC');
+    res.json({ boons });
+  } catch (e) {
+    log.err('Admin boons fetch failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to fetch boons' });
+  }
+});
+
+app.get('/api/admin/events', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const [events] = await pool.query('SELECT * FROM events ORDER BY date ASC');
+    res.json({ events });
+  } catch (e) {
+    log.err('Admin events fetch failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to fetch events' });
+  }
+});
+
+app.post('/api/admin/events', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const { title, date_string, description } = req.body;
+    await pool.query('INSERT INTO events (title, date, description) VALUES (?, ?, ?)', [title, new Date(date_string), description || null]);
+    res.json({ ok: true });
+  } catch (e) {
+    log.err('Admin events create failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to create event' });
+  }
+});
+
+app.delete('/api/admin/events/:id', authRequired, requireAdmin, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM events WHERE id=?', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    log.err('Admin events delete failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to delete event' });
+  }
+});
+
+app.post('/api/admin/broadcast', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const { title, body } = req.body;
+    const [users] = await pool.query('SELECT id FROM users');
+    let sent = 0;
+    for (const u of users) {
+      await sendPushNotification(u.id, title, body, {}, 'system');
+      sent++;
+    }
+    log.adm('Global Broadcast Sent', { admin_id: req.user.id, title });
+    res.json({ ok: true, sent_count: sent });
+  } catch (e) {
+    log.err('Admin broadcast failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to send broadcast' });
+  }
+});
+
+app.get('/api/admin/timeline/:charId', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const charId = parseInt(req.params.charId, 10);
+    const [char] = await pool.query('SELECT name, created_at FROM characters WHERE id=?', [charId]);
+    if (!char.length) return res.status(404).json({ error: 'Character not found' });
+    const cname = char[0].name;
+
+    const [xp] = await pool.query('SELECT id, cost, action, target, created_at FROM xp_log WHERE character_id=?', [charId]);
+    const [dice] = await pool.query('SELECT id, pool, successes, hunger, sides, note, created_at FROM dice_rolls WHERE character_id=?', [charId]);
+    const [boons] = await pool.query('SELECT id, from_name, to_name, level, description as details, created_at FROM boons WHERE from_name=? OR to_name=?', [cname, cname]);
+    const [downtimes] = await pool.query('SELECT id, title, status, created_at FROM downtimes WHERE character_id=?', [charId]);
+
+    const timeline = [];
+    timeline.push({ type: 'creation', id: 'creation', timestamp: char[0].created_at, title: 'Character Created', body: 'This character was created in the system.' });
+    xp.forEach(x => timeline.push({ type: 'xp', id: x.id, timestamp: x.created_at, delta: -x.cost, reason: `${x.action} ${x.target ? `(${x.target})` : ''}`.trim() }));
+    dice.forEach(d => timeline.push({ type: 'dice', id: d.id, timestamp: d.created_at, pool: d.pool, successes: d.successes, hunger: d.hunger, sides: d.sides, note: d.note }));
+    downtimes.forEach(dt => timeline.push({ type: 'downtime', id: dt.id, timestamp: dt.created_at, title: dt.title, status: dt.status }));
+    boons.forEach(b => {
+      const is_debtor = b.from_name === cname;
+      timeline.push({ type: 'boon', id: b.id, timestamp: b.created_at, is_debtor, boon_type: b.level, other_name: is_debtor ? b.to_name : b.from_name, details: b.details });
+    });
+
+    timeline.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    res.json({ timeline });
+  } catch (e) {
+    log.err('Admin timeline failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to fetch timeline' });
+  }
+});
+
+app.get('/api/admin/domains-advanced', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const [domains] = await pool.query('SELECT * FROM domains ORDER BY created_at DESC');
+    const [problems] = await pool.query('SELECT * FROM domain_problems ORDER BY created_at DESC');
+    res.json({ domains, problems });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch advanced domains' });
+  }
+});
+
+app.post('/api/admin/domains/draw-problems', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const [domains] = await pool.query('SELECT id FROM domains');
+    if (domains.length === 0) return res.status(400).json({ error: 'No domains exist' });
+    
+    const shuffled = domains.sort(() => 0.5 - Math.random());
+    const selected = shuffled.slice(0, 3);
+    const problemList = ['SI Surveillance Activity', 'Lupine Pack Sighted', 'Masquerade Breach Video Leaked', 'Anarch Agitators', 'Blood Shortage'];
+    
+    for (const dom of selected) {
+      const prob = problemList[Math.floor(Math.random() * problemList.length)];
+      await pool.query('INSERT INTO domain_problems (domain_id, problem_text) VALUES (?, ?)', [dom.id, prob]);
+      await pool.query('UPDATE domains SET safety_rating = GREATEST(safety_rating - 2, 0) WHERE id=?', [dom.id]);
+    }
+    
+    await pool.query('INSERT INTO admin_audit_logs (admin_id, action, details) VALUES (?, ?, ?)', [req.user.id, 'DRAW_DOMAIN_PROBLEMS', `Drew monthly problems for ${selected.length} domains.`]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to draw problems' });
+  }
+});
+
+app.post('/api/admin/domains/custom-problem', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const { domain_id, problem_text } = req.body;
+    await pool.query('INSERT INTO domain_problems (domain_id, problem_text, is_custom) VALUES (?, ?, 1)', [domain_id, problem_text]);
+    await pool.query('UPDATE domains SET safety_rating = GREATEST(safety_rating - 2, 0) WHERE id=?', [domain_id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to add custom problem' });
+  }
+});
+
+app.patch('/api/admin/domains/resolve-problem/:id', authRequired, requireAdmin, async (req, res) => {
+  try {
+    await pool.query('UPDATE domain_problems SET resolved = 1 WHERE id=?', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to resolve problem' });
+  }
+});
+
+app.get('/api/admin/blood-web', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const [chars] = await pool.query('SELECT c.id, c.name, c.sheet, u.display_name FROM characters c JOIN users u ON c.user_id = u.id WHERE c.is_ex = 0 AND c.is_deceased = 0');
+    const web = chars.map(c => {
+      let sheet = {};
+      try { sheet = JSON.parse(c.sheet) || {}; } catch (e) {}
+      return { id: c.id, name: c.name, player: c.display_name, hunger: Number(sheet.hunger) || 0, bloodPotency: Number(sheet.bloodPotency) || 0 };
+    });
+    res.json({ web });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch blood web' });
+  }
+});
+
+app.post('/api/admin/masquerade-threat', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const { level } = req.body;
+    await pool.query('INSERT INTO app_settings (setting_key, setting_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE setting_value=?', ['masquerade_threat_level', String(level), String(level)]);
+    await pool.query('INSERT INTO admin_audit_logs (admin_id, action, details) VALUES (?, ?, ?)', [req.user.id, 'SET_MASQUERADE_THREAT', `Threat level set to ${level}`]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to update threat level' });
+  }
+});
+
+app.get('/api/admin/coteries', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const [coteries] = await pool.query('SELECT * FROM coteries');
+    const [members] = await pool.query('SELECT cm.*, c.name as char_name FROM coterie_members cm JOIN characters c ON cm.user_id = c.user_id');
+    res.json({ coteries, members });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch coteries' });
+  }
+});
+
+app.get('/api/admin/audit-logs', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const [logs] = await pool.query('SELECT a.*, u.display_name as admin_name FROM admin_audit_logs a LEFT JOIN users u ON a.admin_id = u.id ORDER BY a.created_at DESC LIMIT 500');
+    res.json({ logs });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch audit logs' });
+  }
+});
+
 /* -------------------- Error Handlers -------------------- */
 // Multer error handler (must be before general error handler)
 app.use((err, req, res, next) => {
@@ -8748,6 +8958,38 @@ async function _ensureDatabaseSchema() {
     } catch (e) {
       if (!e.message.includes('Duplicate column name')) log.err("Error adding column:", { message: e.message });
     }
+
+    try {
+      await pool.query(`ALTER TABLE domains ADD COLUMN safety_rating INT DEFAULT 10`);
+      log.info("Added safety_rating to domains");
+    } catch (e) {
+      if (!e.message.includes('Duplicate column')) log.err("Error adding safety_rating:", { message: e.message });
+    }
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS domain_problems (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        domain_id INT NOT NULL,
+        problem_text VARCHAR(255) NOT NULL,
+        is_custom BOOLEAN DEFAULT FALSE,
+        resolved BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS admin_audit_logs (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        admin_id INT NOT NULL,
+        action VARCHAR(100) NOT NULL,
+        details TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    try {
+      await pool.query(`INSERT INTO app_settings (setting_key, setting_value) VALUES ('masquerade_threat_level', '1') ON DUPLICATE KEY UPDATE setting_key=setting_key`);
+    } catch(e) {}
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS user_push_subscriptions (
