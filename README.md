@@ -64,8 +64,8 @@ npm install
 cp .env.example .env
 # edit .env with DB credentials + JWT secret
 
-# 3) Create tables
-# Run the SQL in the "Database schema (SQL)" section against your DB
+# 3) Run migrations (creates tables)
+npm run migrate
 
 # 4) Run server
 npm start
@@ -104,6 +104,7 @@ LOG_LEVEL=debug
 
 Notes:
 
+- The server uses strict startup validation (via `Zod`). If any required variable is missing, the app will instantly crash and tell you which one.
 - Don’t commit secrets. Ensure `.env` is in `.gitignore`.
 - Changing `JWT_SECRET` invalidates existing tokens (users must re-login).
 
