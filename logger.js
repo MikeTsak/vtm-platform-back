@@ -104,12 +104,21 @@ function formatJSON({ time, level, cat, msg, ctx }) {
   return safeStringify(ctx ? { ...base, ...ctx } : base);
 }
 
+const pino = require('pino');
+const pinoLogger = process.env.NODE_ENV !== 'production'
+  ? pino({ transport: { target: 'pino-pretty', options: { colorize: true } } })
+  : pino();
+
 function emit(level, cat, msg, ctx) {
   if (!allow(level)) return;
-  const time = nowISO();
-  const payload = { time, level, cat, msg, ctx };
-  const line = USE_JSON ? formatJSON(payload) : formatText(payload);
-  writeLine(line);
+  const payload = { cat, ...ctx };
+  let pLevel = 'info';
+  if (level === 'error') pLevel = 'error';
+  else if (level === 'warn') pLevel = 'warn';
+  else if (level === 'debug') pLevel = 'debug';
+
+  const emo = (USE_EMOJI && EMO[cat]) ? `${EMO[cat]} ` : '';
+  pinoLogger[pLevel](payload, `${emo}${msg}`);
 }
 
 /* =========================
