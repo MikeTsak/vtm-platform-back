@@ -27,7 +27,8 @@ async function runMigration() {
         const buffer = Buffer.from(response.data, 'binary');
         
         await pool.query('UPDATE npcs SET avatar = ? WHERE id = ?', [buffer, ch.id]);
-        console.log(`Successfully updated avatar for user_id: ${ch.id}`);
+        
+        console.log(`Successfully migrated avatar for user_id: ${ch.id}`);
         migratedCount++;
       } catch (err) {
         console.error(`Failed to fetch or save image for character ${ch.name} (user_id: ${ch.id}): ${err.message}`);

@@ -64,7 +64,7 @@ router.get('/dashboard', authRequired, async (req, res) => {
         pool.query('SELECT * FROM downtimes WHERE character_id=? ORDER BY created_at DESC LIMIT 5', [charId]),
         // Get recent chats (simplified version of my-recent, adjust if need exact matching)
         pool.query(`
-          SELECT cg.id, cg.name, cg.is_group, cg.is_faction, cg.created_at, cg.created_by,
+          SELECT cg.id, cg.name, cg.created_at, cg.created_by,
                  MAX(cm.created_at) as last_activity
           FROM chat_groups cg
           JOIN chat_group_members cgm ON cg.id = cgm.group_id

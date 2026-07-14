@@ -146,10 +146,20 @@ const app = express();
 const corsOrigin = process.env.CORS_ORIGIN 
   ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
   : true; // Development: allow all origins
+
+function getMimeType(buffer) {
+  if (!buffer || buffer.length < 4) return 'image/webp';
+  if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) return 'image/jpeg';
+  if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) return 'image/png';
+  if (buffer.length > 11 && buffer.toString('utf8', 8, 12) === 'WEBP') return 'image/webp';
+  return 'image/webp'; // default fallback
+}
+
 const helmet = require('helmet');
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+}));
 app.use(cors({ origin: corsOrigin, credentials: true }));
-// app.use(express.json({ limit: '1mb' }));
 app.set('trust proxy', false);
 // Increase payload limit to 70MB for Base64 image uploads
 app.use(express.json({ limit: '70mb' }));
@@ -2090,7 +2100,8 @@ app.get('/api/retainers/:id/avatar', async (req, res) => {
     if (rows.length === 0 || !rows[0].avatar) {
       return res.status(404).send('No avatar found');
     }
-    res.set('Content-Type', 'image/jpeg');
+    const mime = getMimeType(rows[0].avatar);
+    res.set('Content-Type', mime);
     res.set('Cache-Control', 'public, max-age=31557600');
     res.send(rows[0].avatar);
   } catch (e) {
@@ -3359,7 +3370,8 @@ app.get('/api/npcs/:id/avatar', async (req, res) => {
     if (rows.length === 0 || !rows[0].avatar) {
       return res.status(404).send('Avatar not found');
     }
-    res.set('Content-Type', 'image/webp');
+    const mime = getMimeType(rows[0].avatar);
+    res.set('Content-Type', mime);
     res.set('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
     res.send(rows[0].avatar);
   } catch (e) {
@@ -3732,7 +3744,8 @@ app.get('/api/identities/:id/avatar', async (req, res) => {
     if (rows.length === 0 || !rows[0].avatar) {
       return res.status(404).send('Avatar not found');
     }
-    res.setHeader('Content-Type', 'image/webp');
+    const mime = getMimeType(rows[0].avatar);
+    res.setHeader('Content-Type', mime);
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
     res.send(rows[0].avatar);
   } catch (err) {
@@ -7111,7 +7124,8 @@ app.get('/api/users/:id/avatar', async (req, res) => {
     if (rows.length === 0 || !rows[0].avatar) {
       return res.status(404).send('Avatar not found');
     }
-    res.set('Content-Type', 'image/webp');
+    const mime = getMimeType(rows[0].avatar);
+    res.set('Content-Type', mime);
     res.set('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
     res.send(rows[0].avatar);
   } catch (e) {
