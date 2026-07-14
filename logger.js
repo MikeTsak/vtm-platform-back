@@ -105,12 +105,46 @@ function formatJSON({ time, level, cat, msg, ctx }) {
 }
 
 const pino = require('pino');
-const pinoLogger = process.env.NODE_ENV !== 'production'
-  ? pino({ transport: { target: 'pino-pretty', options: { colorize: true } } })
-  : pino();
+const colors = require('colors/safe');
+
+// Pino is only used in production or when JSON logging is forced
+const pinoLogger = pino();
 
 function emit(level, cat, msg, ctx) {
   if (!allow(level)) return;
+
+  if (process.env.NODE_ENV !== 'production' && !USE_JSON) {
+    const d = new Date();
+    const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}.${String(d.getMilliseconds()).padStart(3, '0')}`;
+    
+    let badge = levelBadge(level);
+    if (level === 'error') badge = colors.red(badge);
+    else if (level === 'warn') badge = colors.yellow(badge);
+    else if (level === 'debug') badge = colors.gray(badge);
+    else badge = colors.green(badge);
+
+    const emo = (USE_EMOJI && EMO[cat]) ? `${EMO[cat]} ` : '';
+    const catLabel = cat ? colors.cyan(`[${cat}] `) : '';
+    
+    let ctxStr = '';
+    if (ctx && Object.keys(ctx).length > 0) {
+      ctxStr = ' ' + colors.gray(safeStringify(ctx));
+    }
+    
+    const line = `[${time}] ${badge}: ${emo}${catLabel}${msg}${ctxStr}`;
+    
+    if (fileStream) {
+      try { fileStream.write(`[${time}] ${levelBadge(level)}: ${emo}${cat ? `[${cat}] ` : ''}${msg}${ctxStr ? ' ' + safeStringify(ctx) : ''}\n`); } catch (_) {}
+    }
+    
+    if (level === 'error') console.error(line);
+    else if (level === 'warn') console.warn(line);
+    else if (level === 'debug') console.debug(line);
+    else console.log(line);
+    
+    return;
+  }
+
   const payload = { cat, ...ctx };
   let pLevel = 'info';
   if (level === 'error') pLevel = 'error';
@@ -118,7 +152,8 @@ function emit(level, cat, msg, ctx) {
   else if (level === 'debug') pLevel = 'debug';
 
   const emo = (USE_EMOJI && EMO[cat]) ? `${EMO[cat]} ` : '';
-  pinoLogger[pLevel](payload, `${emo}${msg}`);
+  const catLabel = cat ? `[${cat}] ` : '';
+  pinoLogger[pLevel](payload, `${emo}${catLabel}${msg}`);
 }
 
 /* =========================

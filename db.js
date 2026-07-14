@@ -23,9 +23,8 @@ const pool = mysql.createPool({
   // (Prevents using a connection the server already closed)
   idleTimeout: 60000,
 
-  // 3. Max lifetime of a connection (Refreshes connections every 30 mins)
+  // 3. Max lifetime of a connection
   maxIdle: 10,
-  maxLifetimeBeforeRecycle: 1800000,
 
   // 4. Queue limit (0 = infinite)
   queueLimit: 0,
