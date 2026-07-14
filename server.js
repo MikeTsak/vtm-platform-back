@@ -1193,10 +1193,25 @@ app.get('/', async (req, res) => {
  */
 app.post('/api/auth/register', authLimiter, async (req, res) => {
   try {
-    const { email, display_name, password } = req.body;
-    if (!email || !display_name || !password) {
-      log.warn('Register missing fields', { email, display_name });
-      return res.status(400).json({ error: 'Missing fields' });
+    const { email, display_name, password, recaptchaToken } = req.body;
+    if (!email || !display_name || !password || !recaptchaToken) {
+      log.warn('Register missing fields or captcha', { email, display_name });
+      return res.status(400).json({ error: 'Missing fields or captcha' });
+    }
+
+    // Verify reCAPTCHA
+    const secretKey = process.env.RECAPTCHA_SITE_SECRET;
+    if (secretKey) {
+      try {
+        const verifyRes = await axios.post(`https://www.google.com/recaptcha/api/siteverify?secret=${secretKey}&response=${recaptchaToken}`);
+        if (!verifyRes.data.success || verifyRes.data.score < 0.5) {
+          log.warn('Register invalid captcha or low score', { email, score: verifyRes.data.score });
+          return res.status(400).json({ error: 'Captcha validation failed. Are you a bot?' });
+        }
+      } catch (err) {
+        log.err('Captcha verify error', { error: err.message });
+        return res.status(500).json({ error: 'Captcha verification error' });
+      }
     }
     
     // Validate email format
