@@ -2633,6 +2633,12 @@ app.delete('/api/admin/npcs/:id', authRequired, requireAdmin, async (req, res) =
   res.json({ ok: true });
 });
 
+// Disable NPC
+app.post('/api/admin/npcs/:id/disable', authRequired, requireAdmin, async (req, res) => {
+  await pool.query('UPDATE npcs SET is_disabled = TRUE WHERE id=?', [req.params.id]);
+  res.json({ ok: true });
+});
+
 // Spend XP (NPC)
 app.post('/api/admin/npcs/:id/xp/spend', authRequired, requireAdmin, async (req, res) => {
   const { type, target, currentLevel, newLevel, ritualLevel, formulaLevel, dots, disciplineKind, patchSheet } = req.body;
@@ -2777,7 +2783,7 @@ app.get('/api/chat/my-recent', authRequired, async (req, res) => {
               (SELECT COUNT(*) FROM npc_messages WHERE npc_id = m.npc_id AND user_id = ? AND from_side = 'npc' AND read_at IS NULL) as unread_count
        FROM npc_messages m
        JOIN npcs n ON n.id = m.npc_id
-       WHERE m.user_id = ?
+       WHERE m.user_id = ? AND IFNULL(n.is_disabled, 0) = 0
        ORDER BY m.created_at DESC LIMIT ?`,
       [userId, userId, limit]
     );
@@ -3163,6 +3169,11 @@ app.post('/api/chat/npc/messages', authRequired, async (req, res) => {
     
     if (!npc_id || (!attachment_id && (!body || !body.trim()))) {
       return res.status(400).json({ error: 'NPC and content required' });
+    }
+
+    const [npcRows] = await pool.query('SELECT is_disabled FROM npcs WHERE id=?', [Number(npc_id)]);
+    if (!npcRows.length || npcRows[0].is_disabled) {
+      return res.status(403).json({ error: 'Cannot send message to this NPC at this time.' });
     }
 
     const [r] = await pool.query(
@@ -4291,6 +4302,7 @@ app.get('/api/chat/npcs', authRequired, async (req, res) => {
         (SELECT created_at FROM npc_messages WHERE npc_id = n.id ORDER BY created_at DESC LIMIT 1) as last_message_at,
         (SELECT COUNT(*) FROM npc_messages WHERE npc_id = n.id AND from_side = 'user' AND read_at IS NULL) as unread_count
        FROM npcs n
+       WHERE IFNULL(n.is_disabled, 0) = 0
        ORDER BY unread_count DESC, last_message_at DESC, n.name ASC`;
       params = [];
     } else {
@@ -4299,6 +4311,7 @@ app.get('/api/chat/npcs', authRequired, async (req, res) => {
         (SELECT created_at FROM npc_messages WHERE npc_id = n.id AND user_id = ? ORDER BY created_at DESC LIMIT 1) as last_message_at,
         (SELECT COUNT(*) FROM npc_messages WHERE npc_id = n.id AND user_id = ? AND from_side = 'npc' AND read_at IS NULL) as unread_count
        FROM npcs n
+       WHERE IFNULL(n.is_disabled, 0) = 0
        ORDER BY unread_count DESC, last_message_at DESC, n.name ASC`;
       params = [myId, myId];
     }

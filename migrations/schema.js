@@ -234,6 +234,13 @@ async function _ensureCoreTables() {
       if (e.code !== 'ER_DUP_FIELDNAME') throw e;
     }
 
+    try {
+      await pool.query("ALTER TABLE npcs ADD COLUMN is_disabled BOOLEAN DEFAULT FALSE");
+      log.ok('Added is_disabled column to npcs table');
+    } catch (e) {
+      if (e.code !== 'ER_DUP_FIELDNAME') throw e;
+    }
+
     // 4. Base Chat Messages (Group chat is handled separately)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS chat_messages (
