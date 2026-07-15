@@ -430,8 +430,10 @@ async function _ensureGameplaySystemsTables() {
         portillon INT DEFAULT 0,
         required_json JSON NULL,
         backgrounds_json JSON NULL,
+        flaws_json JSON NULL,
         extras_json JSON NULL,
         points_per_member INT DEFAULT 1,
+        bonus_points INT DEFAULT 0,
         coterie_xp INT DEFAULT 0,
         created_by INT NOT NULL,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -473,6 +475,17 @@ async function _ensureGameplaySystemsTables() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
+
+    // --- COTERIES FIXES (Adding flaws_json and bonus_points safely) ---
+    try {
+      const [coterieCols] = await pool.query("SHOW COLUMNS FROM coteries LIKE 'flaws_json'");
+      if (coterieCols.length === 0) {
+        await pool.query("ALTER TABLE coteries ADD COLUMN flaws_json JSON NULL, ADD COLUMN bonus_points INT DEFAULT 0");
+        log.ok('Added flaws_json and bonus_points to coteries table');
+      }
+    } catch (e) {
+      log.err('Failed to patch coteries table', { message: e.message });
+    }
 
     gameplaySystemsTablesCreated = true;
     log.ok('Gameplay systems (domains, downtimes, coteries, boons) verified/created.');

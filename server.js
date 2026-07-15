@@ -5410,8 +5410,10 @@ app.post('/api/coteries', authRequired, async (req, res) => {
       traits = {},
       required = null,
       backgrounds = [],
+      flaws = [],
       extras = [],
       points_per_member = 1,
+      bonus_points = 0,
       coterie_xp = 0,
       members = []
     } = req.body || {};
@@ -5426,8 +5428,8 @@ app.post('/api/coteries', authRequired, async (req, res) => {
 
     const [ins] = await pool.query(
       `INSERT INTO coteries
-       (name, type, domain_id, chasse, lien, portillon, required_json, backgrounds_json, extras_json, points_per_member, coterie_xp, created_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+       (name, type, domain_id, chasse, lien, portillon, required_json, backgrounds_json, flaws_json, extras_json, points_per_member, bonus_points, coterie_xp, created_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         name.trim(),
         type || null,
@@ -5435,8 +5437,10 @@ app.post('/api/coteries', authRequired, async (req, res) => {
         chasse, lien, portillon,
         required ? JSON.stringify(required) : null,
         JSON.stringify(backgrounds || []),
+        JSON.stringify(flaws || []),
         JSON.stringify(extras || []),
         Math.min(2, Math.max(1, Number(points_per_member || 1))),
+        Number(bonus_points || 0),
         Number.isFinite(coterie_xp) ? coterie_xp : 0,
         req.user.id
       ]
@@ -5545,8 +5549,10 @@ app.put('/api/coteries/:id', authRequired, async (req, res) => {
       traits = {},
       required = null,
       backgrounds = [],
+      flaws = [],
       extras = [],
       points_per_member,
+      bonus_points,
       coterie_xp
     } = req.body || {};
 
@@ -5561,8 +5567,10 @@ app.put('/api/coteries/:id', authRequired, async (req, res) => {
     }
     if (required !== undefined) { fields.push('required_json=?'); params.push(required ? JSON.stringify(required) : null); }
     if (backgrounds !== undefined) { fields.push('backgrounds_json=?'); params.push(JSON.stringify(backgrounds || [])); }
+    if (flaws !== undefined) { fields.push('flaws_json=?'); params.push(JSON.stringify(flaws || [])); }
     if (extras !== undefined) { fields.push('extras_json=?'); params.push(JSON.stringify(extras || [])); }
     if (points_per_member !== undefined) { fields.push('points_per_member=?'); params.push(Math.min(2, Math.max(1, Number(points_per_member || 1)))); }
+    if (bonus_points !== undefined) { fields.push('bonus_points=?'); params.push(Number(bonus_points || 0)); }
     if (coterie_xp !== undefined) { fields.push('coterie_xp=?'); params.push(Number(coterie_xp || 0)); }
 
     if (!fields.length) return res.json({ ok: true });
