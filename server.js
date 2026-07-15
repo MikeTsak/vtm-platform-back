@@ -5765,7 +5765,6 @@ app.post('/api/admin/downtimes/config', authRequired, requireAdmin, async (req, 
 // ADMIN: List all premonitions (+ recipients)
 app.get('/api/admin/premonitions', authRequired, requireAdmin, async (req, res) => {
   try {
-    await _ensurePremonitionsTables();
 
     // Base list
     const [prems] = await pool.query(`
@@ -5818,7 +5817,6 @@ app.get('/api/admin/premonitions', authRequired, requireAdmin, async (req, res) 
 // ADMIN: Get list of Malkavian players  ✅ REPLACE THIS ROUTE
 app.get('/api/admin/premonitions/malkavians', authRequired, requireAdmin, async (req, res) => {
   try {
-    await _ensurePremonitionsTables();
 
     // One row per user that has at least one Malkavian character
     const [rows] = await pool.query(`
@@ -5876,7 +5874,6 @@ app.post('/api/admin/premonitions/upload', authRequired, requireAdmin, memoryUpl
 // ADMIN: Create and send a new premonition
 app.post('/api/admin/premonitions/send', authRequired, requireAdmin, async (req, res) => {
   try {
-    await _ensurePremonitionsTables(); // Ensure main tables exist
     const { content_type, content_text, content_url, user_ids = [] } = req.body;
     const sendToAllMalks = user_ids.includes('all_malkavians');
     
@@ -5980,7 +5977,6 @@ app.post('/api/admin/premonitions/send', authRequired, requireAdmin, async (req,
 // PLAYER: Get my premonitions
 app.get('/api/premonitions/mine', authRequired, async (req, res) => {
   try {
-    await _ensurePremonitionsTables();
 
     const [rows] = await pool.query(`
       SELECT p.id, p.sender_id, u.display_name AS sender_name,
