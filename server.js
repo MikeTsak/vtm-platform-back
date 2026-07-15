@@ -6500,7 +6500,7 @@ app.post('/api/news', authRequired, async (req, res) => {
 
     if (!title || !body) return res.status(400).json({ error: 'Title and Body are required' });
 
-    await pool.query(
+    const [insertResult] = await pool.query(
       `INSERT INTO news_entries 
       (author_id, type, title, subtitle, body, theme, journalist_name, media_url)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -6526,13 +6526,12 @@ app.post('/api/news', authRequired, async (req, res) => {
         if (channelId) {
           const channel = await discordClient.channels.fetch(channelId);
           if (channel) {
-            // Strip HTML tags from the body so it looks clean in Discord
-            const cleanBody = body.replace(/<[^>]*>?/gm, '');
-            const snippet = cleanBody.length > 300 ? cleanBody.substring(0, 300) + '...' : cleanBody;
+            const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
+            const articleLink = `${appBase}/news/${insertResult.insertId}`;
             
             let broadcast = `📰 **NEW EREBUS ${type.toUpperCase()}** 📰\n\n**${title}**\n`;
             if (subtitle) broadcast += `*${subtitle}*\n`;
-            broadcast += `\n${snippet}\n\n*Check the Erebus Portal for the full text.*`;
+            broadcast += `\n**Read the full article:**\n${articleLink}`;
             
             await channel.send(broadcast);
           }
