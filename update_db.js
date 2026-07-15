@@ -1,0 +1,1 @@
+require('./db').query("UPDATE app_settings SET setting_value = 'true' WHERE setting_key IN ('discord_notify_news', 'discord_notify_prems')").then(() => console.log('Updated')).catch(e => console.error(e)).finally(()=>process.exit());

@@ -22,6 +22,7 @@ const axios = require('axios');
 
 const path = require('path');
 const fs = require('fs');
+const { spawn } = require('child_process');
 const multer = require('multer'); // Import multer
 const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require('discord.js');
 const webpush = require('web-push');
@@ -843,6 +844,71 @@ app.get('/api/system/banner', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: 'Failed to fetch banner config' });
   }
+});
+
+// Admin: Run Migrations Stream (SSE)
+app.get('/api/admin/run-migrations/stream', authRequired, requireAdmin, (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders(); // Establish SSE with client
+
+  const scripts = [
+    'migrate-avatars.js',
+    'migrate-npc-avatars.js',
+    'migrate-retainers.js',
+    'migrations/split_rumors.js'
+  ];
+
+  const total = scripts.length;
+  let current = 0;
+
+  const sendEvent = (event, data) => {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  sendEvent('start', { total });
+
+  const runNext = () => {
+    if (current >= total) {
+      sendEvent('done', { message: 'All migrations complete!' });
+      return res.end();
+    }
+
+    const script = scripts[current];
+    sendEvent('progress', { script, current: current + 1, total });
+    sendEvent('log', `\n--- Running ${script} ---`);
+
+    const child = spawn('node', [script], { cwd: __dirname });
+
+    child.stdout.on('data', (data) => {
+      sendEvent('log', data.toString());
+    });
+
+    child.stderr.on('data', (data) => {
+      sendEvent('log', `[ERROR] ${data.toString()}`);
+    });
+
+    child.on('close', (code) => {
+      sendEvent('log', `--- ${script} finished with code ${code} ---`);
+      current++;
+      runNext();
+    });
+
+    child.on('error', (err) => {
+      sendEvent('log', `[FATAL] Failed to start ${script}: ${err.message}`);
+      current++;
+      runNext();
+    });
+  };
+
+  runNext();
+
+  req.on('close', () => {
+    // Client disconnected, though child processes might still run if we don't kill them.
+    res.end();
+  });
 });
 
 // Admin: Save global banner settings
@@ -6478,16 +6544,7 @@ app.post('/api/news', authRequired, async (req, res) => {
 
     // --- PERMISSION CHECK ---
     if (type === 'news') {
-        if (theme === 'RUMOR') {
-            // For rumors, any activated player can post.
-            // Check if user is standard player, and if so, verify they have a character
-            if (req.user.role !== 'admin' && req.user.role !== 'courtuser') {
-                const [chars] = await pool.query('SELECT id FROM characters WHERE user_id = ?', [req.user.id]);
-                if (chars.length === 0) {
-                    return res.status(403).json({ error: 'You must have a character registered to post rumors.' });
-                }
-            }
-        } else if (req.user.role !== 'admin') {
+        if (req.user.role !== 'admin') {
             return res.status(403).json({ error: 'Only Admins can post official News' });
         }
     } else if (type === 'announcement') {
@@ -6516,28 +6573,45 @@ app.post('/api/news', authRequired, async (req, res) => {
       ]
     );
 
-    // --- DISCORD NEWS BROADCAST ---
+    // --- DISCORD BROADCAST (REST API) ---
     const discordEnabled = await getSetting('discord_enabled', 'true') === 'true';
-    const notifyPrems = await getSetting('discord_notify_prems', 'true') === 'true';
+    const notifyPrems = await getSetting('discord_notify_news', 'true') === 'true';
+    const tokenPresent = !!process.env.DISCORD_BOT_TOKEN;
     
-    if (discordEnabled && notifyPrems && discordClient?.isReady()) {
+    log.info('Discord News Broadcast Check', { discordEnabled, notifyPrems, tokenPresent });
+    
+    if (discordEnabled && notifyPrems && tokenPresent) {
       try {
         const channelId = await getSetting('discord_channel_id', null);
         if (channelId) {
-          const channel = await discordClient.channels.fetch(channelId);
-          if (channel) {
-            const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
-            const articleLink = `${appBase}/news/${insertResult.insertId}`;
-            
-            let broadcast = `📰 **NEW EREBUS ${type.toUpperCase()}** 📰\n\n**${title}**\n`;
-            if (subtitle) broadcast += `*${subtitle}*\n`;
-            broadcast += `\n**Read the full article:**\n${articleLink}`;
-            
-            await channel.send(broadcast);
-          }
+          const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
+          const articleLink = `${appBase}/news/${insertResult.insertId}`;
+          
+          const prefix = req.body.discord_prefix || `🔥 **Hot news from the mortal world!** 🔥`;
+          let broadcast = `# ${prefix}\n\n**${title}**\n`;
+          if (subtitle) broadcast += `*${subtitle}*\n`;
+          
+          const outletNames = {
+            'ERT': 'ERT News', 'SKAI': 'SKAI.gr', 'ALPHA': 'Alpha News',
+            'MEGA': 'Mega Gegonota', 'KATHIMERINI': 'Kathimerini',
+            'GOSSIP': 'Gossip-tv', 'OPENTV': 'Open TV'
+          };
+          const sourceName = outletNames[theme] || theme || 'Unknown';
+          
+          broadcast += `\n**Source:** ${sourceName}`;
+          broadcast += `\n**Read the full article:**\n${articleLink}`;
+          
+          await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+            content: broadcast
+          }, {
+            headers: {
+              'Authorization': `Bot ${process.env.DISCORD_BOT_TOKEN}`,
+              'Content-Type': 'application/json'
+            }
+          });
         }
       } catch (discordErr) {
-        log.err('Discord news broadcast failed', { error: discordErr.message });
+        log.err('Discord news broadcast failed', { error: discordErr.response?.data ? JSON.stringify(discordErr.response.data) : discordErr.message });
       }
     }
     // -----------------------------------
@@ -6554,6 +6628,117 @@ app.post('/api/news', authRequired, async (req, res) => {
 app.delete('/api/news/:id', authRequired, requireAdmin, async (req, res) => {
     try {
         await pool.query('DELETE FROM news_entries WHERE id=?', [req.params.id]);
+        res.json({ ok: true });
+    } catch(e) {
+        res.status(500).json({ error: 'Delete failed' });
+    }
+});
+
+// ================= RUMORS API =================
+
+// GET /api/rumors - Fetch all rumors
+app.get('/api/rumors', authRequired, async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT r.*, u.display_name as author_real_name,
+             c.name as char_name, c.camarilla_titles as char_titles, c.image_url as char_image
+      FROM rumors r
+      LEFT JOIN users u ON r.author_id = u.id
+      LEFT JOIN characters c ON c.user_id = u.id
+      ORDER BY r.created_at DESC
+      LIMIT 100
+    `);
+    // Send back with theme 'RUMOR' so frontend can identify it easily if needed,
+    // though the frontend now explicitly queries /rumors
+    res.json({ items: rows.map(r => ({ ...r, theme: 'RUMOR', type: 'news' })) });
+  } catch (e) {
+    log.err('Fetch rumors failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to load rumors' });
+  }
+});
+
+// GET /api/rumors/:id
+app.get('/api/rumors/:id', authRequired, async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT * FROM rumors WHERE id = ?', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Rumor not found' });
+    res.json(rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch rumor' });
+  }
+});
+
+// POST /api/rumors - Create Rumor
+app.post('/api/rumors', authRequired, async (req, res) => {
+  try {
+    const { title, body, media_url, discord_prefix } = req.body;
+
+    if (req.user.role !== 'admin' && req.user.role !== 'courtuser') {
+        const [chars] = await pool.query('SELECT id, sheet FROM characters WHERE user_id = ?', [req.user.id]);
+        let isActive = false;
+        if (chars.length > 0) {
+            try {
+                const sheetData = typeof chars[0].sheet === 'string' ? JSON.parse(chars[0].sheet) : chars[0].sheet;
+                if (sheetData && sheetData.is_active) isActive = true;
+            } catch (e) {}
+        }
+        if (!isActive) {
+            return res.status(403).json({ error: 'You must have an active character to post rumors.' });
+        }
+    }
+
+    if (!title || !body) return res.status(400).json({ error: 'Title and Body are required' });
+
+    const [insertResult] = await pool.query(
+      `INSERT INTO rumors (author_id, title, body, media_url) VALUES (?, ?, ?, ?)`,
+      [req.user.id, title, body, media_url || null]
+    );
+
+    // --- DISCORD BROADCAST (REST API) ---
+    const discordEnabled = await getSetting('discord_enabled', 'true') === 'true';
+    if (discordEnabled && process.env.DISCORD_BOT_TOKEN) {
+      try {
+        const channelId = await getSetting('discord_channel_id', null);
+        if (channelId) {
+          const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
+          const rumorLink = `${appBase}/rumors`;
+          
+          const prefix = discord_prefix || "🤫 A new whisper echoes in the night...";
+          
+          let plainBody = body.replace(/<[^>]*>?/gm, '').trim();
+          if (plainBody.length > 1500) {
+            plainBody = plainBody.substring(0, 1500) + '...';
+          }
+          
+          const broadcast = `# ${prefix}\n\n**${title}**\n\n_${plainBody}_\n\n**Investigate the Rumors:**\n${rumorLink}`;
+          
+          await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+            content: broadcast
+          }, {
+            headers: {
+              'Authorization': `Bot ${process.env.DISCORD_BOT_TOKEN}`,
+              'Content-Type': 'application/json'
+            }
+          });
+        }
+      } catch (discordErr) {
+        log.err('Discord rumor broadcast failed', { error: discordErr.response?.data ? JSON.stringify(discordErr.response.data) : discordErr.message });
+      }
+    }
+    // -----------------------------------
+
+    log.ok('Rumor created', { user_id: req.user.id, title });
+    res.json({ ok: true });
+  } catch (e) {
+    log.err('Create rumor failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to post' });
+  }
+});
+
+// DELETE /api/rumors/:id (Admin Only)
+app.delete('/api/rumors/:id', authRequired, requireAdmin, async (req, res) => {
+    try {
+        await pool.query('DELETE FROM rumors WHERE id=?', [req.params.id]);
         res.json({ ok: true });
     } catch(e) {
         res.status(500).json({ error: 'Delete failed' });

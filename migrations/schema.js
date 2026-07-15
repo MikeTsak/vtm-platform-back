@@ -967,6 +967,201 @@ async function _ensureNewsTables() {
       CREATE TABLE IF NOT EXISTS news_entries (
         id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
         author_id INT NOT NULL,
+        content_type ENUM('text','image','video') NOT NULL,
+        content_text TEXT,
+        content_url VARCHAR(2048),
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY sender_id_idx (sender_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // who received what
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS premonition_recipients (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        premonition_id INT UNSIGNED NOT NULL,
+        user_id INT NOT NULL,
+        viewed_at TIMESTAMP NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_premonition_user (premonition_id, user_id),
+        CONSTRAINT fk_premonition_id
+          FOREIGN KEY (premonition_id)
+          REFERENCES premonitions(id)
+          ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    premonitionsTableCreated = true;
+    log.ok('Premonition tables ready');
+  } catch (e) {
+    log.err('Failed to create premonition tables', { message: e.message });
+  }
+}
+
+async function _ensurePremonitionsMediaTables() {
+  if (premonitionMediaTableCreated) return;
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS premonition_media (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        filename VARCHAR(255),
+        mime VARCHAR(100) NOT NULL,
+        size INT UNSIGNED NOT NULL,
+        data LONGBLOB NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    premonitionMediaTableCreated = true;
+    log.ok('Premonition media table (premonition_media) verified/created.');
+  } catch (e) {
+    log.err('Failed to create premonition_media table', { message: e.message });
+  }
+}
+
+async function _ensureGroupChatTables() {
+  if (groupChatTablesCreated) return;
+  try {
+    // 1. Δημιουργία πίνακα chat_groups
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_groups (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        created_by INT NOT NULL,
+        avatar LONGBLOB NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    try {
+      await pool.query("ALTER TABLE chat_groups ADD COLUMN avatar LONGBLOB");
+    } catch (e) {
+      if (e.code !== 'ER_DUP_FIELDNAME') throw e;
+    }
+    
+    // 2. Δημιουργία πίνακα chat_group_members (Με την νέα στήλη last_read_at)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_group_members (
+        group_id INT UNSIGNED NOT NULL,
+        user_id INT NOT NULL,
+        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_read_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (group_id, user_id),
+        CONSTRAINT fk_cgm_group FOREIGN KEY (group_id) REFERENCES chat_groups(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    
+    // 3. Δημιουργία πίνακα chat_group_messages
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_group_messages (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        group_id INT UNSIGNED NOT NULL,
+        sender_id INT NOT NULL,
+        body TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        attachment_id INT UNSIGNED NULL,
+        CONSTRAINT fk_cgms_group FOREIGN KEY (group_id) REFERENCES chat_groups(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // --- PATCH: Αν ο πίνακας υπάρχει ήδη από πριν, προσθέτουμε την νέα στήλη ---
+    const [memberCols] = await pool.query("SHOW COLUMNS FROM chat_group_members LIKE 'last_read_at'");
+    if (memberCols.length === 0) {
+      await pool.query("ALTER TABLE chat_group_members ADD COLUMN last_read_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
+      log.ok('Added last_read_at column to chat_group_members');
+    }
+
+    groupChatTablesCreated = true;
+    log.ok('Group chat tables ready');
+  } catch (e) {
+    log.err('Group chat tables init failed', { message: e.message });
+  }
+}
+
+async function _ensureEmailTables() {
+  if (emailTablesCreated) return;
+  try {
+    // 1. Identities (The "NPC" addresses)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS email_identities (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        email_address VARCHAR(150) NOT NULL UNIQUE,
+        display_name VARCHAR(150),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // 2. Threads (The conversations)
+    // NOTE: This table includes 'identity_id' which was missing in your error log
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS email_threads (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        identity_id INT UNSIGNED NOT NULL,
+        subject VARCHAR(255),
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (identity_id) REFERENCES email_identities(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // 3. Messages (The actual content)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS email_messages (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        thread_id INT UNSIGNED NOT NULL,
+        sender_type ENUM('user', 'identity') NOT NULL,
+        body TEXT,
+        is_read TINYINT DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (thread_id) REFERENCES email_threads(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    emailTablesCreated = true;
+    log.ok('Email system tables ready');
+  } catch (e) {
+    log.err('Email tables init failed', { message: e.message });
+  }
+}
+
+async function _ensureDiceTable() {
+  if (diceTableCreated) return;
+  try {
+    // Use the promise-based pool here
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS dice_rolls (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        character_id INT NULL,
+        pool INT NOT NULL,
+        hunger INT NOT NULL DEFAULT 0,
+        sides INT NOT NULL DEFAULT 10,
+        results_json JSON NOT NULL,
+        successes INT NOT NULL DEFAULT 0,
+        crit_pairs INT NOT NULL DEFAULT 0,
+        messy_crit TINYINT(1) NOT NULL DEFAULT 0,
+        bestial_failure TINYINT(1) NOT NULL DEFAULT 0,
+        note VARCHAR(255) NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_user (user_id),
+        INDEX idx_created (created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    diceTableCreated = true;
+    log.ok('Dice table verified/created.');
+  } catch (e) {
+    log.err('Failed to create dice_rolls table', { message: e.message });
+  }
+}
+
+async function _ensureNewsTables() {
+  if (newsTableCreated) return;
+  try {
+    // Main entries table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS news_entries (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        author_id INT NOT NULL,
         type ENUM('news', 'announcement') NOT NULL,
         title VARCHAR(255) NOT NULL,
         subtitle VARCHAR(255),
@@ -987,6 +1182,18 @@ async function _ensureNewsTables() {
         size INT UNSIGNED NOT NULL,
         data LONGBLOB NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Rumors table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS rumors (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        author_id INT NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        body TEXT NOT NULL,
+        media_url VARCHAR(2048),
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 

@@ -3,7 +3,8 @@ const jwt = require('jsonwebtoken');
 
 function authRequired(req, res, next) {
   const hdr = req.headers.authorization || '';
-  const token = hdr.startsWith('Bearer ') ? hdr.slice(7) : null;
+  let token = hdr.startsWith('Bearer ') ? hdr.slice(7) : null;
+  if (!token && req.query.token) token = req.query.token;
   if (!token) return res.status(401).json({ error: 'Missing token' });
   try {
     req.user = jwt.verify(token, process.env.JWT_SECRET);
