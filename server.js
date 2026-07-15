@@ -6327,6 +6327,48 @@ let newsTableCreated = false;
 // Run init
 
 
+// GET /api/news/public - Fetch only news, no rumors (No auth required)
+app.get('/api/news/public', async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT n.*, u.display_name as author_real_name,
+             c.name as char_name, c.camarilla_titles as char_titles, c.image_url as char_image
+      FROM news_entries n
+      LEFT JOIN users u ON n.author_id = u.id
+      LEFT JOIN characters c ON c.user_id = u.id
+      WHERE n.type = 'news' AND n.theme != 'RUMOR'
+      ORDER BY n.created_at DESC
+      LIMIT 100
+    `);
+    res.json({ items: rows });
+  } catch (e) {
+    log.err('Fetch public news failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to load public news' });
+  }
+});
+
+// GET /api/news/public/:id - Fetch single news article (No auth required)
+app.get('/api/news/public/:id', async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT n.*, u.display_name as author_real_name,
+             c.name as char_name, c.camarilla_titles as char_titles, c.image_url as char_image
+      FROM news_entries n
+      LEFT JOIN users u ON n.author_id = u.id
+      LEFT JOIN characters c ON c.user_id = u.id
+      WHERE n.id = ? AND n.type = 'news' AND n.theme != 'RUMOR'
+    `, [req.params.id]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Article not found' });
+    }
+    res.json({ item: rows[0] });
+  } catch (e) {
+    log.err('Fetch public article failed', { message: e.message });
+    res.status(500).json({ error: 'Failed to load article' });
+  }
+});
+
 // GET /api/news (Public/Auth) - Fetch all items
 app.get('/api/news', authRequired, async (req, res) => {
   try {
