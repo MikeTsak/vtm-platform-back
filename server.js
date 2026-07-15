@@ -19,6 +19,7 @@ const { validateRetainerSheet } = require('./utils/retainerValidation');
 const { getSetting, setSetting, clearSettingCache } = require('./utils/settings');
 const { authRequired, requireAdmin } = require('./authMiddleware');
 const axios = require('axios');
+const { broadcastNtfyAlert } = require('./utils/ntfy');
 
 const path = require('path');
 const fs = require('fs');
@@ -215,6 +216,12 @@ app.use(attachRequestLogger());
 
 // Helper: Report errors to the defined Discord channel
 async function reportErrorToDiscord(source, error) {
+  // Truncate stack trace to avoid Discord 2000 char limit
+  const errString = (error.stack || error.message || String(error)).slice(0, 1000);
+
+  // Also send to Ntfy (independent of environment/Discord connection)
+  await broadcastNtfyAlert(errString, { title: `🚨 Error: ${source}`, tags: ['rotating_light', 'error'], priority: 'high' }).catch(() => {});
+
   // 1. Check if bot is connected
   if (!discordClient?.isReady()) return;
 
@@ -225,9 +232,6 @@ async function reportErrorToDiscord(source, error) {
   try {
     const channel = await discordClient.channels.fetch(LOG_CHANNEL_ID);
     if (!channel) return;
-
-    // Truncate stack trace to avoid Discord 2000 char limit
-    const errString = (error.stack || error.message || String(error)).slice(0, 1000);
     
     await channel.send(`🚨 **Error Detected: ${source}**\n\`\`\`js\n${errString}\n\`\`\``);
   } catch (e) {
@@ -927,6 +931,66 @@ app.post('/api/admin/system/banner', authRequired, requireAdmin, async (req, res
   }
 });
 
+// Admin: Get current Ntfy Topic
+app.get('/api/admin/ntfy', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT ntfy_topic, ntfy_subscribed_npcs FROM users WHERE id = ?', [req.user.id]);
+    if (!rows.length) return res.status(404).json({ error: 'User not found' });
+    let npcPrefs = [];
+    try { if (rows[0].ntfy_subscribed_npcs) npcPrefs = typeof rows[0].ntfy_subscribed_npcs === 'string' ? JSON.parse(rows[0].ntfy_subscribed_npcs) : rows[0].ntfy_subscribed_npcs; } catch(e) {}
+    res.json({ topic: rows[0].ntfy_topic, subscribed_npcs: npcPrefs });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch Ntfy topic' });
+  }
+});
+
+// Admin: Generate new Ntfy Topic
+app.post('/api/admin/ntfy/generate', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const newTopic = `erebus_admin_${crypto.randomBytes(8).toString('hex')}`;
+    await pool.query('UPDATE users SET ntfy_topic = ? WHERE id = ?', [newTopic, req.user.id]);
+    
+    // Also send a welcome push
+    const { broadcastNtfyAlert } = require('./utils/ntfy');
+    axios.post(`https://ntfy.sh/${newTopic}`, `Your Ntfy integration is now active!`, {
+      headers: { 'Title': '🦇 Erebus Ntfy Linked', 'Tags': 'vampire,white_check_mark' }
+    }).catch(() => {});
+
+    log.adm('Ntfy key generated', { admin_id: req.user.id, topic: newTopic });
+    res.json({ topic: newTopic });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to generate Ntfy topic' });
+  }
+});
+
+// Admin: Save Ntfy NPC Preferences
+app.post('/api/admin/ntfy/prefs', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const { npc_ids } = req.body;
+    const cleanIds = Array.isArray(npc_ids) ? npc_ids.map(Number).filter(n => !isNaN(n)) : [];
+    await pool.query('UPDATE users SET ntfy_subscribed_npcs = ? WHERE id = ?', [JSON.stringify(cleanIds), req.user.id]);
+    res.json({ success: true, subscribed_npcs: cleanIds });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to save Ntfy preferences' });
+  }
+});
+
+// Admin: Test Ntfy Notification
+app.post('/api/admin/ntfy/test', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT ntfy_topic FROM users WHERE id = ?', [req.user.id]);
+    if (!rows.length || !rows[0].ntfy_topic) return res.status(400).json({ error: 'No Ntfy topic configured' });
+    
+    await axios.post(`https://ntfy.sh/${rows[0].ntfy_topic}`, 'This is a test notification from Erebus Portal backend.', {
+      headers: { 'Title': '🦇 Ntfy Test', 'Tags': 'bell' }
+    });
+
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to send test notification' });
+  }
+});
+
 app.get('/api/debug/db-check', async (req, res) => {
   try {
     const [hunts] = await pool.query('SELECT id, title, is_active, created_at FROM hunts ORDER BY created_at DESC LIMIT 10');
@@ -1306,6 +1370,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     const hash = await bcrypt.hash(password, 12);
     const [r] = await pool.query('INSERT INTO users (email, display_name, password_hash) VALUES (?,?,?)', [email, display_name, hash]);
     log.auth('User registered', { id: r.insertId, email });
+    broadcastNtfyAlert(`**${display_name}** has just joined the platform.\nEmail: \`${email}\``, { title: 'New Registration', tags: 'bust_in_silhouette', priority: 'default' });
     const [rows] = await pool.query('SELECT id, email, display_name, role FROM users WHERE id=?', [r.insertId]);
     res.json({ token: issueToken(rows[0]) });
   } catch (e) {
@@ -1738,6 +1803,7 @@ app.post('/api/characters', authRequired, moderateLimiter, async (req, res) => {
     const ch = rows[0];
     if (ch && ch.sheet && typeof ch.sheet === 'string') { try { ch.sheet = JSON.parse(ch.sheet); } catch {} }
     log.char('Character created', { id: r.insertId, user_id: req.user.id, name, clan, xp: ch?.xp });
+    broadcastNtfyAlert(`**${name}** (Clan: **${clan}**) was created by User #${req.user.id}.`, { title: 'New Character', tags: 'vampire', priority: 'default' });
     res.json({ character: ch });
   } catch (e) {
     log.err('Failed to create character', e);
@@ -3271,14 +3337,26 @@ app.post('/api/chat/npc/messages', authRequired, async (req, res) => {
       const notifTitle = `💬 ${npcName} (from ${playerName})`;
       const notifBody = message.attachment_id ? '📷 Image Attachment' : message.body;
 
-      // 2. Find all admins in the system
-      const [admins] = await pool.query("SELECT id FROM users WHERE role = 'admin'");
+      // 2. Find all admins and their ntfy topic + subscriptions
+      const [admins] = await pool.query("SELECT id, ntfy_topic, ntfy_subscribed_npcs FROM users WHERE role = 'admin'");
 
       // 3. Send a push to each admin
       for (const admin of admins) {
         // Prevent sending a push to the admin if the admin is the one testing/playing as a user
         if (admin.id !== userId) {
+          // Web Push
           await sendPushNotification(admin.id, notifTitle, notifBody).catch(() => {});
+          
+          // Ntfy Push (Only if subscribed)
+          if (admin.ntfy_topic && admin.ntfy_subscribed_npcs) {
+            let prefs = [];
+            try { prefs = typeof admin.ntfy_subscribed_npcs === 'string' ? JSON.parse(admin.ntfy_subscribed_npcs) : admin.ntfy_subscribed_npcs; } catch(e){}
+            if (Array.isArray(prefs) && prefs.includes(Number(npc_id))) {
+              axios.post(`https://ntfy.sh/${admin.ntfy_topic}`, notifBody, {
+                headers: { 'Title': notifTitle, 'Tags': 'speech_balloon' }
+              }).catch(() => {});
+            }
+          }
         }
       }
     } catch (pushErr) {
@@ -3770,6 +3848,7 @@ app.post('/api/downtimes', authRequired, async (req, res) => {
   );
   const [rows] = await pool.query('SELECT * FROM downtimes WHERE id=?', [r.insertId]);
   log.dt('Downtime created', { user_id: req.user.id, downtime_id: r.insertId, feeding_type: defaultFeed || feeding_type || null });
+  broadcastNtfyAlert(`**Character #${ch.id}** submitted a new downtime action:\n\n> *${title}*`, { title: 'Downtime Submitted', tags: 'hourglass_flowing_sand', priority: 'default' });
   res.json({ downtime: rows[0] });
 });
 
@@ -5374,6 +5453,7 @@ app.post('/api/coteries', authRequired, async (req, res) => {
 
     const [[row]] = await pool.query(`SELECT * FROM coteries WHERE id=?`, [coterieId]);
     log.ok('Coterie created', { id: coterieId, by_user_id: req.user.id });
+    broadcastNtfyAlert(`A new Coterie **"${name}"** was just formed!`, { title: 'New Coterie', tags: 'shield', priority: 'default' });
     res.status(201).json({ coterie: row });
   } catch (e) {
     log.err('Create coterie failed', { message: e.message, stack: e.stack });
@@ -6694,6 +6774,8 @@ app.post('/api/rumors', authRequired, async (req, res) => {
       [req.user.id, title, body, media_url || null]
     );
 
+    broadcastNtfyAlert(`A new rumor has hit the streets:\n\n> *${title}*`, { title: 'New Rumor', tags: 'shushing_face', priority: 'default' });
+
     // --- DISCORD BROADCAST (REST API) ---
     const discordEnabled = await getSetting('discord_enabled', 'true') === 'true';
     if (discordEnabled && process.env.DISCORD_BOT_TOKEN) {
@@ -7326,6 +7408,7 @@ app.post('/api/hunts/submit', authRequired, async (req, res) => {
         'INSERT INTO hunt_submissions (user_id, step_id, media_id, status) VALUES (?, ?, ?, ?)', 
         [req.user.id, step.id, media_id, 'pending']
       );
+      broadcastNtfyAlert(`Player submitted evidence for **Hunt Challenge #${step.id}**.\n\n*Awaiting manual review in the ST panel.*`, { title: 'Hunt Submission', tags: 'mag', priority: 'high' });
     }
 
     // --- 3. GET NEXT STEP ---
@@ -7620,4 +7703,7 @@ log.start('Swagger UI available at /api-docs');
 /* -------------------- Start Server -------------------- */
 app.use(expressErrorHandler);
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => log.start(`API server started`, { port: PORT, env: process.env.NODE_ENV || 'stable' }));
+app.listen(PORT, () => {
+  log.start(`API server started`, { port: PORT, env: process.env.NODE_ENV || 'stable' });
+  broadcastNtfyAlert(`API server started on port ${PORT}`, { title: 'Server Online', tags: 'rocket' });
+});

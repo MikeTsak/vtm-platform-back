@@ -126,6 +126,8 @@ async function _ensureCoreTables() {
         discord_id VARCHAR(50),
         avatar LONGBLOB,
         push_settings JSON,
+        ntfy_topic VARCHAR(150),
+        ntfy_subscribed_npcs JSON NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -177,6 +179,13 @@ async function _ensureCoreTables() {
     if (avatarCols.length === 0) {
       await pool.query("ALTER TABLE users ADD COLUMN avatar LONGBLOB");
       log.ok('Added avatar column to users table');
+    }
+
+    // ✅ AUTOMATICALLY ENSURE THE NTFY_TOPIC COLUMN EXISTS
+    const [ntfyCols] = await pool.query("SHOW COLUMNS FROM users LIKE 'ntfy_topic'");
+    if (ntfyCols.length === 0) {
+      await pool.query("ALTER TABLE users ADD COLUMN ntfy_topic VARCHAR(255) NULL");
+      log.ok('Added ntfy_topic column to users table');
     }
 
     // 2. Characters
@@ -573,6 +582,10 @@ async function initDatabase() {
     try { await pool.query('ALTER TABLE boons ADD INDEX idx_to (to_name)'); } catch(e) {}
     try { await pool.query('ALTER TABLE events ADD INDEX idx_date (date)'); } catch(e) {}
 
+    // 7. Apply Ntfy Columns
+    try { await pool.query('ALTER TABLE users ADD COLUMN ntfy_topic VARCHAR(150) NULL'); } catch(e) {}
+    try { await pool.query('ALTER TABLE users ADD COLUMN ntfy_subscribed_npcs JSON NULL'); } catch(e) {}
+
     log.ok('All database tables verified in sequence.');
   } catch (err) {
     log.err('Database initialization failed', { error: err.message });
@@ -896,7 +909,6 @@ async function _ensureEmailTables() {
     `);
 
     // 2. Threads (The conversations)
-    // NOTE: This table includes 'identity_id' which was missing in your error log
     await pool.query(`
       CREATE TABLE IF NOT EXISTS email_threads (
         id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
