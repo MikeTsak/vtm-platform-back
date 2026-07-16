@@ -24,6 +24,8 @@ const { broadcastNtfyAlert } = require('./utils/ntfy');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
+const { EventEmitter } = require('events');
+const bannerEmitter = new EventEmitter();
 const multer = require('multer'); // Import multer
 const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require('discord.js');
 const webpush = require('web-push');
@@ -850,6 +852,42 @@ app.get('/api/system/banner', async (req, res) => {
   }
 });
 
+// Public: Stream banner updates (SSE)
+app.get('/api/system/banner/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  // Send an initial ping to establish connection
+  res.write('data: ping\n\n');
+
+  const onUpdate = async () => {
+    try {
+      const enabled = await getSetting('banner_enabled', 'false');
+      const message = await getSetting('banner_message', '');
+      const countdown = await getSetting('banner_countdown', '');
+      const threat = await getSetting('masquerade_threat_level', '1');
+      
+      res.write(`data: ${JSON.stringify({
+        banner_enabled: enabled === 'true',
+        banner_message: message,
+        banner_countdown: countdown,
+        masquerade_threat_level: parseInt(threat, 10)
+      })}\n\n`);
+    } catch (e) {
+      log.err('SSE banner update fetch failed', { error: e.message });
+    }
+  };
+
+  bannerEmitter.on('update', onUpdate);
+
+  req.on('close', () => {
+    bannerEmitter.off('update', onUpdate);
+    res.end();
+  });
+});
+
 // Admin: Run Migrations Stream (SSE)
 app.get('/api/admin/run-migrations/stream', authRequired, requireAdmin, (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -925,6 +963,10 @@ app.post('/api/admin/system/banner', authRequired, requireAdmin, async (req, res
     await setSetting('banner_countdown', banner_countdown || '');
     
     log.adm('Global banner updated', { admin_id: req.user.id });
+    
+    // Broadcast change
+    bannerEmitter.emit('update');
+    
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: 'Failed to update banner config' });
