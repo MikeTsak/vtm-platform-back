@@ -2896,8 +2896,28 @@ app.post('/api/admin/chat/reply-as-npc/:npcId/:userId', authRequired, requireAdm
 // Public: Check if comms are enabled
 app.get('/api/comms/status', authRequired, async (req, res) => {
   try {
-    const enabled = await getSetting('comms_enabled', 'true');
-    res.json({ comms_enabled: enabled === 'true' });
+    const masterEnabled = await getSetting('comms_enabled', 'true');
+    let isCommsEnabled = masterEnabled === 'true';
+
+    if (isCommsEnabled) {
+      const scheduleStr = await getSetting('chat_schedule', '{}');
+      try {
+        const schedule = JSON.parse(scheduleStr);
+        const today = new Date();
+        const y = today.getFullYear();
+        const m = String(today.getMonth() + 1).padStart(2, '0');
+        const d = String(today.getDate()).padStart(2, '0');
+        const localDate = `${y}-${m}-${d}`;
+        
+        if (schedule[localDate] === false) {
+          isCommsEnabled = false;
+        } else if (schedule[localDate] === true) {
+          isCommsEnabled = true;
+        }
+      } catch (err) {}
+    }
+
+    res.json({ comms_enabled: isCommsEnabled });
   } catch (e) {
     res.status(500).json({ error: 'Failed to fetch comms status' });
   }
@@ -3269,6 +3289,31 @@ app.post('/api/admin/comms/status', authRequired, requireAdmin, async (req, res)
     res.json({ ok: true, comms_enabled });
   } catch (e) {
     res.status(500).json({ error: 'Failed to update comms status' });
+  }
+});
+
+// Admin: Get Comms Config (master switch and schedule)
+app.get('/api/admin/comms/config', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const masterEnabled = await getSetting('comms_enabled', 'true');
+    const scheduleStr = await getSetting('chat_schedule', '{}');
+    let schedule = {};
+    try { schedule = JSON.parse(scheduleStr); } catch (e) {}
+    res.json({ master_enabled: masterEnabled === 'true', schedule });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch comms config' });
+  }
+});
+
+// Admin: Update Comms Schedule
+app.post('/api/admin/comms/schedule', authRequired, requireAdmin, async (req, res) => {
+  try {
+    const { schedule } = req.body;
+    await setSetting('chat_schedule', JSON.stringify(schedule));
+    log.adm('Comms schedule updated', { admin_id: req.user.id });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to update comms schedule' });
   }
 });
 
