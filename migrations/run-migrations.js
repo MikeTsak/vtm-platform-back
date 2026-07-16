@@ -66,6 +66,7 @@ async function runMigrations() {
         results JSON,
         successes INT,
         note TEXT,
+        is_hidden BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (session_id) REFERENCES live_sessions(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

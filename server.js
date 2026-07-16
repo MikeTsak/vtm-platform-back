@@ -6229,7 +6229,10 @@ app.get('/api/admin/live-sessions', authRequired, requireCourt, async (req, res)
 
 // Get session details (Calculates running timer if active)
 app.get('/api/live-session/:id', authRequired, async (req, res) => {
-  const [rows] = await pool.query('SELECT * FROM live_sessions WHERE session_code=? OR id=?', [req.params.id, req.params.id]);
+  const [rows] = await pool.query(
+    'SELECT s.*, u.display_name as admin_name FROM live_sessions s LEFT JOIN users u ON s.admin_id = u.id WHERE s.session_code=? OR s.id=?', 
+    [req.params.id, req.params.id]
+  );
   if (!rows.length) return res.status(404).json({ error: 'Session not found' });
   const s = rows[0];
   if (s.status === 'active') {
@@ -6253,8 +6256,19 @@ app.get('/api/live-session/:id/rolls', authRequired, async (req, res) => {
   try {
     const internalId = await getSessionInternalId(req.params.id);
     const [rows] = await pool.query(
-      'SELECT * FROM live_session_rolls WHERE session_id=? ORDER BY created_at DESC LIMIT 50', 
-      [internalId]
+      `SELECT lsr.*, c.name as character_name 
+       FROM live_session_rolls lsr 
+       LEFT JOIN characters c ON lsr.character_id = c.id 
+       LEFT JOIN live_sessions ls ON lsr.session_id = ls.id
+       WHERE lsr.session_id=? 
+         AND (
+           lsr.is_hidden = FALSE 
+           OR c.user_id = ? 
+           OR ls.admin_id = ? 
+           OR ? = 'admin'
+         )
+       ORDER BY lsr.created_at DESC LIMIT 50`, 
+      [internalId, req.user.id, req.user.id, req.user.role]
     );
     res.json({ rolls: rows });
   } catch (e) {
@@ -6267,17 +6281,16 @@ app.post('/api/live-session/:id/rolls', authRequired, async (req, res) => {
   const internalId = await getSessionInternalId(req.params.id);
   if (!internalId) return res.status(404).json({ error: 'Session not found' });
 
-  const { characterId, roll_type, pool: poolCount, hunger, results, successes, note } = req.body;
+  const { characterId, roll_type, pool: poolCount, hunger, results, successes, note, is_hidden } = req.body;
   
   try {
     // 1. Log to the localized session table
     await pool.query(
-      'INSERT INTO live_session_rolls (session_id, character_id, roll_type, pool, hunger, results, successes, note) VALUES (?,?,?,?,?,?,?,?)',
-      [internalId, characterId, roll_type, poolCount, hunger, JSON.stringify(results), successes, note]
+      'INSERT INTO live_session_rolls (session_id, character_id, roll_type, pool, hunger, results, successes, note, is_hidden) VALUES (?,?,?,?,?,?,?,?,?)',
+      [internalId, characterId || null, roll_type || 'custom', poolCount || null, hunger || null, results ? JSON.stringify(results) : null, successes || 0, note || null, is_hidden ? 1 : 0]
     );
 
     // 2. Mirror into the Global/Permanent Dice Roller Table
-    await _ensureDiceTable();
     const outcome = computeV5Outcome({
       normal: (results?.normal || []).map(Number),
       hunger: (results?.hunger || []).map(Number),
@@ -6293,18 +6306,20 @@ app.post('/api/live-session/:id/rolls', authRequired, async (req, res) => {
 
     await pool.query(
       `INSERT INTO dice_rolls 
-       (user_id, character_id, pool, hunger, sides, results_json, successes, crit_pairs, messy_crit, bestial_failure, note)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+       (user_id, character_id, pool, hunger, sides, results_json, successes, crit_pairs, messy_crit, bestial_failure, note, is_hidden)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
-        req.user.id, characterId, 
+        req.user.id, characterId || null, 
         Number(poolCount) || (payload.normal.length + payload.hunger.length),
         Number(hunger) || payload.hunger.length,
         10,
         JSON.stringify(payload),
-        outcome.successes,
-        outcome.crit_pairs,
+        outcome.successes || 0,
+        outcome.crit_pairs || 0,
         outcome.messy_crit ? 1 : 0,
         outcome.bestial_failure ? 1 : 0,
+        safeNote || null,
+        is_hidden ? 1 : 0
       ]
     );
 
@@ -6422,7 +6437,7 @@ app.patch('/api/live-session/:id/players/:charId', authRequired, requireCourt, a
 /* -------------------- Dice Rolls (V5) -------------------- */
 app.post('/api/dice/rolls', authRequired, async (req, res) => {
   try {
-    await _ensureDiceTable();
+
     const { pool: poolCount, hunger, sides = 10, results, difficulty, note } = req.body || {};
     
     if (!results || !Array.isArray(results.normal) || !Array.isArray(results.hunger)) {
@@ -6475,7 +6490,7 @@ app.post('/api/dice/rolls', authRequired, async (req, res) => {
 /* -------------------- Fetch Dice Logs for Admin Panel -------------------- */
 app.get('/api/admin/dice/rolls', authRequired, requireAdmin, async (req, res) => {
   try {
-    await _ensureDiceTable();
+
 
     let limitClause = '';
     const vals = [];
@@ -6522,7 +6537,7 @@ app.get('/api/admin/dice/rolls', authRequired, requireAdmin, async (req, res) =>
 // query: ?limit=200 (default 100), ?user_id=, ?since=ISO
 app.get('/api/admin/dice/rolls', authRequired, requireAdmin, async (req, res) => {
   try {
-    await _ensureDiceTable();
+
 
     const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 1000);
     const userId = Number(req.query.user_id) || null;

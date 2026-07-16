@@ -972,6 +972,7 @@ async function _ensureDiceTable() {
         messy_crit TINYINT(1) NOT NULL DEFAULT 0,
         bestial_failure TINYINT(1) NOT NULL DEFAULT 0,
         note VARCHAR(255) NULL,
+        is_hidden BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         INDEX idx_user (user_id),
         INDEX idx_created (created_at)
@@ -1167,6 +1168,7 @@ async function _ensureDiceTable() {
         messy_crit TINYINT(1) NOT NULL DEFAULT 0,
         bestial_failure TINYINT(1) NOT NULL DEFAULT 0,
         note VARCHAR(255) NULL,
+        is_hidden BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         INDEX idx_user (user_id),
         INDEX idx_created (created_at)
