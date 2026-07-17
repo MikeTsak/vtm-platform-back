@@ -6287,7 +6287,7 @@ app.post('/api/live-session/:id/rolls', authRequired, async (req, res) => {
     // 1. Log to the localized session table
     await pool.query(
       'INSERT INTO live_session_rolls (session_id, character_id, roll_type, pool, hunger, results, successes, note, is_hidden) VALUES (?,?,?,?,?,?,?,?,?)',
-      [internalId, characterId || null, roll_type || 'custom', poolCount || null, hunger || null, results ? JSON.stringify(results) : null, successes || 0, note || null, is_hidden ? 1 : 0]
+      [internalId, characterId || null, roll_type || 'custom', poolCount || null, hunger !== undefined ? hunger : null, results ? JSON.stringify(results) : null, successes || 0, note || null, is_hidden ? 1 : 0]
     );
 
     // 2. Mirror into the Global/Permanent Dice Roller Table
@@ -6333,6 +6333,10 @@ app.post('/api/live-session/:id/rolls', authRequired, async (req, res) => {
         }
       } catch(e) { log.err('Messy crit safety reduction failed', { error: e.message }); }
     }
+    
+    if (req.app.get('io')) {
+      req.app.get('io').to(`session_${req.params.id}`).emit('refresh_session');
+    }
 
     res.json({ ok: true });
   } catch (e) {
@@ -6345,7 +6349,7 @@ app.post('/api/live-session/:id/rolls', authRequired, async (req, res) => {
 app.get('/api/live-session/:id/players', authRequired, async (req, res) => {
   const internalId = await getSessionInternalId(req.params.id);
   const [players] = await pool.query(`
-    SELECT c.id, c.name, c.clan, c.sheet 
+    SELECT c.id, c.name, c.clan, c.sheet, c.user_id
     FROM live_session_participants lsp
     JOIN characters c ON lsp.character_id = c.id
     WHERE lsp.session_id = ?
@@ -6358,6 +6362,11 @@ app.post('/api/live-session/:id/broadcast', authRequired, requireCourt, async (r
   const internalId = await getSessionInternalId(req.params.id);
   await pool.query('INSERT INTO live_session_broadcasts (session_id, message) VALUES (?, ?)', 
     [internalId, req.body.message]);
+    
+  if (req.app.get('io')) {
+    req.app.get('io').to(`session_${req.params.id}`).emit('refresh_session');
+  }
+  
   res.json({ ok: true });
 });
 
@@ -7784,6 +7793,121 @@ app.get('/api/admin/audit-logs', authRequired, requireAdmin, async (req, res) =>
   }
 });
 
+/* -------------------- Secure Mechanic Endpoints -------------------- */
+app.post('/api/characters/:id/rouse', authRequired, async (req, res) => {
+  try {
+    const charId = req.params.id;
+    const { advantage } = req.body;
+    
+    // Simple permission check: must own character or be admin
+    const [rows] = await pool.query('SELECT user_id, sheet FROM characters WHERE id=?', [charId]);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    if (Number(rows[0].user_id) !== Number(req.user.id) && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    
+    let sheet = rows[0].sheet;
+    if (typeof sheet === 'string') {
+      try { sheet = JSON.parse(sheet); } catch(e) { sheet = {}; }
+    }
+    if (!sheet) sheet = {};
+    const currentHunger = Number(sheet.hunger) || 0;
+    
+    const die1 = Math.floor(Math.random() * 10) + 1;
+    let die2 = null;
+    let success = die1 >= 6;
+    
+    if (advantage) {
+      die2 = Math.floor(Math.random() * 10) + 1;
+      if (die2 >= 6) success = true;
+    }
+    
+    let nextHunger = currentHunger;
+    if (!success) {
+      nextHunger = Math.min(5, currentHunger + 1);
+      sheet.hunger = nextHunger;
+      await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), charId]);
+    }
+    
+    res.json({
+      success,
+      die1,
+      die2,
+      nextHunger,
+      sheet
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Rouse check failed' });
+  }
+});
+
+app.post('/api/characters/:id/spend-wp', authRequired, async (req, res) => {
+  try {
+    const charId = req.params.id;
+    
+    const [rows] = await pool.query('SELECT user_id, sheet FROM characters WHERE id=?', [charId]);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    if (rows[0].user_id !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    
+    let sheet = rows[0].sheet;
+    if (typeof sheet === 'string') {
+      try { sheet = JSON.parse(sheet); } catch(e) { sheet = {}; }
+    }
+    if (!sheet) sheet = {};
+    if (!sheet.willpower) sheet.willpower = { superficial: 0, aggravated: 0 };
+    
+    const comp = Number(sheet.attributes?.Composure) || 1;
+    const reso = Number(sheet.attributes?.Resolve) || 1;
+    const max = comp + reso;
+    const currentWp = (Number(sheet.willpower.superficial) || 0) + (Number(sheet.willpower.aggravated) || 0);
+    
+    if (currentWp >= max) {
+      return res.status(400).json({ error: 'Not enough Willpower' });
+    }
+    
+    sheet.willpower.superficial = (Number(sheet.willpower.superficial) || 0) + 1;
+    await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), charId]);
+    
+    res.json({ ok: true, sheet });
+  } catch (e) {
+    res.status(500).json({ error: 'WP spend failed' });
+  }
+});
+
+app.post('/api/characters/:id/apply-damage', authRequired, async (req, res) => {
+  try {
+    const charId = req.params.id;
+    const { amount, type } = req.body;
+    
+    const [rows] = await pool.query('SELECT user_id, sheet FROM characters WHERE id=?', [charId]);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    if (rows[0].user_id !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    
+    let sheet = JSON.parse(rows[0].sheet || '{}');
+    if (!sheet.health) sheet.health = { superficial: 0, aggravated: 0 };
+    
+    // Halve superficial damage if the character is a vampire (assuming it is)
+    // We will just do it automatically. If it's aggravated, don't halve it.
+    let appliedAmount = Number(amount) || 0;
+    if (type === 'superficial') {
+      appliedAmount = Math.ceil(appliedAmount / 2);
+      sheet.health.superficial = (sheet.health.superficial || 0) + appliedAmount;
+    } else {
+      sheet.health.aggravated = (sheet.health.aggravated || 0) + appliedAmount;
+    }
+    
+    await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), charId]);
+    
+    res.json({ ok: true, sheet, appliedAmount });
+  } catch (e) {
+    res.status(500).json({ error: 'Apply damage failed' });
+  }
+});
+
 /* -------------------- Error Handlers -------------------- */
 // Multer error handler (must be before general error handler)
 app.use((err, req, res, next) => {
@@ -7809,7 +7933,26 @@ log.start('Swagger UI available at /api-docs');
 /* -------------------- Start Server -------------------- */
 app.use(expressErrorHandler);
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
+
+const server = require('http').createServer(app);
+const { Server } = require('socket.io');
+const io = new Server(server, { 
+  cors: { origin: '*' } 
+});
+
+io.on('connection', (socket) => {
+  socket.on('join_session', (sessionId) => {
+    socket.join(`session_${sessionId}`);
+  });
+  
+  socket.on('chat_message', (payload) => {
+    io.to(`session_${payload.sessionId}`).emit('chat_message', payload);
+  });
+});
+
+app.set('io', io);
+
+server.listen(PORT, () => {
   log.start(`API server started`, { port: PORT, env: process.env.NODE_ENV || 'stable' });
   broadcastNtfyAlert(`API server started on port ${PORT}`, { title: 'Server Online', tags: 'rocket' });
 });
