@@ -20,6 +20,8 @@ const { getSetting, setSetting, clearSettingCache } = require('./utils/settings'
 const { authRequired, requireAdmin } = require('./authMiddleware');
 const axios = require('axios');
 const { broadcastNtfyAlert } = require('./utils/ntfy');
+const idempotencyMiddleware = require('./idempotencyMiddleware');
+const compression = require('compression');
 
 const path = require('path');
 const fs = require('fs');
@@ -165,11 +167,16 @@ app.use(helmet({
 }));
 app.use(cors({ origin: corsOrigin, credentials: true }));
 app.set('trust proxy', false);
+// Add compression middleware
+app.use(compression());
 // Increase payload limit to 70MB for Base64 image uploads
 app.use(express.json({ limit: '70mb' }));
 app.use(express.urlencoded({ limit: '70mb', extended: true }));
 // Rate limiting
 app.use(globalLimiter);
+
+// Add Idempotency Middleware for all routes
+app.use(idempotencyMiddleware);
 
 // Disable caching for all admin API routes to prevent 304 errors
 app.use('/api/admin', (req, res, next) => {
@@ -4562,13 +4569,17 @@ app.get('/api/chat/history/:otherUserId', authRequired, async (req, res) => {
     const myId = req.user.id;
 
     const [messages] = await pool.query(
-      `SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at,
-              cm.read_at, cm.delivered_at,
-              cm.attachment_id,
-              u_sender.display_name as sender_name
-       FROM chat_messages cm
-       JOIN users u_sender ON cm.sender_id = u_sender.id
-       WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)
+      `SELECT * FROM (
+         SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at,
+                cm.read_at, cm.delivered_at,
+                cm.attachment_id,
+                u_sender.display_name as sender_name
+         FROM chat_messages cm
+         JOIN users u_sender ON cm.sender_id = u_sender.id
+         WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)
+         ORDER BY created_at DESC
+         LIMIT 500
+       ) sub
        ORDER BY created_at ASC`,
       [myId, otherUserId, otherUserId, myId]
     );
@@ -7674,10 +7685,10 @@ app.get('/api/admin/timeline/:charId', authRequired, requireAdmin, async (req, r
     if (!char.length) return res.status(404).json({ error: 'Character not found' });
     const cname = char[0].name;
 
-    const [xp] = await pool.query('SELECT id, cost, action, target, created_at FROM xp_log WHERE character_id=?', [charId]);
-    const [dice] = await pool.query('SELECT id, pool, successes, hunger, sides, note, created_at FROM dice_rolls WHERE character_id=?', [charId]);
-    const [boons] = await pool.query('SELECT id, from_name, to_name, level, description as details, created_at FROM boons WHERE from_name=? OR to_name=?', [cname, cname]);
-    const [downtimes] = await pool.query('SELECT id, title, status, created_at FROM downtimes WHERE character_id=?', [charId]);
+    const [xp] = await pool.query('SELECT id, cost, action, target, created_at FROM xp_log WHERE character_id=? ORDER BY created_at DESC LIMIT 500', [charId]);
+    const [dice] = await pool.query('SELECT id, pool, successes, hunger, sides, note, created_at FROM dice_rolls WHERE character_id=? ORDER BY created_at DESC LIMIT 500', [charId]);
+    const [boons] = await pool.query('SELECT id, from_name, to_name, level, description as details, created_at FROM boons WHERE from_name=? OR to_name=? ORDER BY created_at DESC LIMIT 500', [cname, cname]);
+    const [downtimes] = await pool.query('SELECT id, title, status, created_at FROM downtimes WHERE character_id=? ORDER BY created_at DESC LIMIT 500', [charId]);
 
     const timeline = [];
     timeline.push({ type: 'creation', id: 'creation', timestamp: char[0].created_at, title: 'Character Created', body: 'This character was created in the system.' });

@@ -550,6 +550,25 @@ async function _ensureRetainersTable() {
   }
 }
 
+async function _ensureIdempotencyTable() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS idempotency_keys (
+        idempotency_key VARCHAR(255) PRIMARY KEY,
+        user_id INT NULL,
+        request_path VARCHAR(255) NOT NULL,
+        request_method VARCHAR(10) NOT NULL,
+        response_code INT,
+        response_body LONGTEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    log.ok('Idempotency keys table verified/created.');
+  } catch (e) {
+    log.err('Failed to init idempotency_keys table', { error: e.message });
+  }
+}
+
 async function initDatabase() {
   try {
     // 1. Core tables
@@ -577,6 +596,7 @@ async function initDatabase() {
     await _ensureDiceTable();
     await _ensureNewsTables();
     await _ensureRetainersTable();
+    await _ensureIdempotencyTable();
     
     // 5. Apply 50MB LONGBLOB patches to existing media tables
     try {
