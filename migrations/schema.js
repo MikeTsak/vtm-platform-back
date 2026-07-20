@@ -174,6 +174,13 @@ async function _ensureCoreTables() {
       log.ok('Added theme column to users table');
     }
 
+    // ✅ AUTOMATICALLY ENSURE THE UI_SOUNDS_ENABLED COLUMN EXISTS
+    const [soundCols] = await pool.query("SHOW COLUMNS FROM users LIKE 'ui_sounds_enabled'");
+    if (soundCols.length === 0) {
+      await pool.query("ALTER TABLE users ADD COLUMN ui_sounds_enabled BOOLEAN DEFAULT TRUE");
+      log.ok('Added ui_sounds_enabled column to users table');
+    }
+
     // ✅ AUTOMATICALLY ENSURE THE AVATAR COLUMN EXISTS
     const [avatarCols] = await pool.query("SHOW COLUMNS FROM users LIKE 'avatar'");
     if (avatarCols.length === 0) {

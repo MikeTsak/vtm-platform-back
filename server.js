@@ -1529,8 +1529,26 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
 
 
 app.get('/api/auth/me', authRequired, async (req, res) => {
-  log.auth('Auth me', { id: req.user.id, email: req.user.email, role: req.user.role });
-  res.json({ user: req.user });
+  try {
+    const [rows] = await pool.query('SELECT ui_sounds_enabled FROM users WHERE id = ?', [req.user.id]);
+    const ui_sounds_enabled = rows.length > 0 ? !!rows[0].ui_sounds_enabled : true;
+    log.auth('Auth me', { id: req.user.id, email: req.user.email, role: req.user.role });
+    res.json({ user: { ...req.user, ui_sounds_enabled } });
+  } catch(e) {
+    log.err('Auth me error', { error: e.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.patch('/api/users/me/ui_sounds', authRequired, async (req, res) => {
+  try {
+    const { enabled } = req.body;
+    await pool.query('UPDATE users SET ui_sounds_enabled = ? WHERE id = ?', [enabled ? 1 : 0, req.user.id]);
+    res.json({ ok: true, ui_sounds_enabled: !!enabled });
+  } catch (e) {
+    log.err('Failed to update ui sounds', { error: e.message });
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 /**
