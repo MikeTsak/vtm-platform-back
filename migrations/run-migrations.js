@@ -59,7 +59,8 @@ async function runMigrations() {
       CREATE TABLE IF NOT EXISTS live_session_rolls (
         id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
         session_id INT UNSIGNED NOT NULL,
-        character_id INT NOT NULL,
+        character_id INT NULL,
+        character_name VARCHAR(255) NULL,
         roll_type VARCHAR(50),
         pool INT,
         hunger INT,

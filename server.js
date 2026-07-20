@@ -54,7 +54,7 @@ const swaggerSpec = require('./swagger.config');
 // Rate limiting
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 600, // limit each IP to 600 requests per windowMs
+  max: 3000, // limit each IP to 3000 requests per windowMs
   standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
   legacyHeaders: false, // Disable the `X-RateLimit-*` headers
 });
@@ -6264,6 +6264,7 @@ app.get('/api/live-session/:id', authRequired, async (req, res) => {
   );
   if (!rows.length) return res.status(404).json({ error: 'Session not found' });
   const s = rows[0];
+  try { s.metadata = typeof s.metadata === 'string' ? JSON.parse(s.metadata) : (s.metadata || {}); } catch(e) { s.metadata = {}; }
   if (s.status === 'active') {
     s.duration_seconds = Math.floor((Date.now() - new Date(s.created_at).getTime()) / 1000);
   }
@@ -6285,7 +6286,7 @@ app.get('/api/live-session/:id/rolls', authRequired, async (req, res) => {
   try {
     const internalId = await getSessionInternalId(req.params.id);
     const [rows] = await pool.query(
-      `SELECT lsr.*, c.name as character_name 
+      `SELECT lsr.*, COALESCE(lsr.character_name, c.name) as character_name 
        FROM live_session_rolls lsr 
        LEFT JOIN characters c ON lsr.character_id = c.id 
        LEFT JOIN live_sessions ls ON lsr.session_id = ls.id
@@ -6310,13 +6311,13 @@ app.post('/api/live-session/:id/rolls', authRequired, async (req, res) => {
   const internalId = await getSessionInternalId(req.params.id);
   if (!internalId) return res.status(404).json({ error: 'Session not found' });
 
-  const { characterId, roll_type, pool: poolCount, hunger, results, successes, note, is_hidden } = req.body;
+  const { characterId, character_name, roll_type, pool: poolCount, hunger, results, successes, note, is_hidden } = req.body;
   
   try {
     // 1. Log to the localized session table
     await pool.query(
-      'INSERT INTO live_session_rolls (session_id, character_id, roll_type, pool, hunger, results, successes, note, is_hidden) VALUES (?,?,?,?,?,?,?,?,?)',
-      [internalId, characterId || null, roll_type || 'custom', poolCount || null, hunger !== undefined ? hunger : null, results ? JSON.stringify(results) : null, successes || 0, note || null, is_hidden ? 1 : 0]
+      'INSERT INTO live_session_rolls (session_id, character_id, character_name, roll_type, pool, hunger, results, successes, note, is_hidden) VALUES (?,?,?,?,?,?,?,?,?,?)',
+      [internalId, characterId || null, character_name || null, roll_type || 'custom', poolCount || null, hunger !== undefined ? hunger : null, results ? JSON.stringify(results) : null, successes || 0, note || null, is_hidden ? 1 : 0]
     );
 
     // 2. Mirror into the Global/Permanent Dice Roller Table
@@ -6386,11 +6387,27 @@ app.get('/api/live-session/:id/players', authRequired, async (req, res) => {
   res.json({ players });
 });
 
+// Update Session Metadata
+app.patch('/api/live-session/:id/metadata', authRequired, requireCourt, async (req, res) => {
+  try {
+    const internalId = await getSessionInternalId(req.params.id);
+    const { metadata } = req.body;
+    await pool.query('UPDATE live_sessions SET metadata = ? WHERE id = ?', [JSON.stringify(metadata || {}), internalId]);
+    if (req.app.get('io')) {
+      req.app.get('io').to(`session_${req.params.id}`).emit('refresh_session');
+    }
+    res.json({ ok: true });
+  } catch(e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to update metadata' });
+  }
+});
+
 // Broadcast a message (ST/Admin) - CHANGED TO requireCourt
 app.post('/api/live-session/:id/broadcast', authRequired, requireCourt, async (req, res) => {
   const internalId = await getSessionInternalId(req.params.id);
-  await pool.query('INSERT INTO live_session_broadcasts (session_id, message) VALUES (?, ?)', 
-    [internalId, req.body.message]);
+  await pool.query('INSERT INTO live_session_broadcasts (session_id, message, target_character_id) VALUES (?, ?, ?)', 
+    [internalId, req.body.message, req.body.target_character_id || null]);
     
   if (req.app.get('io')) {
     req.app.get('io').to(`session_${req.params.id}`).emit('refresh_session');
@@ -6403,7 +6420,7 @@ app.get('/api/live-session/:id/broadcast', authRequired, async (req, res) => {
   try {
     const internalId = await getSessionInternalId(req.params.id);
     const [rows] = await pool.query(
-      'SELECT * FROM live_session_broadcasts WHERE session_id=? ORDER BY created_at DESC LIMIT 5', 
+      'SELECT * FROM live_session_broadcasts WHERE session_id=? ORDER BY created_at DESC LIMIT 20', 
       [internalId]
     );
     res.json({ broadcasts: rows });
@@ -6422,31 +6439,33 @@ app.patch('/api/live-session/:id/players/:charId', authRequired, requireCourt, a
     if(!rows.length) return res.status(404).json({error: 'Char not found'});
     
     let sheet = {};
-    try { sheet = JSON.parse(rows[0].sheet || '{}'); } catch(e) {}
+    try { 
+      sheet = typeof rows[0].sheet === 'string' ? JSON.parse(rows[0].sheet || '{}') : (rows[0].sheet || {}); 
+    } catch(e) {}
     
-    if (hungerDelta !== undefined) sheet.hunger = Math.max(0, Math.min(5, (sheet.hunger || 0) + hungerDelta));
+    if (hungerDelta !== undefined) sheet.hunger = Math.max(0, Math.min(5, Number(sheet.hunger || 0) + Number(hungerDelta)));
     if (humanityDelta !== undefined) {
-        const currentHum = sheet.morality?.humanity ?? sheet.humanity ?? 7;
-        const nextHum = Math.max(0, Math.min(10, currentHum + humanityDelta));
+        const currentHum = Number(sheet.morality?.humanity ?? sheet.humanity ?? 7);
+        const nextHum = Math.max(0, Math.min(10, currentHum + Number(humanityDelta)));
         sheet.humanity = nextHum;
         if(!sheet.morality) sheet.morality = {};
         sheet.morality.humanity = nextHum;
     }
     if (healthSupDelta !== undefined) {
         if(!sheet.health) sheet.health = { superficial:0, aggravated:0 };
-        sheet.health.superficial = Math.max(0, (sheet.health.superficial || 0) + healthSupDelta);
+        sheet.health.superficial = Math.max(0, Number(sheet.health.superficial || 0) + Number(healthSupDelta));
     }
     if (healthAggDelta !== undefined) {
         if(!sheet.health) sheet.health = { superficial:0, aggravated:0 };
-        sheet.health.aggravated = Math.max(0, (sheet.health.aggravated || 0) + healthAggDelta);
+        sheet.health.aggravated = Math.max(0, Number(sheet.health.aggravated || 0) + Number(healthAggDelta));
     }
     if (wpSupDelta !== undefined) {
         if(!sheet.willpower) sheet.willpower = { superficial:0, aggravated:0 };
-        sheet.willpower.superficial = Math.max(0, (sheet.willpower.superficial || 0) + wpSupDelta);
+        sheet.willpower.superficial = Math.max(0, Number(sheet.willpower.superficial || 0) + Number(wpSupDelta));
     }
     if (wpAggDelta !== undefined) {
         if(!sheet.willpower) sheet.willpower = { superficial:0, aggravated:0 };
-        sheet.willpower.aggravated = Math.max(0, (sheet.willpower.aggravated || 0) + wpAggDelta);
+        sheet.willpower.aggravated = Math.max(0, Number(sheet.willpower.aggravated || 0) + Number(wpAggDelta));
     }
     if (frenzyState !== undefined) {
         sheet.frenzyState = frenzyState;
