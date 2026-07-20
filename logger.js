@@ -218,13 +218,25 @@ function attachRequestLogger(options = {}) {
     if (isSilent(req.originalUrl)) return next();
 
     const t0 = Date.now();
+    
+    let safeBody = undefined;
+    if (req.body && Object.keys(req.body).length) {
+      safeBody = { ...req.body };
+      const sensitiveKeys = ['password', 'passwordConfirm', 'token', 'recaptchaToken', 'secret'];
+      for (const key of sensitiveKeys) {
+        if (safeBody[key] !== undefined) {
+          safeBody[key] = '[REDACTED]';
+        }
+      }
+    }
+
     const reqCtx = {
       ip: req.ip,
       method: req.method,
       url: req.originalUrl,
       ua: req.get('user-agent'),
       // Body can be noisy; include if small / useful in your app
-      body: req.body && Object.keys(req.body).length ? req.body : undefined,
+      body: safeBody,
     };
     log.req(`${req.method} ${req.originalUrl}`, reqCtx);
 
