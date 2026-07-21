@@ -2770,7 +2770,7 @@ app.delete('/api/admin/characters/:id', authRequired, requireAdmin, async (req, 
 
 // List NPCs (admin) — single canonical route
 app.get('/api/admin/npcs', authRequired, requireAdmin, async (req, res) => {
-  const [rows] = await pool.query('SELECT * FROM npcs ORDER BY id DESC');
+  const [rows] = await pool.query('SELECT id, name, clan, sheet, xp, created_at, updated_at, camarilla_titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, is_disabled FROM npcs ORDER BY id DESC');
 
   // Parse JSON sheet if stored as string
   rows.forEach(r => {
@@ -2801,7 +2801,7 @@ app.post('/api/admin/npcs', authRequired, requireAdmin, async (req, res) => {
     [name, clan, sheet ? JSON.stringify(sheet) : null, 10000]
   );
 
-  const [rows] = await pool.query('SELECT * FROM npcs WHERE id=?', [r.insertId]);
+  const [rows] = await pool.query('SELECT id, name, clan, sheet, xp, created_at, updated_at, camarilla_titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, is_disabled FROM npcs WHERE id=?', [r.insertId]);
   const npc = rows[0];
   if (npc?.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch {} }
   res.json({ npc });
@@ -2809,7 +2809,7 @@ app.post('/api/admin/npcs', authRequired, requireAdmin, async (req, res) => {
 
 // Get NPC by id
 app.get('/api/admin/npcs/:id', authRequired, requireAdmin, async (req, res) => {
-  const [rows] = await pool.query('SELECT * FROM npcs WHERE id=?', [req.params.id]);
+  const [rows] = await pool.query('SELECT id, name, clan, sheet, xp, created_at, updated_at, camarilla_titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, is_disabled FROM npcs WHERE id=?', [req.params.id]);
   if (!rows.length) return res.status(404).json({ error: 'NPC not found' });
   const npc = rows[0];
   if (npc?.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch {} }
@@ -2829,7 +2829,7 @@ app.patch('/api/admin/npcs/:id', authRequired, requireAdmin, async (req, res) =>
   vals.push(req.params.id);
   await pool.query(`UPDATE npcs SET ${fields.join(', ')} WHERE id=?`, vals);
 
-  const [rows] = await pool.query('SELECT * FROM npcs WHERE id=?', [req.params.id]);
+  const [rows] = await pool.query('SELECT id, name, clan, sheet, xp, created_at, updated_at, camarilla_titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, is_disabled FROM npcs WHERE id=?', [req.params.id]);
   const npc = rows[0];
   if (npc?.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch {} }
   res.json({ npc });
@@ -2851,7 +2851,7 @@ app.post('/api/admin/npcs/:id/disable', authRequired, requireAdmin, async (req, 
 app.post('/api/admin/npcs/:id/xp/spend', authRequired, requireAdmin, async (req, res) => {
   const { type, target, currentLevel, newLevel, ritualLevel, formulaLevel, dots, disciplineKind, patchSheet } = req.body;
 
-  const [rows] = await pool.query('SELECT * FROM npcs WHERE id=?', [req.params.id]);
+  const [rows] = await pool.query('SELECT id, name, clan, sheet, xp, created_at, updated_at, camarilla_titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, is_disabled FROM npcs WHERE id=?', [req.params.id]);
   const ch = rows[0];
   if (!ch) return res.status(404).json({ error: 'NPC not found' });
 
@@ -2880,7 +2880,7 @@ app.post('/api/admin/npcs/:id/xp/spend', authRequired, requireAdmin, async (req,
 
   // optional: log to xp_log if you want, but use character_id=null or a separate npc_id column if your schema supports it
 
-  const [out] = await pool.query('SELECT * FROM npcs WHERE id=?', [ch.id]);
+  const [out] = await pool.query('SELECT id, name, clan, sheet, xp, created_at, updated_at, camarilla_titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, is_disabled FROM npcs WHERE id=?', [ch.id]);
   const outCh = out[0];
   if (outCh?.sheet && typeof outCh.sheet === 'string') { try { outCh.sheet = JSON.parse(outCh.sheet); } catch {} }
   res.json({ character: outCh, spent: cost });
