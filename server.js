@@ -929,7 +929,7 @@ app.get('/api/admin/run-migrations/stream', authRequired, requireAdmin, (req, re
     sendEvent('progress', { script, current: current + 1, total });
     sendEvent('log', `\n--- Running ${script} ---`);
 
-    const child = spawn('node', [script], { cwd: __dirname });
+    const child = spawn(process.execPath, [script], { cwd: __dirname });
 
     child.stdout.on('data', (data) => {
       sendEvent('log', data.toString());
