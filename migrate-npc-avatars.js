@@ -1,9 +1,19 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '.env') });
 const axios = require('axios');
 const pool = require('./db');
+const fs = require('fs');
+const path = require('path');
+
+const logFile = path.resolve(__dirname, 'migration.log');
+
+function logProgress(msg) {
+  console.log(msg);
+  fs.appendFileSync(logFile, `[${new Date().toISOString()}] ${msg}\n`);
+}
 
 async function runMigration() {
-  console.log('Starting avatar migration...');
+  fs.appendFileSync(logFile, `=== NPC Avatar Migration Started ===\n`);
+  logProgress('Starting NPC avatar migration...');
   
   try {
     const [npcs] = await pool.query('SELECT id, name, image_url FROM npcs WHERE image_url IS NOT NULL AND image_url != ""');
@@ -20,24 +30,24 @@ async function runMigration() {
         url = `https://portal.attlarp.gr/images.court/${encodeURIComponent(cleanName)}.jpg`;
       }
       
-      console.log(`Migrating avatar for character: ${ch.name}, URL: ${url}`);
+      logProgress(`Migrating avatar for NPC: ${ch.name}, URL: ${url}`);
       
       try {
-        const response = await axios.get(url, { responseType: 'arraybuffer' });
+        const response = await axios.get(url, { responseType: 'arraybuffer', timeout: 10000 });
         const buffer = Buffer.from(response.data, 'binary');
         
         await pool.query('UPDATE npcs SET avatar = ? WHERE id = ?', [buffer, ch.id]);
         
-        console.log(`Successfully migrated avatar for user_id: ${ch.id}`);
+        logProgress(`Successfully migrated avatar for NPC ID: ${ch.id}`);
         migratedCount++;
       } catch (err) {
-        console.error(`Failed to fetch or save image for character ${ch.name} (user_id: ${ch.id}): ${err.message}`);
+        logProgress(`Failed to fetch or save image for NPC ${ch.name} (id: ${ch.id}): ${err.message}`);
       }
     }
     
-    console.log(`Migration complete. Migrated ${migratedCount} avatars.`);
+    logProgress(`Migration complete. Migrated ${migratedCount} NPC avatars.`);
   } catch (error) {
-    console.error('Migration failed:', error);
+    logProgress(`Migration failed: ${error.message}`);
   } finally {
     process.exit(0);
   }
