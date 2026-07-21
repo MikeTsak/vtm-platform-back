@@ -1079,17 +1079,26 @@ app.get('/', async (req, res) => {
     if (!isDiscordEnabled) {
       discordStatus = 'OFFLINE (Toggled Off via Master Switch)';
       discordClass = 'muted';
-    } else if (discordClient?.isReady()) {
-      discordStatus = `ONLINE (${discordClient.user.tag})`;
-      discordClass = 'ok';
     } else {
-      discordStatus = 'DOWN / ERROR';
-      discordClass = 'bad';
-      if (discordLoginError) {
-        errors.push(`Discord Error: ${discordLoginError}`);
-      } else {
-        errors.push('Discord: Bot token provided but client is not ready (Connecting...).');
+      if (!global.cachedDiscordTag) {
+        try {
+          const discordRes = await fetch('https://discord.com/api/v10/users/@me', {
+            headers: { Authorization: `Bot ${process.env.DISCORD_BOT_TOKEN}` }
+          });
+          if (discordRes.ok) {
+            const data = await discordRes.json();
+            global.cachedDiscordTag = data.discriminator && data.discriminator !== '0' 
+              ? `${data.username}#${data.discriminator}`
+              : `@${data.username}`;
+          } else {
+            global.cachedDiscordTag = 'Unknown Bot';
+          }
+        } catch (e) {
+          global.cachedDiscordTag = 'Unknown Bot';
+        }
       }
+      discordStatus = `ONLINE (${global.cachedDiscordTag || 'Unknown Bot'}) [Decoupled]`;
+      discordClass = 'ok';
     }
   }
 

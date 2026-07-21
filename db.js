@@ -13,19 +13,6 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
 
-  // --- CRITICAL FIXES FOR ECONNRESET ---
-
-  // 1. Keep the connection alive by sending a "ping" every 10 seconds
-  enableKeepAlive: true,
-  keepAliveInitialDelay: 10000,
-
-  // 2. Automatically drop connections that have been idle too long
-  // (Prevents using a connection the server already closed)
-  idleTimeout: 60000,
-
-  // 3. Max lifetime of a connection
-  maxIdle: 10,
-
   // 4. Queue limit (0 = infinite)
   queueLimit: 0,
 });
