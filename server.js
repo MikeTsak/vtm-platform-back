@@ -1,5 +1,5 @@
 // server.js (with advanced logging)
-require('dotenv').config();
+require('dotenv').config({ path: require('path').resolve(__dirname, '.env') });
 const { validateEnv } = require('./utils/envValidator');
 validateEnv();
 const os = require('os');
