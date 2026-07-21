@@ -5169,7 +5169,7 @@ app.patch('/api/admin/downtimes/:id', authRequired, requireAdmin, async (req, re
 app.get('/api/domain-claims', authRequired, async (req, res) => {
   try {
     const [rows] = await pool.query(`
-      SELECT d.division, d.owner_name, d.color, d.owner_character_id, d.owner_npc_id, d.claimed_at, c.user_id 
+      SELECT d.division, d.owner_name, d.color, d.owner_character_id, d.owner_npc_id, d.is_abaton, d.claimed_at, c.user_id 
       FROM domain_claims d
       LEFT JOIN characters c ON d.owner_character_id = c.id
     `);
@@ -5214,7 +5214,7 @@ app.post('/api/domain-claims/claim', authRequired, async (req, res) => {
 // --- Admin: override/transfer a claim (safe upsert) ---
 app.patch('/api/admin/domain-claims/:division', authRequired, requireAdmin, async (req, res) => {
   const division = Number(req.params.division);
-  const { owner_name, color, owner_character_id, owner_npc_id } = req.body;
+  const { owner_name, color, owner_character_id, owner_npc_id, is_abaton } = req.body;
 
   const fields = [];
   const vals = [];
@@ -5238,6 +5238,9 @@ app.patch('/api/admin/domain-claims/:division', authRequired, requireAdmin, asyn
     fields.push('owner_npc_id=?'); vals.push(owner_npc_id);
     fields.push('owner_character_id=NULL'); // mutual exclusivity
   }
+  if (is_abaton !== undefined) {
+    fields.push('is_abaton=?'); vals.push(is_abaton ? 1 : 0);
+  }
 
   if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
 
@@ -5252,10 +5255,11 @@ app.patch('/api/admin/domain-claims/:division', authRequired, requireAdmin, asyn
       color: (typeof color === 'string') ? color : '#888888',
       owner_character_id: (owner_character_id === null || owner_character_id === undefined) ? null : Number(owner_character_id),
       owner_npc_id: (owner_npc_id === null || owner_npc_id === undefined) ? null : Number(owner_npc_id),
+      is_abaton: is_abaton ? 1 : 0
     };
     await pool.query(
-      'INSERT INTO domain_claims (division, owner_name, color, owner_character_id, owner_npc_id) VALUES (?,?,?,?,?)',
-      [division, base.owner_name, base.color, base.owner_character_id, base.owner_npc_id]
+      'INSERT INTO domain_claims (division, owner_name, color, owner_character_id, owner_npc_id, is_abaton) VALUES (?,?,?,?,?,?)',
+      [division, base.owner_name, base.color, base.owner_character_id, base.owner_npc_id, base.is_abaton]
     );
   }
 
