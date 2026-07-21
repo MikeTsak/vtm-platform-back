@@ -91,10 +91,10 @@ const LOG_CHANNEL_ID = '1469033259806625874';
 // --- Setup ---
 
 // Optional mapping of template variable names via env
-const VAR_TO      = process.env.EMAILJS_VAR_TO      || 'to_email';
-const VAR_NAME    = process.env.EMAILJS_VAR_NAME    || 'to_name';
-const VAR_APP     = process.env.EMAILJS_VAR_APP     || 'app_name';
-const VAR_LINK    = process.env.EMAILJS_VAR_LINK    || 'reset_link';
+const VAR_TO = process.env.EMAILJS_VAR_TO || 'to_email';
+const VAR_NAME = process.env.EMAILJS_VAR_NAME || 'to_name';
+const VAR_APP = process.env.EMAILJS_VAR_APP || 'app_name';
+const VAR_LINK = process.env.EMAILJS_VAR_LINK || 'reset_link';
 const VAR_EXPIRES = process.env.EMAILJS_VAR_EXPIRES || 'expires_minutes';
 
 // Install global handlers to catch crashes and unhandled promise rejections
@@ -138,7 +138,7 @@ console.log(`💻 Node.js: ${process.version}`);
 console.log('======================================================\n');
 
 const _start = Date.now();
-while(Date.now() - _start < 2000) { /* synchronous 2-second wait */ }
+while (Date.now() - _start < 2000) { /* synchronous 2-second wait */ }
 
 log.start('API booting…');
 
@@ -149,7 +149,7 @@ const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
 
 const app = express();
 // CORS: In production, set CORS_ORIGIN env var to your frontend URL
-const corsOrigin = process.env.CORS_ORIGIN 
+const corsOrigin = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
   : true; // Development: allow all origins
 
@@ -212,7 +212,7 @@ try {
 // Create a multer instance that stores files in memory as buffers
 // Limit file size to 50MB to match the JSON payload limits
 const storage = multer.memoryStorage();
-const memoryUpload = multer({ 
+const memoryUpload = multer({
   storage: storage,
   limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
 });
@@ -229,19 +229,19 @@ async function reportErrorToDiscord(source, error) {
   const errString = (error.stack || error.message || String(error)).slice(0, 1000);
 
   // Also send to Ntfy (independent of environment/Discord connection)
-  await broadcastNtfyAlert(errString, { title: `🚨 Error: ${source}`, tags: ['rotating_light', 'error'], priority: 'high' }).catch(() => {});
+  await broadcastNtfyAlert(errString, { title: `🚨 Error: ${source}`, tags: ['rotating_light', 'error'], priority: 'high' }).catch(() => { });
 
   // 1. Check if bot is connected
   if (!discordClient?.isReady()) return;
 
   // 2. CHECK: Only send error logs if we are in PRODUCTION
   // If we are in 'staging' or 'development', this function stops here.
-  if (process.env.NODE_ENV !== 'production') return; 
-  
+  if (process.env.NODE_ENV !== 'production') return;
+
   try {
     const channel = await discordClient.channels.fetch(LOG_CHANNEL_ID);
     if (!channel) return;
-    
+
     await channel.send(`🚨 **Error Detected: ${source}**\n\`\`\`js\n${errString}\n\`\`\``);
   } catch (e) {
     // Fail silently so we don't cause an infinite error loop
@@ -276,7 +276,7 @@ async function sendPushNotification(userId, title, body, data = {}, category = '
     // Check user push settings
     const [userRows] = await pool.query('SELECT push_settings FROM users WHERE id=?', [userId]);
     if (!userRows.length) return;
-    
+
     const settings = userRows[0].push_settings || {};
     // If settings are false for this category, do not send web push (off by default)
     const isEnabled = !!settings[category];
@@ -319,7 +319,7 @@ async function sendPushNotification(userId, title, body, data = {}, category = '
       try {
         const sub = JSON.parse(row.subscription_json);
         if (sub.expoPushToken) expoTokens.push(sub.expoPushToken);
-      } catch (e) {}
+      } catch (e) { }
     }
 
     if (expoTokens.length > 0) {
@@ -372,13 +372,13 @@ async function _respectEmailJsRateLimit() {
 cron.schedule('0 12 * * *', async () => {
   try {
     // 1. Retrieve the downtime configuration to check the deadline
-    const [configRows] = await pool.query('SELECT downtime_deadline FROM system_config LIMIT 1'); 
-    
+    const [configRows] = await pool.query('SELECT downtime_deadline FROM system_config LIMIT 1');
+
     if (configRows.length === 0 || !configRows[0].downtime_deadline) return;
 
     const deadline = new Date(configRows[0].downtime_deadline);
     const now = new Date();
-    
+
     // Calculate the difference in hours
     const timeDiff = deadline.getTime() - now.getTime();
     const hoursLeft = Math.ceil(timeDiff / (1000 * 60 * 60));
@@ -405,12 +405,12 @@ cron.schedule('0 12 * * *', async () => {
       // 3. Send a direct message to each identified player
       for (const u of lazyUsers) {
         if (!u.discord_id) continue;
-        
+
         try {
           const discordUser = await client.users.fetch(u.discord_id);
           if (discordUser) {
             const warningMessage = `Hello ${u.char_name || 'there'}, this is an automated reminder. The server for actions (Downtimes) closes in 48 hours. Please submit your actions to avoid an AFK penalty.`;
-            
+
             await discordUser.send(warningMessage);
           }
         } catch (dmErr) {
@@ -454,8 +454,8 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   const dLat = (lat2 - lat1) * rad;
   const dLon = (lon2 - lon1) * rad;
   const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-            Math.cos(lat1 * rad) * Math.cos(lat2 * rad) *
-            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    Math.cos(lat1 * rad) * Math.cos(lat2 * rad) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c; // Distance in meters
 }
@@ -478,15 +478,15 @@ function startDailyMailCheck() {
     try {
       // 1. Get Settings from DB
       const targetTime = await getSetting('discord_schedule_time', '12:00'); // Default 12:00
-      
+
       const now = new Date();
       // Get current time string HH:MM (24h format)
-      const currentTime = now.toLocaleTimeString('en-GB', { 
-        hour: '2-digit', 
-        minute: '2-digit', 
-        timeZone: 'Europe/Athens' 
+      const currentTime = now.toLocaleTimeString('en-GB', {
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZone: 'Europe/Athens'
       });
-      
+
       // Get current date string YYYY-MM-DD to ensure we run only once per day
       const currentDate = now.toISOString().split('T')[0];
 
@@ -508,7 +508,7 @@ startDailyMailCheck();
 // Helper: Send Discord Notifications (Consolidated Single Message)
 async function sendDiscordMailNotifications(isTest = false) {
   if (!discordClient?.isReady()) return;
-  
+
   const isEnabled = await getSetting('discord_enabled', 'true') === 'true';
   const notifyMail = await getSetting('discord_notify_mail', 'true') === 'true';
 
@@ -538,7 +538,7 @@ async function sendDiscordMailNotifications(isTest = false) {
         AND u.discord_id IS NOT NULL 
         AND u.discord_id != ''
     `);
-// 3. Check for recent NPC messages AND get the NPC names
+    // 3. Check for recent NPC messages AND get the NPC names
     const [npcMessages] = await pool.query(`
       SELECT DISTINCT n.name 
       FROM npc_messages m
@@ -546,7 +546,7 @@ async function sendDiscordMailNotifications(isTest = false) {
       WHERE m.from_side = 'user' 
       AND m.created_at > (NOW() - INTERVAL 5 DAY) 
     `);
-    
+
     const hasNpcMail = npcMessages.length > 0;
     const npcNames = npcMessages.map(npc => npc.name).join(', ');
 
@@ -557,7 +557,7 @@ async function sendDiscordMailNotifications(isTest = false) {
       WHERE created_at > (NOW() - INTERVAL 3 DAY) 
       ORDER BY created_at DESC
     `);
-    
+
     let newsTitle = "🔥 **Fresh Off the Press**";
 
     if (newsRows.length === 0) {
@@ -575,7 +575,7 @@ async function sendDiscordMailNotifications(isTest = false) {
 
     // --- CONSTRUCTING THE SINGLE MESSAGE ---
     const todayStr = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
-    
+
     // Start with Intro
     let msg = `🦇 **Good Evening Kindred of Athens**, as of today **${todayStr}**, I would like to remind you of the following:\n\n`;
 
@@ -608,7 +608,7 @@ async function sendDiscordMailNotifications(isTest = false) {
     // --- SENDING ---
     // We send 'msg' as one single block.
     await channel.send(msg);
-    
+
     log.ok(`Discord notification sent. Players: ${recipients.length}, NPC Mail: ${hasNpcMail}, News: ${newsRows.length}`);
 
   } catch (e) {
@@ -659,9 +659,9 @@ async function sendResetEmailWithEmailJS({
 }) {
   // Build exactly what EmailJS expects
   const payload = {
-    service_id:  process.env.EMAILJS_SERVICE_ID,
+    service_id: process.env.EMAILJS_SERVICE_ID,
     template_id: process.env.EMAILJS_TEMPLATE_ID,
-    user_id:     process.env.EMAILJS_PUBLIC_KEY,     // "user_id" = PUBLIC key
+    user_id: process.env.EMAILJS_PUBLIC_KEY,     // "user_id" = PUBLIC key
     accessToken: process.env.EMAILJS_PRIVATE_KEY || undefined, // optional
     template_params: {
       [VAR_TO]: to,
@@ -847,7 +847,7 @@ app.get('/api/system/banner', async (req, res) => {
     const message = await getSetting('banner_message', '');
     const countdown = await getSetting('banner_countdown', '');
     const threat = await getSetting('masquerade_threat_level', '1');
-    
+
     res.json({
       banner_enabled: enabled === 'true',
       banner_message: message,
@@ -875,7 +875,7 @@ app.get('/api/system/banner/stream', (req, res) => {
       const message = await getSetting('banner_message', '');
       const countdown = await getSetting('banner_countdown', '');
       const threat = await getSetting('masquerade_threat_level', '1');
-      
+
       res.write(`data: ${JSON.stringify({
         banner_enabled: enabled === 'true',
         banner_message: message,
@@ -964,16 +964,16 @@ app.get('/api/admin/run-migrations/stream', authRequired, requireAdmin, (req, re
 app.post('/api/admin/system/banner', authRequired, requireAdmin, async (req, res) => {
   try {
     const { banner_enabled, banner_message, banner_countdown } = req.body;
-    
+
     await setSetting('banner_enabled', String(banner_enabled));
     await setSetting('banner_message', banner_message || '');
     await setSetting('banner_countdown', banner_countdown || '');
-    
+
     log.adm('Global banner updated', { admin_id: req.user.id });
-    
+
     // Broadcast change
     bannerEmitter.emit('update');
-    
+
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: 'Failed to update banner config' });
@@ -986,7 +986,7 @@ app.get('/api/admin/ntfy', authRequired, requireAdmin, async (req, res) => {
     const [rows] = await pool.query('SELECT ntfy_topic, ntfy_subscribed_npcs FROM users WHERE id = ?', [req.user.id]);
     if (!rows.length) return res.status(404).json({ error: 'User not found' });
     let npcPrefs = [];
-    try { if (rows[0].ntfy_subscribed_npcs) npcPrefs = typeof rows[0].ntfy_subscribed_npcs === 'string' ? JSON.parse(rows[0].ntfy_subscribed_npcs) : rows[0].ntfy_subscribed_npcs; } catch(e) {}
+    try { if (rows[0].ntfy_subscribed_npcs) npcPrefs = typeof rows[0].ntfy_subscribed_npcs === 'string' ? JSON.parse(rows[0].ntfy_subscribed_npcs) : rows[0].ntfy_subscribed_npcs; } catch (e) { }
     res.json({ topic: rows[0].ntfy_topic, subscribed_npcs: npcPrefs });
   } catch (e) {
     res.status(500).json({ error: 'Failed to fetch Ntfy topic' });
@@ -998,12 +998,12 @@ app.post('/api/admin/ntfy/generate', authRequired, requireAdmin, async (req, res
   try {
     const newTopic = `erebus_admin_${crypto.randomBytes(8).toString('hex')}`;
     await pool.query('UPDATE users SET ntfy_topic = ? WHERE id = ?', [newTopic, req.user.id]);
-    
+
     // Also send a welcome push
     const { broadcastNtfyAlert } = require('./utils/ntfy');
     axios.post(`https://ntfy.sh/${newTopic}`, `Your Ntfy integration is now active!`, {
       headers: { 'Title': '🦇 Erebus Ntfy Linked', 'Tags': 'vampire,white_check_mark' }
-    }).catch(() => {});
+    }).catch(() => { });
 
     log.adm('Ntfy key generated', { admin_id: req.user.id, topic: newTopic });
     res.json({ topic: newTopic });
@@ -1029,7 +1029,7 @@ app.post('/api/admin/ntfy/test', authRequired, requireAdmin, async (req, res) =>
   try {
     const [rows] = await pool.query('SELECT ntfy_topic FROM users WHERE id = ?', [req.user.id]);
     if (!rows.length || !rows[0].ntfy_topic) return res.status(400).json({ error: 'No Ntfy topic configured' });
-    
+
     await axios.post(`https://ntfy.sh/${rows[0].ntfy_topic}`, 'This is a test notification from Erebus Portal backend.', {
       headers: { 'Title': '🦇 Ntfy Test', 'Tags': 'bell' }
     });
@@ -1059,7 +1059,7 @@ app.get('/api/debug/db-check', async (req, res) => {
 // Friendly HTML at "/" (quick glance in the browser)
 app.get('/', async (req, res) => {
   const errors = [];
-  
+
   // 1. Check DB
   let dbStatus = 'UNKNOWN';
   try {
@@ -1070,12 +1070,12 @@ app.get('/', async (req, res) => {
     errors.push(`Database: ${e.message}`);
   }
 
-// 2. Check Discord Bot
+  // 2. Check Discord Bot
   let discordStatus = 'DISABLED';
-  let discordClass = 'muted'; 
+  let discordClass = 'muted';
   if (process.env.DISCORD_BOT_TOKEN) {
     const isDiscordEnabled = await getSetting('discord_enabled', 'true') === 'true';
-    
+
     if (!isDiscordEnabled) {
       discordStatus = 'OFFLINE (Toggled Off via Master Switch)';
       discordClass = 'muted';
@@ -1087,7 +1087,7 @@ app.get('/', async (req, res) => {
           });
           if (discordRes.ok) {
             const data = await discordRes.json();
-            global.cachedDiscordTag = data.discriminator && data.discriminator !== '0' 
+            global.cachedDiscordTag = data.discriminator && data.discriminator !== '0'
               ? `${data.username}#${data.discriminator}`
               : `@${data.username}`;
           } else {
@@ -1106,8 +1106,8 @@ app.get('/', async (req, res) => {
   let emailStatus = 'MISSING CONFIG';
   let emailClass = 'bad';
   if (
-    process.env.EMAILJS_SERVICE_ID && 
-    process.env.EMAILJS_TEMPLATE_ID && 
+    process.env.EMAILJS_SERVICE_ID &&
+    process.env.EMAILJS_TEMPLATE_ID &&
     process.env.EMAILJS_PUBLIC_KEY
   ) {
     emailStatus = 'CONFIGURED';
@@ -1206,24 +1206,24 @@ app.get('/', async (req, res) => {
       <div class="k">Environment</div><div class="v"><code>${process.env.NODE_ENV || 'stable'}</code></div>
       <div class="k">Node.js</div><div class="v"><code>${process.version}</code></div>
       ${(() => {
-        const total = Math.floor(process.uptime());
+      const total = Math.floor(process.uptime());
 
-        const days = Math.floor(total / 86400);
-        const hours = Math.floor((total % 86400) / 3600);
-        const minutes = Math.floor((total % 3600) / 60);
-        const seconds = total % 60;
+      const days = Math.floor(total / 86400);
+      const hours = Math.floor((total % 86400) / 3600);
+      const minutes = Math.floor((total % 3600) / 60);
+      const seconds = total % 60;
 
-        const parts = [];
-        if (days) parts.push(`${days}d`);
-        if (hours) parts.push(`${hours}h`);
-        if (minutes) parts.push(`${minutes}m`);
-        parts.push(`${seconds}s`);
+      const parts = [];
+      if (days) parts.push(`${days}d`);
+      if (hours) parts.push(`${hours}h`);
+      if (minutes) parts.push(`${minutes}m`);
+      parts.push(`${seconds}s`);
 
-        return `
+      return `
           <div class="k">Uptime</div>
           <div class="v">${parts.join(" ")}</div>
         `;
-      })()}
+    })()}
 
       <div class="k">Started</div>
       <div class="v">${formatDate(startedAt)}</div>
@@ -1268,8 +1268,8 @@ app.get('/', async (req, res) => {
       <div class="k">Load Avg</div>
       <div class="v">
         ${Array.isArray((enhancedInfo.os || {}).loadavg) ?
-          `${((enhancedInfo.os || {}).loadavg[0] || 0).toFixed(2)}, ${((enhancedInfo.os || {}).loadavg[1] || 0).toFixed(2)}, ${((enhancedInfo.os || {}).loadavg[2] || 0).toFixed(2)}` :
-          'N/A'}
+      `${((enhancedInfo.os || {}).loadavg[0] || 0).toFixed(2)}, ${((enhancedInfo.os || {}).loadavg[1] || 0).toFixed(2)}, ${((enhancedInfo.os || {}).loadavg[2] || 0).toFixed(2)}` :
+      'N/A'}
       </div>
 
       <div class="section-header"></div>
@@ -1401,25 +1401,25 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
         return res.status(500).json({ error: 'Captcha verification error' });
       }
     }
-    
+
     // Validate email format
     if (!isValidEmail(email)) {
       log.warn('Register invalid email format', { email: maskEmail(email) });
       return res.status(400).json({ error: 'Invalid email format' });
     }
-    
+
     // Validate password strength
     if (!isValidPassword(password)) {
       log.warn('Register weak password', { email: maskEmail(email) });
       return res.status(400).json({ error: 'Password must be at least 8 characters' });
     }
-    
+
     // Validate display_name length
     if (typeof display_name !== 'string' || display_name.trim().length < 2 || display_name.length > 190) {
       log.warn('Register invalid display_name', { email: maskEmail(email) });
       return res.status(400).json({ error: 'Display name must be between 2 and 190 characters' });
     }
-    
+
     const [exists] = await pool.query('SELECT id FROM users WHERE email=?', [email]);
     if (exists.length) {
       log.warn('Register email in use', { email });
@@ -1507,13 +1507,13 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
 
   try {
     const { email, password } = req.body || {};
-    
+
     // Basic validation
     if (!email || !password) {
       log.warn('Login missing credentials', { ip, ua, req_id: req.id });
       return res.status(400).json({ error: 'Missing email or password', req_id: req.id });
     }
-    
+
     const [rows] = await pool.query('SELECT * FROM users WHERE email=?', [email]);
     const user = rows[0];
 
@@ -1543,7 +1543,7 @@ app.get('/api/auth/me', authRequired, async (req, res) => {
     const ui_sounds_enabled = rows.length > 0 ? !!rows[0].ui_sounds_enabled : true;
     log.auth('Auth me', { id: req.user.id, email: req.user.email, role: req.user.role });
     res.json({ user: { ...req.user, ui_sounds_enabled } });
-  } catch(e) {
+  } catch (e) {
     log.err('Auth me error', { error: e.message });
     res.status(500).json({ error: 'Server error' });
   }
@@ -1666,11 +1666,11 @@ app.post('/api/auth/forgot', async (req, res) => {
     }
 
     // Create fresh token (invalidate nothing explicitly; old unused tokens remain but still expire)
-    const tokenId    = crypto.randomUUID();
-    const secret     = crypto.randomBytes(32).toString('hex');
-    const combined   = `${tokenId}.${secret}`;
+    const tokenId = crypto.randomUUID();
+    const secret = crypto.randomBytes(32).toString('hex');
+    const combined = `${tokenId}.${secret}`;
     const secretHash = await bcrypt.hash(secret, 12);
-    const expiresAt  = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h expiry
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h expiry
 
     await pool.query(
       'INSERT INTO password_resets (user_id, token_id, secret_hash, expires_at) VALUES (?,?,?,?)',
@@ -1708,30 +1708,30 @@ app.post('/api/auth/forgot', async (req, res) => {
 
 
 app.post('/api/auth/reset', authLimiter, async (req, res) => {
-    // (Your existing route)
-    const { token, password } = req.body || {};
-    if (typeof token !== 'string' || typeof password !== 'string' || password.length < 8) {
-        return res.status(400).json({ error: 'Bad request (password must be at least 8 chars).' });
-    }
-    const parts = token.split('.');
-    if (parts.length !== 2) return res.status(400).json({ error: 'Invalid token' });
-    const [tokenId, secret] = parts;
-    try {
-        const [rows] = await pool.query('SELECT * FROM password_resets WHERE token_id=? AND used_at IS NULL AND expires_at > NOW()', [tokenId]);
-        const row = rows[0];
-        if (!row) return res.status(400).json({ error: 'Invalid or expired token' });
-        const ok = await bcrypt.compare(secret, row.secret_hash);
-        if (!ok) return res.status(400).json({ error: 'Invalid or expired token' });
-        const hash = await bcrypt.hash(password, 12);
-        await pool.query('UPDATE users SET password_hash=? WHERE id=?', [hash, row.user_id]);
-        await pool.query('UPDATE password_resets SET used_at=NOW() WHERE id=?', [row.id]);
-        await pool.query('UPDATE password_resets SET used_at=NOW() WHERE user_id=? AND used_at IS NULL', [row.user_id]);
-        log.auth('Password reset complete', { user_id: row.user_id });
-        return res.json({ ok: true });
-    } catch (e) {
-        log.err('Reset password error', { message: e.message, stack: e.stack });
-        return res.status(500).json({ error: 'Reset failed' });
-    }
+  // (Your existing route)
+  const { token, password } = req.body || {};
+  if (typeof token !== 'string' || typeof password !== 'string' || password.length < 8) {
+    return res.status(400).json({ error: 'Bad request (password must be at least 8 chars).' });
+  }
+  const parts = token.split('.');
+  if (parts.length !== 2) return res.status(400).json({ error: 'Invalid token' });
+  const [tokenId, secret] = parts;
+  try {
+    const [rows] = await pool.query('SELECT * FROM password_resets WHERE token_id=? AND used_at IS NULL AND expires_at > NOW()', [tokenId]);
+    const row = rows[0];
+    if (!row) return res.status(400).json({ error: 'Invalid or expired token' });
+    const ok = await bcrypt.compare(secret, row.secret_hash);
+    if (!ok) return res.status(400).json({ error: 'Invalid or expired token' });
+    const hash = await bcrypt.hash(password, 12);
+    await pool.query('UPDATE users SET password_hash=? WHERE id=?', [hash, row.user_id]);
+    await pool.query('UPDATE password_resets SET used_at=NOW() WHERE id=?', [row.id]);
+    await pool.query('UPDATE password_resets SET used_at=NOW() WHERE user_id=? AND used_at IS NULL', [row.user_id]);
+    log.auth('Password reset complete', { user_id: row.user_id });
+    return res.json({ ok: true });
+  } catch (e) {
+    log.err('Reset password error', { message: e.message, stack: e.stack });
+    return res.status(500).json({ error: 'Reset failed' });
+  }
 });
 
 // PUT /api/auth/theme — Save user's theme preference globally
@@ -1755,7 +1755,7 @@ app.get('/api/characters/me', authRequired, async (req, res) => {
   const [rows] = await pool.query('SELECT * FROM characters WHERE user_id=?', [req.user.id]);
   const ch = rows[0] || null;
   if (ch && ch.sheet && typeof ch.sheet === 'string') {
-    try { ch.sheet = JSON.parse(ch.sheet); } catch {}
+    try { ch.sheet = JSON.parse(ch.sheet); } catch { }
   }
   log.char('Fetch my character', { user_id: req.user.id, hasCharacter: !!ch });
   res.json({ character: ch });
@@ -1784,7 +1784,7 @@ app.put('/api/characters/me', authRequired, async (req, res) => {
 
   const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [rows[0].id]);
   const ch = out[0];
-  if (ch && ch.sheet && typeof ch.sheet === 'string') { try { ch.sheet = JSON.parse(ch.sheet); } catch {} }
+  if (ch && ch.sheet && typeof ch.sheet === 'string') { try { ch.sheet = JSON.parse(ch.sheet); } catch { } }
   log.char('Character updated', { id: rows[0].id, user_id: req.user.id, updates: fields });
   res.json({ character: ch });
 });
@@ -1877,7 +1877,7 @@ app.post('/api/characters', authRequired, moderateLimiter, async (req, res) => {
 
     const [rows] = await pool.query('SELECT * FROM characters WHERE id=?', [r.insertId]);
     const ch = rows[0];
-    if (ch && ch.sheet && typeof ch.sheet === 'string') { try { ch.sheet = JSON.parse(ch.sheet); } catch {} }
+    if (ch && ch.sheet && typeof ch.sheet === 'string') { try { ch.sheet = JSON.parse(ch.sheet); } catch { } }
     log.char('Character created', { id: r.insertId, user_id: req.user.id, name, clan, xp: ch?.xp });
     broadcastNtfyAlert(`**${name}** (Clan: **${clan}**) was created by User #${req.user.id}.`, { title: 'New Character', tags: 'vampire', priority: 'default' });
     res.json({ character: ch });
@@ -1973,7 +1973,7 @@ app.put('/api/characters', authRequired, async (req, res) => {
 
   const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [rows[0].id]);
   const ch = out[0];
-  if (ch && ch.sheet && typeof ch.sheet === 'string') { try { ch.sheet = JSON.parse(ch.sheet); } catch {} }
+  if (ch && ch.sheet && typeof ch.sheet === 'string') { try { ch.sheet = JSON.parse(ch.sheet); } catch { } }
   log.char('Character updated', { id: rows[0].id, user_id: req.user.id, updates: fields });
   res.json({ character: ch });
 });
@@ -1986,7 +1986,7 @@ app.put('/api/characters', authRequired, async (req, res) => {
 app.get('/api/characters/:id/inventory', authRequired, async (req, res) => {
   try {
     const [items] = await pool.query(
-      'SELECT * FROM inventory_items WHERE character_id = ? ORDER BY item_type, name', 
+      'SELECT * FROM inventory_items WHERE character_id = ? ORDER BY item_type, name',
       [req.params.id]
     );
     res.json({ items });
@@ -2100,16 +2100,16 @@ app.get('/api/characters/:id/inventory', authRequired, async (req, res) => {
 // Add an item to a character's inventory (owner or admin)
 app.post('/api/characters/:id/inventory', authRequired, async (req, res) => {
   const charId = Number(req.params.id);
-  
+
   // Destructure all available payload fields
-  const { 
-    name, 
-    item_type, 
-    description, 
-    mechanic_notes, 
-    quantity, 
-    image, 
-    researched 
+  const {
+    name,
+    item_type,
+    description,
+    mechanic_notes,
+    quantity,
+    image,
+    researched
   } = req.body;
 
   if (!name) {
@@ -2134,13 +2134,13 @@ app.post('/api/characters/:id/inventory', authRequired, async (req, res) => {
         (character_id, name, item_type, description, mechanic_notes, quantity, image, researched) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        charId, 
-        name, 
-        item_type || 'Mundane', 
-        description || null, 
-        mechanic_notes || null, 
-        quantity || 1, 
-        image || null, 
+        charId,
+        name,
+        item_type || 'Mundane',
+        description || null,
+        mechanic_notes || null,
+        quantity || 1,
+        image || null,
         researched ?? false
       ]
     );
@@ -2237,7 +2237,7 @@ app.post('/api/characters/:id/retainers', authRequired, async (req, res) => {
 app.put('/api/retainers/:retainerId/upgrade', authRequired, async (req, res) => {
   try {
     const { name, tier, sheet, xp } = req.body;
-    
+
     // Check ownership
     const [rows] = await pool.query(
       'SELECT r.* FROM retainers r JOIN characters c ON r.character_id = c.id WHERE r.id = ? AND c.user_id = ?',
@@ -2272,7 +2272,7 @@ app.put('/api/retainers/:retainerId/upgrade', authRequired, async (req, res) => 
 app.put('/api/retainers/:retainerId', authRequired, requireAdmin, async (req, res) => {
   try {
     const { name, tier, sheet, xp } = req.body;
-    
+
     // Strict V5 Validation
     const isGhoul = sheet?.isGhoul === true;
     const validationError = validateRetainerSheet(Number(tier), sheet, isGhoul);
@@ -2389,13 +2389,13 @@ app.post('/api/admin/characters/:id/allow-reset', authRequired, requireAdmin, as
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
 
     let sheet = {};
-    try { sheet = JSON.parse(rows[0].sheet || '{}'); } catch (e) {}
-    
+    try { sheet = JSON.parse(rows[0].sheet || '{}'); } catch (e) { }
+
     // Add the authorization flag
     sheet.allow_reset = true;
-    
+
     await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), id]);
-    
+
     log.adm('Character reset authorized by admin', { id, admin_id: req.user.id });
     res.json({ success: true });
   } catch (e) {
@@ -2412,13 +2412,13 @@ app.post('/api/admin/characters/:id/revoke-reset', authRequired, requireAdmin, a
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
 
     let sheet = {};
-    try { sheet = JSON.parse(rows[0].sheet || '{}'); } catch (e) {}
-    
+    try { sheet = JSON.parse(rows[0].sheet || '{}'); } catch (e) { }
+
     // Set the authorization flag to false
     sheet.allow_reset = false;
-    
+
     await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), id]);
-    
+
     log.adm('Character reset revoked by admin', { id, admin_id: req.user.id });
     res.json({ success: true });
   } catch (e) {
@@ -2435,13 +2435,13 @@ app.post('/api/admin/characters/:id/toggle-active', authRequired, requireAdmin, 
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
 
     let sheet = {};
-    try { sheet = JSON.parse(rows[0].sheet || '{}'); } catch (e) {}
-    
+    try { sheet = JSON.parse(rows[0].sheet || '{}'); } catch (e) { }
+
     // Flip the boolean
     sheet.is_active = !sheet.is_active;
-    
+
     await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), id]);
-    
+
     log.adm(`Character ${sheet.is_active ? 'activated' : 'deactivated'}`, { id, admin_id: req.user.id });
     res.json({ success: true, is_active: sheet.is_active });
   } catch (e) {
@@ -2455,11 +2455,11 @@ app.post('/api/admin/characters/:id/reset', authRequired, requireAdmin, async (r
   const id = Number(req.params.id);
   try {
     // 1. Clear XP logs so math doesn't break for the new sheet
-    try { await pool.query('DELETE FROM xp_log WHERE character_id=?', [id]); } catch(e) {}
-    
+    try { await pool.query('DELETE FROM xp_log WHERE character_id=?', [id]); } catch (e) { }
+
     // 2. Reset sheet to NULL and XP to 50
     await pool.query('UPDATE characters SET sheet=NULL, xp=50 WHERE id=?', [id]);
-    
+
     const [rows] = await pool.query('SELECT * FROM characters WHERE id=?', [id]);
     log.adm('Character reset by admin', { id, admin_id: req.user.id });
     res.json({ character: rows[0] });
@@ -2487,9 +2487,9 @@ app.post('/api/characters/rebuild', authRequired, async (req, res) => {
     const charId = rows[0].id;
 
     // Wipe the old XP log so they start totally fresh
-    try { 
-      await pool.query('DELETE FROM xp_log WHERE character_id=?', [charId]); 
-    } catch(e) { /* ignore if table missing */ }
+    try {
+      await pool.query('DELETE FROM xp_log WHERE character_id=?', [charId]);
+    } catch (e) { /* ignore if table missing */ }
 
     // Overwrite the character data and reset XP to 50
     await pool.query(
@@ -2500,8 +2500,8 @@ app.post('/api/characters/rebuild', authRequired, async (req, res) => {
     // Fetch and return the updated character
     const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [charId]);
     const ch = out[0];
-    if (ch && ch.sheet && typeof ch.sheet === 'string') { 
-      try { ch.sheet = JSON.parse(ch.sheet); } catch {} 
+    if (ch && ch.sheet && typeof ch.sheet === 'string') {
+      try { ch.sheet = JSON.parse(ch.sheet); } catch { }
     }
 
     log.char('Character rebuilt', { id: charId, user_id: req.user.id, name, clan });
@@ -2569,14 +2569,14 @@ app.post('/api/characters/xp/spend', authRequired, async (req, res) => {
     await pool.query(
       'INSERT INTO xp_log (character_id, action, target, from_level, to_level, cost, payload) VALUES (?,?,?,?,?,?,?)',
       [ch.id, type, target || null, currentLevel || null, newLevel || null, cost,
-        JSON.stringify({ disciplineKind, ritualLevel, formulaLevel, dots })]
+      JSON.stringify({ disciplineKind, ritualLevel, formulaLevel, dots })]
     );
     log.xp('XP logged', { character_id: ch.id, cost });
   } catch (_) { /* ignore if xp_log missing */ }
 
   const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [ch.id]);
   const outCh = out[0];
-  if (outCh && outCh.sheet && typeof outCh.sheet === 'string') { try { outCh.sheet = JSON.parse(outCh.sheet); } catch {} }
+  if (outCh && outCh.sheet && typeof outCh.sheet === 'string') { try { outCh.sheet = JSON.parse(outCh.sheet); } catch { } }
 
   if (cost > 0) {
     log.ok('XP spend complete', { user_id: req.user.id, remaining_xp: outCh?.xp });
@@ -2594,10 +2594,10 @@ app.patch('/api/admin/characters/:id/xp', authRequired, requireAdmin, async (req
 
   await pool.query('UPDATE characters SET xp = GREATEST(0, xp + ?) WHERE id=?', [delta, req.params.id]);
   const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [req.params.id]);
-  
+
   // NEW: Log this admin grant to your existing xp_log table
   try {
-await pool.query(
+    await pool.query(
       'INSERT INTO xp_log (character_id, action, target, cost, payload) VALUES (?, ?, ?, ?, ?)',
       [req.params.id, 'admin_grant', req.body.reason || 'Admin XP Adjustment', -delta, JSON.stringify({ admin_id: req.user.id })]
     );
@@ -2618,7 +2618,7 @@ app.patch('/api/admin/characters/xp/bulk', authRequired, requireAdmin, async (re
 
   try {
     await pool.query('UPDATE characters SET xp = GREATEST(0, xp + ?)', [delta]);
-    
+
     // NEW: Log the bulk grant for EVERY character in the database at once
     await pool.query(`
       INSERT INTO xp_log (character_id, action, target, cost, payload)
@@ -2725,7 +2725,7 @@ app.patch('/api/admin/characters/:id', authRequired, requireAdmin, async (req, r
 
   const [rows] = await pool.query('SELECT * FROM characters WHERE id=?', [id]);
   const ch = rows[0];
-  if (ch && ch.sheet && typeof ch.sheet === 'string') { try { ch.sheet = JSON.parse(ch.sheet); } catch {} }
+  if (ch && ch.sheet && typeof ch.sheet === 'string') { try { ch.sheet = JSON.parse(ch.sheet); } catch { } }
   log.adm('Character updated', { id, fields });
   res.json({ character: ch });
 });
@@ -2775,7 +2775,7 @@ app.get('/api/admin/npcs', authRequired, requireAdmin, async (req, res) => {
   // Parse JSON sheet if stored as string
   rows.forEach(r => {
     if (r.sheet && typeof r.sheet === 'string') {
-      try { r.sheet = JSON.parse(r.sheet); } catch {}
+      try { r.sheet = JSON.parse(r.sheet); } catch { }
     }
   });
 
@@ -2783,7 +2783,7 @@ app.get('/api/admin/npcs', authRequired, requireAdmin, async (req, res) => {
   try {
     const [[db]] = await pool.query('SELECT DATABASE() AS db');
     log.adm('NPC list', { db: db.db, count: rows.length });
-  } catch {}
+  } catch { }
 
   res.json({ npcs: rows });
 });
@@ -2803,7 +2803,7 @@ app.post('/api/admin/npcs', authRequired, requireAdmin, async (req, res) => {
 
   const [rows] = await pool.query('SELECT id, name, clan, sheet, xp, created_at, updated_at, camarilla_titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, is_disabled FROM npcs WHERE id=?', [r.insertId]);
   const npc = rows[0];
-  if (npc?.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch {} }
+  if (npc?.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch { } }
   res.json({ npc });
 });
 
@@ -2812,7 +2812,7 @@ app.get('/api/admin/npcs/:id', authRequired, requireAdmin, async (req, res) => {
   const [rows] = await pool.query('SELECT id, name, clan, sheet, xp, created_at, updated_at, camarilla_titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, is_disabled FROM npcs WHERE id=?', [req.params.id]);
   if (!rows.length) return res.status(404).json({ error: 'NPC not found' });
   const npc = rows[0];
-  if (npc?.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch {} }
+  if (npc?.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch { } }
   res.json({ npc });
 });
 
@@ -2831,7 +2831,7 @@ app.patch('/api/admin/npcs/:id', authRequired, requireAdmin, async (req, res) =>
 
   const [rows] = await pool.query('SELECT id, name, clan, sheet, xp, created_at, updated_at, camarilla_titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, is_disabled FROM npcs WHERE id=?', [req.params.id]);
   const npc = rows[0];
-  if (npc?.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch {} }
+  if (npc?.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch { } }
   res.json({ npc });
 });
 
@@ -2882,7 +2882,7 @@ app.post('/api/admin/npcs/:id/xp/spend', authRequired, requireAdmin, async (req,
 
   const [out] = await pool.query('SELECT id, name, clan, sheet, xp, created_at, updated_at, camarilla_titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, is_disabled FROM npcs WHERE id=?', [ch.id]);
   const outCh = out[0];
-  if (outCh?.sheet && typeof outCh.sheet === 'string') { try { outCh.sheet = JSON.parse(outCh.sheet); } catch {} }
+  if (outCh?.sheet && typeof outCh.sheet === 'string') { try { outCh.sheet = JSON.parse(outCh.sheet); } catch { } }
   res.json({ character: outCh, spent: cost });
 });
 
@@ -2926,7 +2926,7 @@ app.get('/api/admin/chat/npc-history/:npcId/:userId', authRequired, requireAdmin
       [npcId, userId]
     );
 
-    
+
     res.json({ messages });
   } catch (e) {
     log.err('Admin fetch NPC chat history failed', { message: e.message, stack: e.stack });
@@ -2955,12 +2955,12 @@ app.post('/api/admin/chat/reply-as-npc/:npcId/:userId', authRequired, requireAdm
       return res.status(404).json({ error: 'Target user not found' });
     }
 
-// Insert message into the NPC chat table, sent from the 'npc' side
+    // Insert message into the NPC chat table, sent from the 'npc' side
     await pool.query(
       'INSERT INTO npc_messages (user_id, npc_id, body, from_side) VALUES (?, ?, ?, ?)',
       [userId, npcId, body, 'npc']
     );
-    
+
     log.adm('Admin replied as NPC', { admin_id: req.user.id, npc_id: npcId, to_user_id: userId });
     res.json({ ok: true, message: 'Message sent as NPC' });
   } catch (e) {
@@ -2984,13 +2984,13 @@ app.get('/api/comms/status', authRequired, async (req, res) => {
         const m = String(today.getMonth() + 1).padStart(2, '0');
         const d = String(today.getDate()).padStart(2, '0');
         const localDate = `${y}-${m}-${d}`;
-        
+
         if (schedule[localDate] === false) {
           isCommsEnabled = false;
         } else if (schedule[localDate] === true) {
           isCommsEnabled = true;
         }
-      } catch (err) {}
+      } catch (err) { }
     }
 
     res.json({ comms_enabled: isCommsEnabled });
@@ -3032,7 +3032,7 @@ app.get('/api/chat/my-recent', authRequired, async (req, res) => {
     );
 
     const all = [...npcRows, ...playerRows];
-    
+
     const seenMap = new Map();
     const uniqueConvos = [];
 
@@ -3065,7 +3065,7 @@ app.get('/api/chat/my-recent', authRequired, async (req, res) => {
 app.post('/api/chat/upload', authRequired, uploadLimiter, memoryUpload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file provided' });
-    
+
     // ✅ FIX: Allow any image or audio file instead of just specific image extensions
     if (!req.file.mimetype.startsWith('image/') && !req.file.mimetype.startsWith('audio/')) {
       return res.status(400).json({ error: 'Invalid file type. Only images and audio allowed.' });
@@ -3108,24 +3108,24 @@ app.post('/api/chat/upload', authRequired, uploadLimiter, memoryUpload.single('f
 app.get('/api/chat/media/:id', async (req, res) => {
   // 1. Manually handle Authentication
   let token = null;
-  
+
   // Check Header (Standard API calls)
   if (req.headers.authorization && req.headers.authorization.split(' ')[0] === 'Bearer') {
-      token = req.headers.authorization.split(' ')[1];
-  } 
+    token = req.headers.authorization.split(' ')[1];
+  }
   // Check Query Param (<img> tags)
   else if (req.query.token) {
-      token = req.query.token;
+    token = req.query.token;
   }
 
   if (!token) return res.status(401).send('Unauthorized');
 
   try {
-      // Verify token
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      req.user = decoded; 
+    // Verify token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
   } catch (err) {
-      return res.status(401).send('Invalid Token');
+    return res.status(401).send('Invalid Token');
   }
 
   // 2. Fetch and Serve Image
@@ -3165,7 +3165,7 @@ app.post('/api/admin/emails/identities', authRequired, requireAdmin, async (req,
   try {
     const { email_address, display_name } = req.body;
     if (!display_name || !email_address) return res.status(400).json({ error: 'Missing fields' });
-    
+
     const email = email_address.trim().toLowerCase();
     if (!email.includes('@')) return res.status(400).json({ error: 'Invalid email format' });
 
@@ -3173,7 +3173,7 @@ app.post('/api/admin/emails/identities', authRequired, requireAdmin, async (req,
       INSERT INTO email_identities (email_address, display_name)
       VALUES (?, ?)
     `, [email, display_name]);
-    
+
     log.adm('Created human email identity', { admin: req.user.id, email });
     res.json({ ok: true });
   } catch (e) {
@@ -3221,10 +3221,10 @@ app.get('/api/admin/emails/threads/:id', authRequired, requireAdmin, async (req,
       WHERE m.thread_id = ?
       ORDER BY m.created_at ASC
     `, [req.params.id]);
-    
+
     // Mark user messages as read
     await pool.query(`UPDATE email_messages SET is_read=1 WHERE thread_id=? AND sender_type='user'`, [req.params.id]);
-    
+
     res.json({ messages });
   } catch (e) {
     res.status(500).json({ error: 'Failed' });
@@ -3236,19 +3236,19 @@ app.post('/api/admin/emails/reply', authRequired, requireAdmin, async (req, res)
   try {
     const { thread_id, body } = req.body;
     if (!body || !thread_id) return res.status(400).json({ error: 'Missing body' });
-    
+
     await pool.query(`INSERT INTO email_messages (thread_id, sender_type, body, is_read) VALUES (?, 'identity', ?, 0)`, [thread_id, body]);
     await pool.query(`UPDATE email_threads SET updated_at=NOW() WHERE id=?`, [thread_id]);
-    
+
     // --- NEW: SEND PUSH TO PLAYER ---
     try {
       const [[thread]] = await pool.query('SELECT user_id, identity_id, subject FROM email_threads WHERE id=?', [thread_id]);
       const [[identity]] = await pool.query('SELECT display_name FROM email_identities WHERE id=?', [thread.identity_id]);
-      
+
       const pushTitle = `📧 Reply from ${identity?.display_name || 'NPC'}`;
       const pushBody = `Re: ${thread.subject}`;
-      
-      await sendPushNotification(thread.user_id, pushTitle, pushBody).catch(()=>{});
+
+      await sendPushNotification(thread.user_id, pushTitle, pushBody).catch(() => { });
     } catch (e) { log.err('Email push to player failed', { error: e.message }); }
     // --------------------------------
 
@@ -3311,7 +3311,7 @@ app.post('/api/emails/send', authRequired, async (req, res) => {
       const [check] = await conn.query('SELECT identity_id FROM email_threads WHERE id=? AND user_id=?', [thread_id, req.user.id]);
       if (!check.length) return res.status(403).json({ error: 'Thread not found' });
       identityId = check[0].identity_id;
-      
+
       await conn.query(`INSERT INTO email_messages (thread_id, sender_type, body, is_read) VALUES (?, 'user', ?, 0)`, [thread_id, body]);
       await conn.query(`UPDATE email_threads SET updated_at=NOW() WHERE id=?`, [thread_id]);
     } else {
@@ -3319,11 +3319,11 @@ app.post('/api/emails/send', authRequired, async (req, res) => {
       if (!to_email || !subject || !body) return res.status(400).json({ error: 'Missing fields' });
       const emailLower = to_email.trim().toLowerCase();
       const [identity] = await conn.query('SELECT id, display_name FROM email_identities WHERE email_address = ?', [emailLower]);
-      
+
       if (identity.length === 0) return res.status(404).json({ error: 'Delivery Status Notification (Failure): Address not found.' });
       identityId = identity[0].id;
       identityName = identity[0].display_name;
-      
+
       await conn.beginTransaction();
       const [t] = await conn.query(`INSERT INTO email_threads (user_id, identity_id, subject) VALUES (?, ?, ?)`, [req.user.id, identityId, subject]);
       finalThreadId = t.insertId;
@@ -3336,12 +3336,12 @@ app.post('/api/emails/send', authRequired, async (req, res) => {
       const [[idRow]] = await pool.query('SELECT display_name FROM email_identities WHERE id=?', [identityId]);
       const [[player]] = await pool.query('SELECT display_name FROM users WHERE id=?', [req.user.id]);
       const [admins] = await pool.query("SELECT id FROM users WHERE role = 'admin'");
-      
+
       const pushTitle = `📧 Email to ${idRow?.display_name || identityName}`;
       const pushBody = `From ${player?.display_name}: ${subject || 'New Reply'}`;
-      
+
       for (const admin of admins) {
-        if (admin.id !== req.user.id) await sendPushNotification(admin.id, pushTitle, pushBody).catch(()=>{});
+        if (admin.id !== req.user.id) await sendPushNotification(admin.id, pushTitle, pushBody).catch(() => { });
       }
     } catch (e) { log.err('Email push to admin failed', { error: e.message }); }
     // --------------------------------
@@ -3374,7 +3374,7 @@ app.get('/api/admin/comms/config', authRequired, requireAdmin, async (req, res) 
     const masterEnabled = await getSetting('comms_enabled', 'true');
     const scheduleStr = await getSetting('chat_schedule', '{}');
     let schedule = {};
-    try { schedule = JSON.parse(scheduleStr); } catch (e) {}
+    try { schedule = JSON.parse(scheduleStr); } catch (e) { }
     res.json({ master_enabled: masterEnabled === 'true', schedule });
   } catch (e) {
     res.status(500).json({ error: 'Failed to fetch comms config' });
@@ -3419,7 +3419,7 @@ app.post('/api/chat/npc/messages', authRequired, async (req, res) => {
   try {
     const userId = req.user.id;
     const { npc_id, body, attachment_id } = req.body || {};
-    
+
     if (!npc_id || (!attachment_id && (!body || !body.trim()))) {
       return res.status(400).json({ error: 'NPC and content required' });
     }
@@ -3454,7 +3454,7 @@ app.post('/api/chat/npc/messages', authRequired, async (req, res) => {
 
       const npcName = npcInfo?.name || 'NPC';
       const playerName = charInfo?.name || playerInfo?.display_name || 'Player';
-      
+
       const notifTitle = `💬 ${npcName} (from ${playerName})`;
       const notifBody = message.attachment_id ? '📷 Image Attachment' : message.body;
 
@@ -3466,16 +3466,16 @@ app.post('/api/chat/npc/messages', authRequired, async (req, res) => {
         // Prevent sending a push to the admin if the admin is the one testing/playing as a user
         if (admin.id !== userId) {
           // Web Push
-          await sendPushNotification(admin.id, notifTitle, notifBody).catch(() => {});
-          
+          await sendPushNotification(admin.id, notifTitle, notifBody).catch(() => { });
+
           // Ntfy Push (Only if subscribed)
           if (admin.ntfy_topic && admin.ntfy_subscribed_npcs) {
             let prefs = [];
-            try { prefs = typeof admin.ntfy_subscribed_npcs === 'string' ? JSON.parse(admin.ntfy_subscribed_npcs) : admin.ntfy_subscribed_npcs; } catch(e){}
+            try { prefs = typeof admin.ntfy_subscribed_npcs === 'string' ? JSON.parse(admin.ntfy_subscribed_npcs) : admin.ntfy_subscribed_npcs; } catch (e) { }
             if (Array.isArray(prefs) && prefs.includes(Number(npc_id))) {
               axios.post(`https://ntfy.sh/${admin.ntfy_topic}`, notifBody, {
                 headers: { 'Title': notifTitle, 'Tags': 'speech_balloon' }
-              }).catch(() => {});
+              }).catch(() => { });
             }
           }
         }
@@ -3484,7 +3484,7 @@ app.post('/api/chat/npc/messages', authRequired, async (req, res) => {
       log.err('Failed to notify admins of NPC message', { error: pushErr.message });
     }
     // ----------------------------------------------
-    
+
     res.status(201).json({ message });
   } catch (e) {
     log.err('NPC send failed', { message: e.message });
@@ -3525,13 +3525,13 @@ app.post('/api/admin/chat/summarize', authRequired, requireAdmin, async (req, re
     // List of models to try in order of preference.
     // We prioritize stable, production-ready models to avoid 503 errors.
     const candidateModels = [
-          "gemini-2.5-flash-lite",      // Specific stable version
-          "gemini-3-flash-preview",      // Newer stable version
-          "gemini-2.5-flash",        // Specific stable version
-          "	gemini-2.5-pro",        // Newer stable version
-          "gemini-1.0-pro",            // Fallback legacy
-          "gemini-pro"                 // Generic fallback
-        ];
+      "gemini-2.5-flash-lite",      // Specific stable version
+      "gemini-3-flash-preview",      // Newer stable version
+      "gemini-2.5-flash",        // Specific stable version
+      "	gemini-2.5-pro",        // Newer stable version
+      "gemini-1.0-pro",            // Fallback legacy
+      "gemini-pro"                 // Generic fallback
+    ];
 
     let summary = null;
     let lastError = null;
@@ -3559,9 +3559,9 @@ app.post('/api/admin/chat/summarize', authRequired, requireAdmin, async (req, re
         const result = await model.generateContent(prompt);
         const response = await result.response;
         summary = response.text();
-        
+
         // If successful, stop trying other models
-        break; 
+        break;
       } catch (e) {
         // Log warning but continue to next model
         log.warn(`AI Model ${modelName} failed`, { message: e.message });
@@ -3613,12 +3613,12 @@ app.post('/api/admin/chat/npc/messages', authRequired, requireAdmin, async (req,
       const notifBody = message.attachment_id ? '📷 Image Attachment' : message.body;
 
       // Send push directly to the player
-      await sendPushNotification(user_id, npcName, notifBody).catch(() => {});
+      await sendPushNotification(user_id, npcName, notifBody).catch(() => { });
     } catch (pushErr) {
       log.err('Failed to notify player of NPC reply', { error: pushErr.message });
     }
     // ----------------------------------------
-    
+
     res.status(201).json({ message });
   } catch (e) {
     res.status(500).json({ error: 'Failed' });
@@ -3636,7 +3636,7 @@ app.get('/api/admin/camarilla/roster', authRequired, requireAdmin, async (req, r
     const [npcs] = await pool.query(
       "SELECT id, NULL as user_id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, 'npc' as type FROM npcs"
     );
-    
+
     const format = (list) => list.map(item => ({
       ...item,
       titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || []),
@@ -3680,7 +3680,7 @@ app.put('/api/npcs/:id/avatar', authRequired, requireAdmin, upload.single('avata
       .resize(500, 500, { fit: 'cover' })
       .webp({ quality: 80 })
       .toBuffer();
-      
+
     await pool.query('UPDATE npcs SET avatar = ? WHERE id = ?', [buffer, req.params.id]);
     res.json({ success: true, message: 'NPC Avatar updated successfully.' });
   } catch (e) {
@@ -3698,7 +3698,7 @@ app.get('/api/camarilla/roster', authRequired, async (req, res) => {
     const [npcs] = await pool.query(
       "SELECT id, NULL as user_id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, 'npc' as type FROM npcs"
     );
-    
+
     const format = (list) => list.map(item => ({
       ...item,
       titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || []),
@@ -3726,7 +3726,7 @@ app.get('/api/camarilla/roster', authRequired, async (req, res) => {
     const [npcs] = await pool.query(
       "SELECT id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, 'npc' as type FROM npcs"
     );
-    
+
     const format = (list) => list.map(item => ({
       ...item,
       titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || []),
@@ -3756,7 +3756,7 @@ app.get('/api/camarilla/roster', authRequired, async (req, res) => {
     const [npcs] = await pool.query(
       "SELECT id, name, clan, camarilla_titles as titles, status, image_url, 'npc' as type FROM npcs"
     );
-    
+
     // Format helper to handle JSON strings for titles
     const format = (list) => list.map(item => ({
       ...item,
@@ -3764,7 +3764,7 @@ app.get('/api/camarilla/roster', authRequired, async (req, res) => {
     }));
 
     const combined = [...format(players), ...format(npcs)];
-    
+
     // Sort NUMERICALLY by status (highest number first, nulls become 0)
     combined.sort((a, b) => (b.status || 0) - (a.status || 0));
 
@@ -3779,16 +3779,16 @@ app.get('/api/camarilla/roster', authRequired, async (req, res) => {
 app.patch('/api/admin/camarilla/update', authRequired, requireAdmin, async (req, res) => {
   const { id, type, field, value } = req.body;
   const table = type === 'player' ? 'characters' : 'npcs';
-  
+
   let dbField, dbValue;
-  
+
   if (field === 'titles') {
     dbField = 'camarilla_titles';
     dbValue = JSON.stringify(value);
   } else if (field === 'image_url') {
     dbField = 'image_url';
     dbValue = value;
-  // Use a quick array check for all boolean flags
+    // Use a quick array check for all boolean flags
   } else if (['is_ex', 'is_deceased', 'is_hidden', 'is_bloodhunted', 'is_left', 'is_called', 'is_missing', 'is_exiled'].includes(field)) {
     dbField = field;
     dbValue = value ? 1 : 0;
@@ -3820,7 +3820,7 @@ app.get('/api/downtimes/quota', authRequired, async (req, res) => {
 
   let from = startOfMonth();
   let to = endOfMonth();
-  
+
   // FIX: Tie the quota to the current cycle (Opening Date) instead of a strict calendar month
   try {
     const openingStr = await getSetting('downtime_opening', null);
@@ -3829,10 +3829,10 @@ app.get('/api/downtimes/quota', authRequired, async (req, res) => {
       if (!isNaN(parsed.getTime())) {
         from = parsed;
         // Give the cycle a generous safe upper bound (e.g., 90 days) until the next opening overrides it
-        to = new Date(parsed.getTime() + 90 * 24 * 60 * 60 * 1000); 
+        to = new Date(parsed.getTime() + 90 * 24 * 60 * 60 * 1000);
       }
     }
-  } catch (e) {}
+  } catch (e) { }
 
   const [rows] = await pool.query(
     'SELECT COUNT(*) AS c FROM downtimes WHERE character_id=? AND created_at >= ? AND created_at < ?',
@@ -3871,13 +3871,13 @@ app.put('/api/downtimes/:id', authRequired, async (req, res) => {
     // Determine if the action being edited is a project based on its current title
     const isProject = submission.title && submission.title.startsWith('[PROJECT]');
     const deadlineKey = isProject ? 'project_deadline' : 'downtime_deadline';
-    
+
     const deadlineStr = await getSetting(deadlineKey, null);
-    
+
     // Check if the specific deadline for this type of action has passed
     if (deadlineStr && new Date(deadlineStr) < new Date()) {
-      return res.status(400).json({ 
-        error: `The deadline for ${isProject ? 'project' : 'action'} submissions has passed.` 
+      return res.status(400).json({
+        error: `The deadline for ${isProject ? 'project' : 'action'} submissions has passed.`
       });
     }
 
@@ -3929,7 +3929,7 @@ app.post('/api/downtimes', authRequired, async (req, res) => {
 
   let from = startOfMonth();
   let to = endOfMonth();
-  
+
   // FIX: Tie the limit check to the current cycle
   try {
     const openingStr = await getSetting('downtime_opening', null);
@@ -3937,10 +3937,10 @@ app.post('/api/downtimes', authRequired, async (req, res) => {
       const parsed = new Date(openingStr);
       if (!isNaN(parsed.getTime())) {
         from = parsed;
-        to = new Date(parsed.getTime() + 90 * 24 * 60 * 60 * 1000); 
+        to = new Date(parsed.getTime() + 90 * 24 * 60 * 60 * 1000);
       }
     }
-  } catch (e) {}
+  } catch (e) { }
 
   const [cnt] = await pool.query(
     'SELECT COUNT(*) AS c FROM downtimes WHERE character_id=? AND created_at >= ? AND created_at < ?',
@@ -3958,7 +3958,7 @@ app.post('/api/downtimes', authRequired, async (req, res) => {
       try {
         const parsed = typeof ch.sheet === 'string' ? JSON.parse(ch.sheet) : ch.sheet;
         pred = parsed?.predatorType || null;
-      } catch {}
+      } catch { }
     }
     defaultFeed = feedingFromPredator(pred);
   }
@@ -4072,11 +4072,11 @@ app.get('/api/boons/entities', authRequired, async (req, res) => {
   try {
     const [characters] = await pool.query('SELECT id, user_id, name, clan FROM characters ORDER BY name ASC');
     const [npcs] = await pool.query('SELECT id, name, clan FROM npcs ORDER BY name ASC');
-    
+
     // Using user_id for players because avatars are tied to users, not characters
     const players = characters.map(c => ({ type: 'player', id: c.user_id, name: `${c.name} (${c.clan || 'Unknown'})` }));
     const nonPlayers = npcs.map(n => ({ type: 'npc', id: n.id, name: `${n.name} (NPC)` }));
-    
+
     res.json({ entities: [...players, ...nonPlayers] });
   } catch (e) {
     log.err('Failed to get boon entities', { message: e.message });
@@ -4109,20 +4109,20 @@ app.post('/api/boons', authRequired, requireCourt, async (req, res) => {
     if (!from_name || !to_name || !level || !status) {
       return res.status(400).json({ error: 'From, To, Level, and Status are required' });
     }
-    
-  const [r] = await pool.query(
-    `INSERT INTO boons (from_name, to_name, level, status, description, created_at, date_incurred) 
+
+    const [r] = await pool.query(
+      `INSERT INTO boons (from_name, to_name, level, status, description, created_at, date_incurred) 
     VALUES (?, ?, ?, ?, ?, NOW(), NOW())`,
-    [from_name, to_name, level, status, description || null]
-  );
-    
+      [from_name, to_name, level, status, description || null]
+    );
+
     const [[boon]] = await pool.query('SELECT * FROM boons WHERE id=?', [r.insertId]);
     log.adm('Boon created', { id: r.insertId, by_user_id: req.user.id });
     res.status(201).json({ boon });
-    
+
   } catch (e) {
     log.err('Failed to create boon', { message: e.message, stack: e.stack });
-    
+
     // Make the error explanatory for the frontend
     let errorMessage = 'Failed to create boon.';
     if (e.code === 'ER_NO_SUCH_TABLE') {
@@ -4131,7 +4131,7 @@ app.post('/api/boons', authRequired, requireCourt, async (req, res) => {
       errorMessage = 'Input error: One of the names or descriptions is too long.';
     } else {
       // Pass the raw database error message so you can see exactly what failed
-      errorMessage = `Server Error: ${e.message}`; 
+      errorMessage = `Server Error: ${e.message}`;
     }
 
     res.status(500).json({ error: errorMessage });
@@ -4143,7 +4143,7 @@ app.patch('/api/boons/:id', authRequired, requireCourt, async (req, res) => {
   try {
     const { id } = req.params;
     const { from_name, to_name, level, status, description } = req.body;
-    
+
     const fields = [], vals = [];
     if (from_name !== undefined) { fields.push('from_name=?'); vals.push(from_name); }
     if (to_name !== undefined) { fields.push('to_name=?'); vals.push(to_name); }
@@ -4154,14 +4154,14 @@ app.patch('/api/boons/:id', authRequired, requireCourt, async (req, res) => {
     if (!fields.length) {
       return res.status(400).json({ error: 'Nothing to update' });
     }
-    
+
     vals.push(id);
     await pool.query(`UPDATE boons SET ${fields.join(', ')} WHERE id=?`, vals);
-    
+
     const [[boon]] = await pool.query('SELECT * FROM boons WHERE id=?', [id]);
     log.adm('Boon updated', { id, by_user_id: req.user.id });
     res.json({ boon });
-    
+
   } catch (e) {
     log.err('Failed to update boon', { message: e.message });
     res.status(500).json({ error: `Failed to update boon: ${e.message}` });
@@ -4257,11 +4257,11 @@ app.post('/api/chat/groups', authRequired, moderateLimiter, async (req, res) => 
     // 2. Add Creator to Members
     const allMembers = [req.user.id, ...members.map(Number)].filter((v, i, a) => a.indexOf(v) === i && !isNaN(v));
     const values = allMembers.map(uid => [groupId, uid]);
-    
+
     await conn.query('INSERT INTO chat_group_members (group_id, user_id) VALUES ?', [values]);
 
     await conn.commit();
-    
+
     // Fetch and return the new group object
     const [rows] = await pool.query('SELECT * FROM chat_groups WHERE id=?', [groupId]);
     log.ok('Group created', { user_id: req.user.id, group_id: groupId, name });
@@ -4310,7 +4310,7 @@ app.get('/api/chat/groups/:id/history', authRequired, async (req, res) => {
 app.get('/api/chat/groups/:id/members', authRequired, async (req, res) => {
   try {
     const groupId = Number(req.params.id);
-    
+
     // Check if user is in group or is admin
     const [m] = await pool.query('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?', [groupId, req.user.id]);
     if (!m.length && req.user.role !== 'admin') return res.status(403).json({ error: 'Not a member' });
@@ -4333,7 +4333,7 @@ app.get('/api/chat/groups/:id/members', authRequired, async (req, res) => {
 app.post('/api/chat/groups/:id/members', authRequired, async (req, res) => {
   try {
     const groupId = Number(req.params.id);
-    const { members } = req.body; 
+    const { members } = req.body;
     if (!members || !members.length) return res.status(400).json({ error: 'No members provided' });
 
     const [g] = await pool.query('SELECT created_by FROM chat_groups WHERE id=?', [groupId]);
@@ -4356,12 +4356,12 @@ app.delete('/api/chat/groups/:id/members/:userId', authRequired, async (req, res
 
     const [g] = await pool.query('SELECT created_by FROM chat_groups WHERE id=?', [groupId]);
     if (!g.length) return res.status(404).json({ error: 'Group not found' });
-    
+
     // Check if requester is Creator, Admin, OR the user trying to leave
     if (g[0].created_by !== req.user.id && req.user.role !== 'admin' && req.user.id !== targetUserId) {
-        return res.status(403).json({ error: 'Not authorized' });
+      return res.status(403).json({ error: 'Not authorized' });
     }
-    
+
     if (g[0].created_by === targetUserId) return res.status(400).json({ error: 'Cannot remove creator' });
 
     await pool.query('DELETE FROM chat_group_members WHERE group_id=? AND user_id=?', [groupId, targetUserId]);
@@ -4399,7 +4399,7 @@ app.post('/api/chat/groups/:id/messages', authRequired, async (req, res) => {
 
     if (!attachment_id && (!body || !body.trim())) return res.status(400).json({ error: 'Content required' });
 
-    const [r] = await pool.query('INSERT INTO chat_group_messages (group_id, sender_id, body, attachment_id) VALUES (?,?,?,?)', 
+    const [r] = await pool.query('INSERT INTO chat_group_messages (group_id, sender_id, body, attachment_id) VALUES (?,?,?,?)',
       [groupId, req.user.id, body ? body.trim() : '', attachment_id || null]);
 
     const [[message]] = await pool.query(`
@@ -4427,7 +4427,7 @@ app.post('/api/chat/groups/:id/messages', authRequired, async (req, res) => {
 
       // 4. Στέλνουμε push notification στο κάθε μέλος
       for (const member of members) {
-        await sendPushNotification(member.user_id, notifTitle, notifBody, { url: '/schrecknet' }, 'chat').catch(() => {});
+        await sendPushNotification(member.user_id, notifTitle, notifBody, { url: '/schrecknet' }, 'chat').catch(() => { });
       }
     } catch (pushErr) {
       log.err('Failed to notify group members', { error: pushErr.message });
@@ -4463,8 +4463,8 @@ app.get('/api/admin/chat/groups/messages/all', authRequired, requireAdmin, async
   try {
     const [messages] = await pool.query('SELECT * FROM chat_group_messages');
     res.json({ messages });
-  } catch (e) { 
-    res.status(500).json({ error: 'Failed to fetch group messages' }); 
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch group messages' });
   }
 });
 
@@ -4473,8 +4473,8 @@ app.get('/api/admin/emails/messages/all', authRequired, requireAdmin, async (req
   try {
     const [messages] = await pool.query('SELECT * FROM email_messages');
     res.json({ messages });
-  } catch (e) { 
-    res.status(500).json({ error: 'Failed to fetch email messages' }); 
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch email messages' });
   }
 });
 
@@ -4503,7 +4503,7 @@ app.get('/api/admin/chat/groups/:id/history', authRequired, requireAdmin, async 
 app.get('/api/chat/users', authRequired, async (req, res) => {
   try {
     const myId = req.user.id;
-    
+
     // This query fetches users and calculates:
     // 1. last_msg: The timestamp of the latest message (sent OR received)
     // 2. unread: The count of messages sent BY this user TO me that are unread
@@ -4624,7 +4624,7 @@ app.post('/api/chat/messages', authRequired, async (req, res) => {
   try {
     // Added attachment_id to destructuring
     const { recipient_id, body, attachment_id } = req.body;
-    
+
     // Allow empty body ONLY if there is an attachment
     if (!recipient_id || (!attachment_id && (!body || !body.trim()))) {
       return res.status(400).json({ error: 'Recipient and content required' });
@@ -4646,8 +4646,8 @@ app.post('/api/chat/messages', authRequired, async (req, res) => {
     );
 
     sendPushNotification(
-      recipient_id, 
-      message.sender_name, 
+      recipient_id,
+      message.sender_name,
       message.attachment_id ? '📷 Image Attachment' : message.body
     )
 
@@ -4667,11 +4667,11 @@ app.put('/api/chat/messages/:id', authRequired, async (req, res) => {
     const { body } = req.body;
     const userId = req.user.id;
     const isAdmin = req.user.role === 'admin' || req.user.permission_level === 'admin';
-    
+
     if (!body || !body.trim()) return res.status(400).json({ error: 'Message body cannot be empty.' });
 
     const FOUR_HOURS = 4 * 60 * 60 * 1000;
-    
+
     const tables = [
       { name: 'chat_messages', senderCol: 'sender_id' },
       { name: 'chat_group_messages', senderCol: 'sender_id' },
@@ -4687,7 +4687,7 @@ app.put('/api/chat/messages/:id', authRequired, async (req, res) => {
       if (rows.length > 0) {
         const msg = rows[0];
         found = true;
-        
+
         // FIX: Cast both to Strings to prevent Strict Equality ( !== ) Type Bugs
         if (String(msg.sender_id) !== String(userId) && !isAdmin) {
           return res.status(403).json({ error: 'You can only edit your own messages.' });
@@ -4723,7 +4723,7 @@ app.delete('/api/chat/messages/:id', authRequired, async (req, res) => {
     const userId = req.user.id;
     const isAdmin = req.user.role === 'admin' || req.user.permission_level === 'admin';
     const FOUR_HOURS = 4 * 60 * 60 * 1000;
-    
+
     const tables = [
       { name: 'chat_messages', senderCol: 'sender_id' },
       { name: 'chat_group_messages', senderCol: 'sender_id' },
@@ -4739,7 +4739,7 @@ app.delete('/api/chat/messages/:id', authRequired, async (req, res) => {
       if (rows.length > 0) {
         const msg = rows[0];
         found = true;
-        
+
         // FIX: Cast both to Strings to prevent Strict Equality ( !== ) Type Bugs
         if (String(msg.sender_id) !== String(userId) && !isAdmin) {
           return res.status(403).json({ error: 'You can only delete your own messages.' });
@@ -4791,23 +4791,23 @@ app.post('/api/chat/read', authRequired, async (req, res) => {
     const { sender_id, npc_id, is_admin_reading_npc } = req.body;
 
     if (npc_id && is_admin_reading_npc) {
-        // Admin is reading a player's messages to an NPC
-        await pool.query(
-            "UPDATE npc_messages SET read_at = NOW() WHERE npc_id = ? AND user_id = ? AND from_side = 'user' AND read_at IS NULL",
-            [npc_id, sender_id]
-        );
+      // Admin is reading a player's messages to an NPC
+      await pool.query(
+        "UPDATE npc_messages SET read_at = NOW() WHERE npc_id = ? AND user_id = ? AND from_side = 'user' AND read_at IS NULL",
+        [npc_id, sender_id]
+      );
     } else if (npc_id) {
-        // Player is reading an NPC's messages
-        await pool.query(
-            "UPDATE npc_messages SET read_at = NOW() WHERE npc_id = ? AND user_id = ? AND from_side = 'npc' AND read_at IS NULL",
-            [npc_id, req.user.id]
-        );
+      // Player is reading an NPC's messages
+      await pool.query(
+        "UPDATE npc_messages SET read_at = NOW() WHERE npc_id = ? AND user_id = ? AND from_side = 'npc' AND read_at IS NULL",
+        [npc_id, req.user.id]
+      );
     } else if (sender_id) {
-        // Normal Player to Player chat
-        await pool.query(
-            'UPDATE chat_messages SET read_at = NOW() WHERE sender_id = ? AND recipient_id = ? AND read_at IS NULL',
-            [sender_id, req.user.id]
-        );
+      // Normal Player to Player chat
+      await pool.query(
+        'UPDATE chat_messages SET read_at = NOW() WHERE sender_id = ? AND recipient_id = ? AND read_at IS NULL',
+        [sender_id, req.user.id]
+      );
     }
     res.json({ ok: true });
   } catch (e) {
@@ -4822,7 +4822,7 @@ app.get('/api/admin/discord/config', authRequired, requireAdmin, async (req, res
   try {
     const channelId = await getSetting('discord_channel_id', '');
     const scheduleTime = await getSetting('discord_schedule_time', '12:00');
-    
+
     // New feature toggles (default to true)
     const discord_enabled = await getSetting('discord_enabled', 'true') === 'true';
     const notify_mail = await getSetting('discord_notify_mail', 'true') === 'true';
@@ -4850,13 +4850,13 @@ app.get('/api/admin/discord/config', authRequired, requireAdmin, async (req, res
 // Update Discord settings
 app.post('/api/admin/discord/config', authRequired, requireAdmin, async (req, res) => {
   try {
-    const { 
-      discord_channel_id, discord_schedule_time, 
-      discord_enabled, notify_mail, notify_news, notify_prems, ai_enabled 
+    const {
+      discord_channel_id, discord_schedule_time,
+      discord_enabled, notify_mail, notify_news, notify_prems, ai_enabled
     } = req.body;
-    
+
     if (discord_channel_id !== undefined) await setSetting('discord_channel_id', String(discord_channel_id).trim());
-    
+
     if (discord_schedule_time !== undefined) {
       if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(discord_schedule_time)) {
         return res.status(400).json({ error: 'Invalid time format. Use HH:MM (24h).' });
@@ -4883,7 +4883,7 @@ app.post('/api/admin/discord/test/:type', authRequired, requireAdmin, async (req
   try {
     const { type } = req.params;
     const channelId = await getSetting('discord_channel_id', null);
-    
+
     if (!discordClient?.isReady()) {
       return res.status(503).json({ error: 'Discord bot is currently offline.' });
     }
@@ -4891,8 +4891,8 @@ app.post('/api/admin/discord/test/:type', authRequired, requireAdmin, async (req
     if (type === 'mail') {
       await sendDiscordMailNotifications(true); // Pass true to force the test
       return res.json({ ok: true, message: 'Mail test triggered.' });
-    } 
-    
+    }
+
     if (type === 'news') {
       if (!channelId) return res.status(400).json({ error: 'No channel configured.' });
       const channel = await discordClient.channels.fetch(channelId);
@@ -4967,9 +4967,9 @@ app.post('/api/admin/discord/dm', authRequired, requireAdmin, async (req, res) =
 
 // ADMIN: Get all chat messages
 app.get('/api/admin/chat/all', authRequired, requireAdmin, async (req, res) => {
-    try {
-        const [messages] = await pool.query(
-            `SELECT
+  try {
+    const [messages] = await pool.query(
+      `SELECT
                 cm.id, cm.body, cm.created_at,
                 s.id as sender_id, s.display_name as sender_name,
                 r.id as recipient_id, r.display_name as recipient_name
@@ -4977,13 +4977,13 @@ app.get('/api/admin/chat/all', authRequired, requireAdmin, async (req, res) => {
             JOIN users s ON cm.sender_id = s.id
             JOIN users r ON cm.recipient_id = r.id
             ORDER BY cm.created_at DESC`
-        );
-        log.adm('Admin fetched all chat messages', { count: messages.length });
-        res.json({ messages });
-    } catch (e) {
-        log.err('Failed to get all chat messages for admin', { message: e.message });
-        res.status(500).json({ error: 'Failed to fetch messages' });
-    }
+    );
+    log.adm('Admin fetched all chat messages', { count: messages.length });
+    res.json({ messages });
+  } catch (e) {
+    log.err('Failed to get all chat messages for admin', { message: e.message });
+    res.status(500).json({ error: 'Failed to fetch messages' });
+  }
 });
 
 
@@ -4997,13 +4997,13 @@ app.get('/api/admin/users', authRequired, requireAdmin, async (_req, res) => {
      LEFT JOIN characters c ON c.user_id=u.id
      ORDER BY u.created_at DESC`
   );
-  
+
   rows.forEach(r => {
     if (r.sheet && typeof r.sheet === 'string') {
-      try { r.sheet = JSON.parse(r.sheet); } catch {}
+      try { r.sheet = JSON.parse(r.sheet); } catch { }
     }
   });
-  
+
   log.adm('Admin users list', { count: rows.length });
   res.json({ users: rows });
 });
@@ -5040,7 +5040,7 @@ app.patch('/api/admin/users/:id', authRequired, requireAdmin, async (req, res) =
     if (display_name !== undefined) {
       const name = String(display_name).trim();
       if (!name) return res.status(400).json({ error: 'Display name cannot be empty' });
-      fields.push('display_name=?'); 
+      fields.push('display_name=?');
       vals.push(name);
       nameChanged = true;
     }
@@ -5055,8 +5055,8 @@ app.patch('/api/admin/users/:id', authRequired, requireAdmin, async (req, res) =
       // Check for duplicates
       const [dup] = await pool.query('SELECT id FROM users WHERE email=? AND id<>?', [normEmail, id]);
       if (dup.length) return res.status(409).json({ error: 'Email already in use' });
-      
-      fields.push('email=?'); 
+
+      fields.push('email=?');
       vals.push(normEmail);
       emailChanged = true;
     }
@@ -5166,13 +5166,18 @@ app.patch('/api/admin/downtimes/:id', authRequired, requireAdmin, async (req, re
 
 /* -------------------- Domain Claims -------------------- */
 /** List all claims (public for logged-in users) */
-app.get('/api/domain-claims', authRequired, async (_req, res) => {
-  const [rows] = await pool.query(`
-    SELECT d.division, d.owner_name, d.color, d.owner_character_id, d.owner_npc_id, d.claimed_at, c.user_id 
-    FROM domain_claims d
-    LEFT JOIN characters c ON d.owner_character_id = c.id
-  `);
-  res.json({ claims: rows });
+app.get('/api/domain-claims', authRequired, async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT d.division, d.owner_name, d.color, d.owner_character_id, d.owner_npc_id, d.claimed_at, c.user_id 
+      FROM domain_claims d
+      LEFT JOIN characters c ON d.owner_character_id = c.id
+    `);
+    res.json({ claims: rows });
+  } catch (err) {
+    console.error('[Error] GET /api/domain-claims:', err);
+    res.status(500).json({ error: 'Database error fetching claims', details: err.message });
+  }
 });
 
 /** Claim a division by number with a hex color (first come first served) */
@@ -5381,7 +5386,7 @@ app.get('/api/court/chat/npc/all', authRequired, requireCourt, async (_req, res)
 app.post('/api/push/subscribe', authRequired, async (req, res) => {
   try {
     const { subscription } = req.body || {};
-    
+
     // Validate that we actually received a proper subscription object
     if (!subscription || !subscription.endpoint) {
       return res.status(400).json({ error: 'Valid subscription with endpoint is required' });
@@ -5455,14 +5460,14 @@ app.get('/api/push/settings', authRequired, async (req, res) => {
 app.put('/api/push/settings', authRequired, async (req, res) => {
   try {
     const { settings } = req.body;
-    
+
     // Fetch existing settings
     const [rows] = await pool.query('SELECT push_settings FROM users WHERE id=?', [req.user.id]);
     const currentSettings = rows[0].push_settings || { chat: false, system: false };
-    
+
     // Merge new settings
     const newSettings = { ...currentSettings, ...settings };
-    
+
     await pool.query('UPDATE users SET push_settings=? WHERE id=?', [JSON.stringify(newSettings), req.user.id]);
     res.json({ ok: true });
   } catch (e) {
@@ -5495,9 +5500,9 @@ app.post('/api/push/web-subscribe', authRequired, async (req, res) => {
 
 // --- NEW ROUTE to remove a subscription (e.g., on logout) ---
 app.post('/api/push/unsubscribe', authRequired, async (req, res) => {
-    // Logic to find and delete the subscription from your DB
-    // ...
-    res.json({ ok: true });
+  // Logic to find and delete the subscription from your DB
+  // ...
+  res.json({ ok: true });
 });
 
 
@@ -5505,7 +5510,7 @@ app.use(attachRequestLogger({
   // This prevents NEW logs from being generated when you refresh the log page
   silentPaths: [
     /^\/api\/admin\/logs(?:\/.*)?$/,
-    /^\/api\/health/ 
+    /^\/api\/health/
   ]
 }));
 
@@ -5549,7 +5554,7 @@ app.post('/api/coteries', authRequired, async (req, res) => {
     }
 
     const chasse = Number(traits.chasse || 0);
-    const lien   = Number(traits.lien   || 0);
+    const lien = Number(traits.lien || 0);
     const portillon = Number(traits.portillon || 0);
 
     const [ins] = await pool.query(
@@ -5688,7 +5693,7 @@ app.put('/api/coteries/:id', authRequired, async (req, res) => {
     if (type != null) { fields.push('type=?'); params.push(type || null); }
     if (domain_id !== undefined) { fields.push('domain_id=?'); params.push(domain_id || null); }
     if (traits) {
-      fields.push('chasse=?','lien=?','portillon=?');
+      fields.push('chasse=?', 'lien=?', 'portillon=?');
       params.push(Number(traits.chasse || 0), Number(traits.lien || 0), Number(traits.portillon || 0));
     }
     if (required !== undefined) { fields.push('required_json=?'); params.push(required ? JSON.stringify(required) : null); }
@@ -5772,16 +5777,16 @@ app.delete('/api/coteries/:id', authRequired, requireAdmin, async (req, res) => 
 app.get('/api/downtimes/config', authRequired, async (req, res) => {
   try {
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-    
+
     const deadline = await getSetting('downtime_deadline', null);
-    const opening  = await getSetting('downtime_opening', null);
-    const projectDeadline = await getSetting('project_deadline', null); 
+    const opening = await getSetting('downtime_opening', null);
+    const projectDeadline = await getSetting('project_deadline', null);
     const activePhase = await getSetting('downtime_active_phase', 'standard'); // <-- NEW
-    
+
     res.json({
       downtime_deadline: deadline || null,
-      downtime_opening: opening  || null,
-      project_deadline: projectDeadline || null, 
+      downtime_opening: opening || null,
+      project_deadline: projectDeadline || null,
       downtime_active_phase: activePhase, // <-- NEW
     });
   } catch (e) {
@@ -5793,7 +5798,7 @@ app.get('/api/downtimes/config', authRequired, async (req, res) => {
 // WRITE (admins): save the dates
 app.post('/api/admin/downtimes/config', authRequired, requireAdmin, async (req, res) => {
   try {
-    const { downtime_deadline, downtime_opening, project_deadline, downtime_active_phase } = req.body || {}; 
+    const { downtime_deadline, downtime_opening, project_deadline, downtime_active_phase } = req.body || {};
 
     if (downtime_deadline && isNaN(new Date(downtime_deadline).getTime())) {
       return res.status(400).json({ error: 'Invalid downtime_deadline date' });
@@ -5801,7 +5806,7 @@ app.post('/api/admin/downtimes/config', authRequired, requireAdmin, async (req, 
     if (downtime_opening && isNaN(new Date(downtime_opening).getTime())) {
       return res.status(400).json({ error: 'Invalid downtime_opening date' });
     }
-    if (project_deadline && isNaN(new Date(project_deadline).getTime())) { 
+    if (project_deadline && isNaN(new Date(project_deadline).getTime())) {
       return res.status(400).json({ error: 'Invalid project_deadline date' });
     }
 
@@ -5811,15 +5816,15 @@ app.post('/api/admin/downtimes/config', authRequired, requireAdmin, async (req, 
     if (typeof downtime_active_phase !== 'undefined') await setSetting('downtime_active_phase', downtime_active_phase || 'standard'); // <-- NEW
 
     const deadline = await getSetting('downtime_deadline', null);
-    const opening  = await getSetting('downtime_opening', null);
-    const projDeadline = await getSetting('project_deadline', null); 
+    const opening = await getSetting('downtime_opening', null);
+    const projDeadline = await getSetting('project_deadline', null);
     const phase = await getSetting('downtime_active_phase', 'standard'); // <-- NEW
 
     res.json({
       ok: true,
       downtime_deadline: deadline || null,
-      downtime_opening: opening  || null,
-      project_deadline: projDeadline || null, 
+      downtime_opening: opening || null,
+      project_deadline: projDeadline || null,
       downtime_active_phase: phase // <-- NEW
     });
   } catch (e) {
@@ -5834,14 +5839,14 @@ app.get('/api/downtimes/config', authRequired, async (req, res) => {
   try {
     // FIX: Prevent browser caching so new deadlines appear immediately for players
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-    
+
     const deadline = await getSetting('downtime_deadline', null);
-    const opening  = await getSetting('downtime_opening', null);
+    const opening = await getSetting('downtime_opening', null);
     const projectDeadline = await getSetting('project_deadline', null); // <-- Added
-    
+
     res.json({
       downtime_deadline: deadline || null,
-      downtime_opening: opening  || null,
+      downtime_opening: opening || null,
       project_deadline: projectDeadline || null, // <-- Added
     });
   } catch (e) {
@@ -5855,7 +5860,7 @@ app.get('/api/downtimes/config', authRequired, async (req, res) => {
 app.post('/api/admin/downtimes/config', authRequired, requireAdmin, async (req, res) => {
   try {
     // <-- Added project_deadline to destructuring
-    const { downtime_deadline, downtime_opening, project_deadline } = req.body || {}; 
+    const { downtime_deadline, downtime_opening, project_deadline } = req.body || {};
 
     if (downtime_deadline && isNaN(new Date(downtime_deadline).getTime())) {
       return res.status(400).json({ error: 'Invalid downtime_deadline date' });
@@ -5878,13 +5883,13 @@ app.post('/api/admin/downtimes/config', authRequired, requireAdmin, async (req, 
     }
 
     const deadline = await getSetting('downtime_deadline', null);
-    const opening  = await getSetting('downtime_opening', null);
+    const opening = await getSetting('downtime_opening', null);
     const projDeadline = await getSetting('project_deadline', null); // <-- Added fetch back
 
     res.json({
       ok: true,
       downtime_deadline: deadline || null,
-      downtime_opening: opening  || null,
+      downtime_opening: opening || null,
       project_deadline: projDeadline || null, // <-- Added return
     });
   } catch (e) {
@@ -5920,7 +5925,7 @@ app.get('/api/admin/premonitions', authRequired, requireAdmin, async (req, res) 
       FROM premonition_recipients pr
       JOIN users u ON u.id = pr.user_id
       LEFT JOIN characters c ON c.user_id = u.id
-      WHERE pr.premonition_id IN (${ids.map(()=>'?').join(',')})
+      WHERE pr.premonition_id IN (${ids.map(() => '?').join(',')})
       ORDER BY u.display_name ASC
     `, ids);
 
@@ -6010,7 +6015,7 @@ app.post('/api/admin/premonitions/send', authRequired, requireAdmin, async (req,
   try {
     const { content_type, content_text, content_url, user_ids = [] } = req.body;
     const sendToAllMalks = user_ids.includes('all_malkavians');
-    
+
     if (!content_type || (!content_text && !content_url)) {
       return res.status(400).json({ error: 'Type and content (text or URL) are required' });
     }
@@ -6050,7 +6055,7 @@ app.post('/api/admin/premonitions/send', authRequired, requireAdmin, async (req,
         [values]
       );
 
-// --- UPDATED: DISCORD PREMONITION DMs ---
+      // --- UPDATED: DISCORD PREMONITION DMs ---
       const discordEnabled = await getSetting('discord_enabled', 'true') === 'true';
       const notifyPrems = await getSetting('discord_notify_prems', 'true') === 'true';
 
@@ -6076,7 +6081,7 @@ app.post('/api/admin/premonitions/send', authRequired, requireAdmin, async (req,
                 } else if (content_url) {
                   dmMsg += `\n🔗 ${content_url}`;
                 }
-                
+
                 await discordUser.send(dmMsg);
                 log.ok(`Premonition DM sent to ${row.display_name}`);
               }
@@ -6089,18 +6094,18 @@ app.post('/api/admin/premonitions/send', authRequired, requireAdmin, async (req,
         }
       } else {
         // This log will appear if the bot skips the DM process entirely
-        log.warn('Discord DM Skipped: Feature is toggled OFF or Bot is not ready.', { 
-          enabled: discordEnabled, 
-          notify: notifyPrems, 
-          ready: discordClient?.isReady() 
+        log.warn('Discord DM Skipped: Feature is toggled OFF or Bot is not ready.', {
+          enabled: discordEnabled,
+          notify: notifyPrems,
+          ready: discordClient?.isReady()
         });
       }
       // ------------------------------------
     }
-    
+
     log.adm('Admin sent premonition', { id: premonitionId, by_user_id: req.user.id, targets: sendToAllMalks ? 'all_malks' : targetUserIds });
     res.status(201).json({ ok: true, premonition_id: premonitionId, count: targetUserIds.length });
-  
+
 
   } catch (e) {
     log.err('Failed to send premonition', { message: e.message, stack: e.stack });
@@ -6150,9 +6155,9 @@ app.get('/api/premonitions/media/:id', authRequired, async (req, res) => {
   try {
     await _ensurePremonitionsMediaTables();
     const id = Number(req.params.id) || 0;
-    
+
     // **FIX: Initialize hasAccess here**
-    let hasAccess = req.user.role === 'admin'; 
+    let hasAccess = req.user.role === 'admin';
 
     // Check if user is admin OR has access to this premonition
     if (!hasAccess) {
@@ -6164,7 +6169,7 @@ app.get('/api/premonitions/media/:id', authRequired, async (req, res) => {
         JOIN premonition_recipients pr ON p.id = pr.premonition_id
         WHERE p.content_url LIKE ? AND pr.user_id = ?
       `, [likePattern, req.user.id]); // FIX: Pass the correctly built string
-      
+
       if (accessRows.length > 0) {
         hasAccess = true;
       }
@@ -6203,20 +6208,20 @@ async function getSessionInternalId(codeOrId) {
 app.post('/api/live-session', authRequired, requireCourt, moderateLimiter, async (req, res) => {
   try {
     const { name } = req.body;
-    
+
     // Generate an 8-letter DDMMYY + Number code
     const now = new Date();
     const dd = String(now.getDate()).padStart(2, '0');
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     const yy = String(now.getFullYear()).slice(-2);
     const prefix = `${dd}${mm}${yy}`;
-    
+
     const [countRows] = await pool.query("SELECT COUNT(*) as c FROM live_sessions WHERE session_code LIKE ?", [`${prefix}%`]);
     const nextNum = String((countRows[0].c || 0) + 1).padStart(2, '0');
     const sessionCode = `${prefix}${nextNum}`;
 
     const [r] = await pool.query(
-      "INSERT INTO live_sessions (name, admin_id, session_code, status) VALUES (?, ?, ?, 'active')", 
+      "INSERT INTO live_sessions (name, admin_id, session_code, status) VALUES (?, ?, ?, 'active')",
       [name || 'Live Session', req.user.id, sessionCode]
     );
 
@@ -6233,19 +6238,19 @@ app.post('/api/live-session/:id/end', authRequired, requireCourt, async (req, re
     const [rows] = await pool.query('SELECT id, created_at, status FROM live_sessions WHERE session_code=? OR id=?', [req.params.id, req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Session not found' });
     if (rows[0].status === 'ended') return res.json({ ok: true, message: 'Already ended' });
-    
+
     const internalId = rows[0].id;
     // Calculate total duration
     const duration = Math.floor((Date.now() - new Date(rows[0].created_at).getTime()) / 1000);
-    
+
     await pool.query(
       "UPDATE live_sessions SET status='ended', ended_at=NOW(), duration_seconds=? WHERE id=?",
       [duration, internalId]
     );
-    
+
     log.adm('Live Session Ended', { session: req.params.id, duration_seconds: duration });
     res.json({ ok: true, duration_seconds: duration });
-  } catch(e) {
+  } catch (e) {
     res.status(500).json({ error: 'Failed to end session' });
   }
 });
@@ -6261,7 +6266,7 @@ app.get('/api/admin/live-sessions', authRequired, requireCourt, async (req, res)
       ORDER BY s.created_at DESC
     `);
     res.json({ sessions });
-  } catch(e) {
+  } catch (e) {
     res.status(500).json({ error: 'Failed to fetch sessions' });
   }
 });
@@ -6269,12 +6274,12 @@ app.get('/api/admin/live-sessions', authRequired, requireCourt, async (req, res)
 // Get session details (Calculates running timer if active)
 app.get('/api/live-session/:id', authRequired, async (req, res) => {
   const [rows] = await pool.query(
-    'SELECT s.*, u.display_name as admin_name FROM live_sessions s LEFT JOIN users u ON s.admin_id = u.id WHERE s.session_code=? OR s.id=?', 
+    'SELECT s.*, u.display_name as admin_name FROM live_sessions s LEFT JOIN users u ON s.admin_id = u.id WHERE s.session_code=? OR s.id=?',
     [req.params.id, req.params.id]
   );
   if (!rows.length) return res.status(404).json({ error: 'Session not found' });
   const s = rows[0];
-  try { s.metadata = typeof s.metadata === 'string' ? JSON.parse(s.metadata) : (s.metadata || {}); } catch(e) { s.metadata = {}; }
+  try { s.metadata = typeof s.metadata === 'string' ? JSON.parse(s.metadata) : (s.metadata || {}); } catch (e) { s.metadata = {}; }
   if (s.status === 'active') {
     s.duration_seconds = Math.floor((Date.now() - new Date(s.created_at).getTime()) / 1000);
   }
@@ -6285,9 +6290,9 @@ app.get('/api/live-session/:id', authRequired, async (req, res) => {
 app.post('/api/live-session/:id/join', authRequired, async (req, res) => {
   const internalId = await getSessionInternalId(req.params.id);
   if (!internalId) return res.status(404).json({ error: 'Session not found' });
-  
+
   const { characterId } = req.body;
-  await pool.query('INSERT IGNORE INTO live_session_participants (session_id, user_id, character_id) VALUES (?, ?, ?)', 
+  await pool.query('INSERT IGNORE INTO live_session_participants (session_id, user_id, character_id) VALUES (?, ?, ?)',
     [internalId, req.user.id, characterId]);
   res.json({ ok: true });
 });
@@ -6307,7 +6312,7 @@ app.get('/api/live-session/:id/rolls', authRequired, async (req, res) => {
            OR ls.admin_id = ? 
            OR ? = 'admin'
          )
-       ORDER BY lsr.created_at DESC LIMIT 50`, 
+       ORDER BY lsr.created_at DESC LIMIT 50`,
       [internalId, req.user.id, req.user.id, req.user.role]
     );
     res.json({ rolls: rows });
@@ -6322,7 +6327,7 @@ app.post('/api/live-session/:id/rolls', authRequired, async (req, res) => {
   if (!internalId) return res.status(404).json({ error: 'Session not found' });
 
   const { characterId, character_name, roll_type, pool: poolCount, hunger, results, successes, note, is_hidden } = req.body;
-  
+
   try {
     // 1. Log to the localized session table
     await pool.query(
@@ -6335,7 +6340,7 @@ app.post('/api/live-session/:id/rolls', authRequired, async (req, res) => {
       normal: (results?.normal || []).map(Number),
       hunger: (results?.hunger || []).map(Number),
     });
-    
+
     const payload = {
       normal: results?.normal || [],
       hunger: results?.hunger || [],
@@ -6349,7 +6354,7 @@ app.post('/api/live-session/:id/rolls', authRequired, async (req, res) => {
        (user_id, character_id, pool, hunger, sides, results_json, successes, crit_pairs, messy_crit, bestial_failure, note, is_hidden)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
-        req.user.id, characterId || null, 
+        req.user.id, characterId || null,
         Number(poolCount) || (payload.normal.length + payload.hunger.length),
         Number(hunger) || payload.hunger.length,
         10,
@@ -6371,9 +6376,9 @@ app.post('/api/live-session/:id/rolls', authRequired, async (req, res) => {
           await pool.query('UPDATE domains SET safety_rating = GREATEST(safety_rating - 1, 0) WHERE id=?', [domId]);
           await pool.query('INSERT INTO admin_audit_logs (admin_id, action, details) VALUES (?, ?, ?)', [0, 'SYSTEM_MESSY_CRIT', `Character ${characterId} rolled a Messy Critical. Domain ${domId} safety reduced.`]);
         }
-      } catch(e) { log.err('Messy crit safety reduction failed', { error: e.message }); }
+      } catch (e) { log.err('Messy crit safety reduction failed', { error: e.message }); }
     }
-    
+
     if (req.app.get('io')) {
       req.app.get('io').to(`session_${req.params.id}`).emit('refresh_session');
     }
@@ -6407,7 +6412,7 @@ app.patch('/api/live-session/:id/metadata', authRequired, requireCourt, async (r
       req.app.get('io').to(`session_${req.params.id}`).emit('refresh_session');
     }
     res.json({ ok: true });
-  } catch(e) {
+  } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to update metadata' });
   }
@@ -6416,13 +6421,13 @@ app.patch('/api/live-session/:id/metadata', authRequired, requireCourt, async (r
 // Broadcast a message (ST/Admin) - CHANGED TO requireCourt
 app.post('/api/live-session/:id/broadcast', authRequired, requireCourt, async (req, res) => {
   const internalId = await getSessionInternalId(req.params.id);
-  await pool.query('INSERT INTO live_session_broadcasts (session_id, message, target_character_id) VALUES (?, ?, ?)', 
+  await pool.query('INSERT INTO live_session_broadcasts (session_id, message, target_character_id) VALUES (?, ?, ?)',
     [internalId, req.body.message, req.body.target_character_id || null]);
-    
+
   if (req.app.get('io')) {
     req.app.get('io').to(`session_${req.params.id}`).emit('refresh_session');
   }
-  
+
   res.json({ ok: true });
 });
 
@@ -6430,7 +6435,7 @@ app.get('/api/live-session/:id/broadcast', authRequired, async (req, res) => {
   try {
     const internalId = await getSessionInternalId(req.params.id);
     const [rows] = await pool.query(
-      'SELECT * FROM live_session_broadcasts WHERE session_id=? ORDER BY created_at DESC LIMIT 20', 
+      'SELECT * FROM live_session_broadcasts WHERE session_id=? ORDER BY created_at DESC LIMIT 20',
       [internalId]
     );
     res.json({ broadcasts: rows });
@@ -6444,59 +6449,59 @@ app.patch('/api/live-session/:id/players/:charId', authRequired, requireCourt, a
   try {
     const charId = req.params.charId;
     const { hungerDelta, healthSupDelta, healthAggDelta, wpSupDelta, wpAggDelta, humanityDelta, frenzyState, forceRouseCheck } = req.body;
-    
+
     const [rows] = await pool.query('SELECT sheet FROM characters WHERE id=?', [charId]);
-    if(!rows.length) return res.status(404).json({error: 'Char not found'});
-    
+    if (!rows.length) return res.status(404).json({ error: 'Char not found' });
+
     let sheet = {};
-    try { 
-      sheet = typeof rows[0].sheet === 'string' ? JSON.parse(rows[0].sheet || '{}') : (rows[0].sheet || {}); 
-    } catch(e) {}
-    
+    try {
+      sheet = typeof rows[0].sheet === 'string' ? JSON.parse(rows[0].sheet || '{}') : (rows[0].sheet || {});
+    } catch (e) { }
+
     if (hungerDelta !== undefined) sheet.hunger = Math.max(0, Math.min(5, Number(sheet.hunger || 0) + Number(hungerDelta)));
     if (humanityDelta !== undefined) {
-        const currentHum = Number(sheet.morality?.humanity ?? sheet.humanity ?? 7);
-        const nextHum = Math.max(0, Math.min(10, currentHum + Number(humanityDelta)));
-        sheet.humanity = nextHum;
-        if(!sheet.morality) sheet.morality = {};
-        sheet.morality.humanity = nextHum;
+      const currentHum = Number(sheet.morality?.humanity ?? sheet.humanity ?? 7);
+      const nextHum = Math.max(0, Math.min(10, currentHum + Number(humanityDelta)));
+      sheet.humanity = nextHum;
+      if (!sheet.morality) sheet.morality = {};
+      sheet.morality.humanity = nextHum;
     }
     if (healthSupDelta !== undefined) {
-        if(!sheet.health) sheet.health = { superficial:0, aggravated:0 };
-        sheet.health.superficial = Math.max(0, Number(sheet.health.superficial || 0) + Number(healthSupDelta));
+      if (!sheet.health) sheet.health = { superficial: 0, aggravated: 0 };
+      sheet.health.superficial = Math.max(0, Number(sheet.health.superficial || 0) + Number(healthSupDelta));
     }
     if (healthAggDelta !== undefined) {
-        if(!sheet.health) sheet.health = { superficial:0, aggravated:0 };
-        sheet.health.aggravated = Math.max(0, Number(sheet.health.aggravated || 0) + Number(healthAggDelta));
+      if (!sheet.health) sheet.health = { superficial: 0, aggravated: 0 };
+      sheet.health.aggravated = Math.max(0, Number(sheet.health.aggravated || 0) + Number(healthAggDelta));
     }
     if (wpSupDelta !== undefined) {
-        if(!sheet.willpower) sheet.willpower = { superficial:0, aggravated:0 };
-        sheet.willpower.superficial = Math.max(0, Number(sheet.willpower.superficial || 0) + Number(wpSupDelta));
+      if (!sheet.willpower) sheet.willpower = { superficial: 0, aggravated: 0 };
+      sheet.willpower.superficial = Math.max(0, Number(sheet.willpower.superficial || 0) + Number(wpSupDelta));
     }
     if (wpAggDelta !== undefined) {
-        if(!sheet.willpower) sheet.willpower = { superficial:0, aggravated:0 };
-        sheet.willpower.aggravated = Math.max(0, Number(sheet.willpower.aggravated || 0) + Number(wpAggDelta));
+      if (!sheet.willpower) sheet.willpower = { superficial: 0, aggravated: 0 };
+      sheet.willpower.aggravated = Math.max(0, Number(sheet.willpower.aggravated || 0) + Number(wpAggDelta));
     }
     if (frenzyState !== undefined) {
-        sheet.frenzyState = frenzyState;
+      sheet.frenzyState = frenzyState;
     }
 
     if (forceRouseCheck) {
-        const rouseDie = Math.floor(Math.random() * 10) + 1;
-        if (rouseDie < 6) {
-            sheet.hunger = Math.max(0, Math.min(5, (sheet.hunger || 0) + 1));
-        }
-        const internalId = await getSessionInternalId(req.params.id);
-        if (internalId) {
-            await pool.query('INSERT INTO live_session_broadcasts (session_id, message) VALUES (?, ?)', 
-            [internalId, `ST forced a Rouse Check. Result: ${rouseDie} ${rouseDie < 6 ? '(Failed)' : '(Safe)'}`]);
-        }
+      const rouseDie = Math.floor(Math.random() * 10) + 1;
+      if (rouseDie < 6) {
+        sheet.hunger = Math.max(0, Math.min(5, (sheet.hunger || 0) + 1));
+      }
+      const internalId = await getSessionInternalId(req.params.id);
+      if (internalId) {
+        await pool.query('INSERT INTO live_session_broadcasts (session_id, message) VALUES (?, ?)',
+          [internalId, `ST forced a Rouse Check. Result: ${rouseDie} ${rouseDie < 6 ? '(Failed)' : '(Safe)'}`]);
+      }
     }
 
     await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), charId]);
     res.json({ ok: true });
-  } catch(e) {
-    res.status(500).json({error: 'Failed to update player'});
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to update player' });
   }
 });
 
@@ -6506,7 +6511,7 @@ app.post('/api/dice/rolls', authRequired, async (req, res) => {
   try {
 
     const { pool: poolCount, hunger, sides = 10, results, difficulty, note } = req.body || {};
-    
+
     if (!results || !Array.isArray(results.normal) || !Array.isArray(results.hunger)) {
       return res.status(400).json({ error: 'Invalid results format' });
     }
@@ -6515,7 +6520,7 @@ app.post('/api/dice/rolls', authRequired, async (req, res) => {
     try {
       const [rows] = await pool.query('SELECT id FROM characters WHERE user_id=? LIMIT 1', [req.user.id]);
       if (rows && rows.length > 0) charId = rows[0].id;
-    } catch {}
+    } catch { }
 
     const outcome = computeV5Outcome({
       normal: results.normal.map(Number),
@@ -6533,7 +6538,7 @@ app.post('/api/dice/rolls', authRequired, async (req, res) => {
        (user_id, character_id, pool, hunger, sides, results_json, successes, crit_pairs, messy_crit, bestial_failure, note)
        VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
       [
-        req.user.id, charId, 
+        req.user.id, charId,
         Number(poolCount) || (results.normal.length + results.hunger.length),
         Number(hunger) || results.hunger.length,
         sides,
@@ -6564,10 +6569,10 @@ app.get('/api/admin/dice/rolls', authRequired, requireAdmin, async (req, res) =>
 
     // Allow the Stats Engine to pull all data, otherwise enforce a safe limit for the Logs tab
     if (req.query.limit === 'all') {
-        limitClause = ''; 
+      limitClause = '';
     } else {
-        const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 1000);
-        limitClause = `LIMIT ${limit}`;
+      const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 1000);
+      limitClause = `LIMIT ${limit}`;
     }
 
     const userId = Number(req.query.user_id) || null;
@@ -6629,7 +6634,7 @@ app.get('/api/admin/dice/rolls', authRequired, requireAdmin, async (req, res) =>
       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
       ORDER BY r.created_at DESC
       LIMIT ${limit}
-    `.replace('messial_crit','messy_crit'); // typo guard if pastes get mangled
+    `.replace('messial_crit', 'messy_crit'); // typo guard if pastes get mangled
 
     const [rows] = await pool.query(sql, vals);
     res.json({ rolls: rows });
@@ -6732,17 +6737,17 @@ app.post('/api/news/upload', authRequired, memoryUpload.single('file'), async (r
   try {
     // Check permissions: Admin or Court
     if (req.user.role !== 'admin' && req.user.role !== 'courtuser') {
-        return res.status(403).json({ error: 'Forbidden' });
+      return res.status(403).json({ error: 'Forbidden' });
     }
 
     if (!req.file) return res.status(400).json({ error: 'File required' });
-    
+
     const { originalname, mimetype, size, buffer } = req.file;
     const [ins] = await pool.query(
       'INSERT INTO news_media (filename, mime, size, data) VALUES (?,?,?,?)',
       [originalname || 'upload', mimetype, size, buffer]
     );
-    
+
     res.json({ url: `/api/news/media/${ins.insertId}` });
   } catch (e) {
     log.err('News upload failed', { message: e.message });
@@ -6797,15 +6802,15 @@ app.post('/api/news', authRequired, async (req, res) => {
 
     // --- PERMISSION CHECK ---
     if (type === 'news') {
-        if (req.user.role !== 'admin') {
-            return res.status(403).json({ error: 'Only Admins can post official News' });
-        }
+      if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Only Admins can post official News' });
+      }
     } else if (type === 'announcement') {
-        if (req.user.role !== 'admin' && req.user.role !== 'courtuser') {
-            return res.status(403).json({ error: 'Only Court/Admin can post Announcements' });
-        }
+      if (req.user.role !== 'admin' && req.user.role !== 'courtuser') {
+        return res.status(403).json({ error: 'Only Court/Admin can post Announcements' });
+      }
     } else {
-        return res.status(400).json({ error: 'Invalid type' });
+      return res.status(400).json({ error: 'Invalid type' });
     }
 
     if (!title || !body) return res.status(400).json({ error: 'Title and Body are required' });
@@ -6830,30 +6835,30 @@ app.post('/api/news', authRequired, async (req, res) => {
     const discordEnabled = await getSetting('discord_enabled', 'true') === 'true';
     const notifyPrems = await getSetting('discord_notify_news', 'true') === 'true';
     const tokenPresent = !!process.env.DISCORD_BOT_TOKEN;
-    
+
     log.info('Discord News Broadcast Check', { discordEnabled, notifyPrems, tokenPresent });
-    
+
     if (discordEnabled && notifyPrems && tokenPresent) {
       try {
         const channelId = await getSetting('discord_channel_id', null);
         if (channelId) {
           const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
           const articleLink = `${appBase}/news/${insertResult.insertId}`;
-          
+
           const prefix = req.body.discord_prefix || `🔥 **Hot news from the mortal world!** 🔥`;
           let broadcast = `# ${prefix}\n\n**${title}**\n`;
           if (subtitle) broadcast += `*${subtitle}*\n`;
-          
+
           const outletNames = {
             'ERT': 'ERT News', 'SKAI': 'SKAI.gr', 'ALPHA': 'Alpha News',
             'MEGA': 'Mega Gegonota', 'KATHIMERINI': 'Kathimerini',
             'GOSSIP': 'Gossip-tv', 'OPENTV': 'Open TV'
           };
           const sourceName = outletNames[theme] || theme || 'Unknown';
-          
+
           broadcast += `\n**Source:** ${sourceName}`;
           broadcast += `\n**Read the full article:**\n${articleLink}`;
-          
+
           await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, {
             content: broadcast
           }, {
@@ -6879,12 +6884,12 @@ app.post('/api/news', authRequired, async (req, res) => {
 
 // DELETE /api/news/:id (Admin Only)
 app.delete('/api/news/:id', authRequired, requireAdmin, async (req, res) => {
-    try {
-        await pool.query('DELETE FROM news_entries WHERE id=?', [req.params.id]);
-        res.json({ ok: true });
-    } catch(e) {
-        res.status(500).json({ error: 'Delete failed' });
-    }
+  try {
+    await pool.query('DELETE FROM news_entries WHERE id=?', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Delete failed' });
+  }
 });
 
 // ================= RUMORS API =================
@@ -6927,17 +6932,17 @@ app.post('/api/rumors', authRequired, async (req, res) => {
     const { title, body, media_url, discord_prefix } = req.body;
 
     if (req.user.role !== 'admin' && req.user.role !== 'courtuser') {
-        const [chars] = await pool.query('SELECT id, sheet FROM characters WHERE user_id = ?', [req.user.id]);
-        let isActive = false;
-        if (chars.length > 0) {
-            try {
-                const sheetData = typeof chars[0].sheet === 'string' ? JSON.parse(chars[0].sheet) : chars[0].sheet;
-                if (sheetData && sheetData.is_active) isActive = true;
-            } catch (e) {}
-        }
-        if (!isActive) {
-            return res.status(403).json({ error: 'You must have an active character to post rumors.' });
-        }
+      const [chars] = await pool.query('SELECT id, sheet FROM characters WHERE user_id = ?', [req.user.id]);
+      let isActive = false;
+      if (chars.length > 0) {
+        try {
+          const sheetData = typeof chars[0].sheet === 'string' ? JSON.parse(chars[0].sheet) : chars[0].sheet;
+          if (sheetData && sheetData.is_active) isActive = true;
+        } catch (e) { }
+      }
+      if (!isActive) {
+        return res.status(403).json({ error: 'You must have an active character to post rumors.' });
+      }
     }
 
     if (!title || !body) return res.status(400).json({ error: 'Title and Body are required' });
@@ -6957,16 +6962,16 @@ app.post('/api/rumors', authRequired, async (req, res) => {
         if (channelId) {
           const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
           const rumorLink = `${appBase}/rumors`;
-          
+
           const prefix = discord_prefix || "🤫 A new whisper echoes in the night...";
-          
+
           let plainBody = body.replace(/<[^>]*>?/gm, '').trim();
           if (plainBody.length > 1500) {
             plainBody = plainBody.substring(0, 1500) + '...';
           }
-          
+
           const broadcast = `# ${prefix}\n\n**${title}**\n\n_${plainBody}_\n\n**Investigate the Rumors:**\n${rumorLink}`;
-          
+
           await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, {
             content: broadcast
           }, {
@@ -6992,12 +6997,12 @@ app.post('/api/rumors', authRequired, async (req, res) => {
 
 // DELETE /api/rumors/:id (Admin Only)
 app.delete('/api/rumors/:id', authRequired, requireAdmin, async (req, res) => {
-    try {
-        await pool.query('DELETE FROM rumors WHERE id=?', [req.params.id]);
-        res.json({ ok: true });
-    } catch(e) {
-        res.status(500).json({ error: 'Delete failed' });
-    }
+  try {
+    await pool.query('DELETE FROM rumors WHERE id=?', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Delete failed' });
+  }
 });
 
 // GET: List all hunts
@@ -7027,22 +7032,22 @@ app.patch('/api/admin/hunts/:huntId/steps/:stepId/move/:direction', authRequired
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    
+
     // Get current step
     const [[currentStep]] = await conn.query('SELECT id, step_order FROM hunt_steps WHERE id = ? AND hunt_id = ?', [stepId, huntId]);
     if (!currentStep) throw new Error("Step not found");
 
     const targetOrder = direction === 'up' ? currentStep.step_order - 1 : currentStep.step_order + 1;
-    
+
     // Get the step we are swapping with
     const [[swapStep]] = await conn.query('SELECT id, step_order FROM hunt_steps WHERE hunt_id = ? AND step_order = ?', [huntId, targetOrder]);
-    
+
     if (swapStep) {
       // Swap their orders
       await conn.query('UPDATE hunt_steps SET step_order = ? WHERE id = ?', [targetOrder, currentStep.id]);
       await conn.query('UPDATE hunt_steps SET step_order = ? WHERE id = ?', [currentStep.step_order, swapStep.id]);
     }
-    
+
     await conn.commit();
     res.json({ ok: true });
   } catch (e) {
@@ -7098,10 +7103,10 @@ app.put('/api/admin/hunts/:huntId/steps/:stepId', authRequired, requireAdmin, as
   const { task_type, prompt, target_data } = req.body;
   const tData = typeof target_data === 'string' ? target_data : JSON.stringify(target_data);
   const isManual = ['photo', 'draw', 'audio'].includes(task_type) ? 1 : 0;
-  
+
   try {
     await pool.query(
-      'UPDATE hunt_steps SET task_type=?, prompt=?, target_data=?, manual_review=? WHERE id=?', 
+      'UPDATE hunt_steps SET task_type=?, prompt=?, target_data=?, manual_review=? WHERE id=?',
       [task_type, prompt, tData, isManual, req.params.stepId]
     );
     res.json({ success: true });
@@ -7143,7 +7148,7 @@ app.get('/api/admin/hunts/:huntId/progress', authRequired, requireAdmin, async (
       LEFT JOIN hunt_steps hs ON hp.current_step_id = hs.id
       WHERE hp.hunt_id = ?
     `, [req.params.huntId]);
-    
+
     // Get total steps to calculate the exact percentage
     const [stepCount] = await pool.query('SELECT COUNT(*) as total FROM hunt_steps WHERE hunt_id = ?', [req.params.huntId]);
     const totalSteps = stepCount[0].total || 1;
@@ -7153,7 +7158,7 @@ app.get('/api/admin/hunts/:huntId/progress', authRequired, requireAdmin, async (
       let percent = 0;
       if (p.completed) percent = 100;
       else if (p.current_step > 1) percent = Math.round(((p.current_step - 1) / totalSteps) * 100);
-      
+
       return {
         ...p,
         percent: percent
@@ -7188,7 +7193,7 @@ app.get('/api/admin/hunts/:huntId/reviews', authRequired, requireAdmin, async (r
         AND hs.task_type IN ('photo', 'draw', 'audio') 
         AND (s.status = 'pending' OR s.status IS NULL)
     `, [req.params.huntId]);
-    
+
     res.json({ reviews });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -7197,14 +7202,14 @@ app.get('/api/admin/hunts/:huntId/reviews', authRequired, requireAdmin, async (r
 app.post('/api/admin/reviews/:submissionId/:action', authRequired, requireAdmin, async (req, res) => {
   const { submissionId, action } = req.params;
   const newStatus = action === 'approve' ? 'approved' : 'rejected';
-  
+
   try {
     // 1. Update the submission status
     await pool.query('UPDATE hunt_submissions SET status = ? WHERE id = ?', [newStatus, submissionId]);
-    
+
     // 2. If the ST rejects it, we punish the player
     if (newStatus === 'rejected') {
-      
+
       // Find out exactly who submitted this and for what step/hunt
       const [[sub]] = await pool.query(`
         SELECT s.user_id, s.step_id, hs.hunt_id, hs.step_order, hs.prompt
@@ -7224,16 +7229,16 @@ app.post('/api/admin/reviews/:submissionId/:action', authRequired, requireAdmin,
         // Send a push notification alerting them of their failure
         const title = "❌ Evidence Rejected";
         const body = `The Court found your submission for Step ${sub.step_order} unacceptable. You must acquire better evidence.`;
-        
-        await sendPushNotification(sub.user_id, title, body).catch(() => {});
+
+        await sendPushNotification(sub.user_id, title, body).catch(() => { });
         log.adm('Evidence rejected & player rolled back', { admin: req.user.id, player: sub.user_id, step: sub.step_order });
       }
     }
-    
+
     res.json({ success: true });
-  } catch (err) { 
+  } catch (err) {
     log.err('Review action failed', { error: err.message });
-    res.status(500).json({ error: err.message }); 
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -7242,7 +7247,7 @@ app.post('/api/admin/hunts/:id/steps', authRequired, requireAdmin, async (req, r
   try {
     const { task_type, prompt, target_data, step_order } = req.body;
     const isManual = ['photo', 'draw', 'audio'].includes(task_type) ? 1 : 0;
-    
+
     await pool.query(
       'INSERT INTO hunt_steps (hunt_id, step_order, task_type, prompt, target_data, manual_review) VALUES (?,?,?,?,?,?)',
       [req.params.id, step_order, task_type, prompt, JSON.stringify(target_data), isManual]
@@ -7257,7 +7262,7 @@ app.post('/api/admin/hunts/:id/steps', authRequired, requireAdmin, async (req, r
 app.delete('/api/admin/hunts/:id', authRequired, requireAdmin, async (req, res) => {
   try {
     const huntId = req.params.id;
-    
+
     // 1. Find all Coteries associated with this hunt
     const [groups] = await pool.query('SELECT id FROM hunt_groups WHERE hunt_id=?', [huntId]);
     if (groups.length > 0) {
@@ -7265,13 +7270,13 @@ app.delete('/api/admin/hunts/:id', authRequired, requireAdmin, async (req, res) 
       // 2. Delete all members of those coteries
       await pool.query('DELETE FROM hunt_group_members WHERE group_id IN (?)', [groupIds]);
     }
-    
+
     // 3. Delete the coteries themselves
     await pool.query('DELETE FROM hunt_groups WHERE hunt_id=?', [huntId]);
-    
+
     // 4. Finally, delete the actual chronicle
     await pool.query('DELETE FROM hunts WHERE id=?', [huntId]);
-    
+
     res.json({ ok: true });
   } catch (e) {
     log.err('Failed to delete chronicle', { message: e.message });
@@ -7547,38 +7552,38 @@ app.post('/api/hunts/submit', authRequired, async (req, res) => {
       if (text_answer?.toLowerCase().trim() !== target?.answer?.toLowerCase()) {
         return res.status(400).json({ error: 'Incorrect answer. The Court expects better.' });
       }
-    } 
+    }
     else if (step.task_type === 'qr') {
       if (text_answer?.trim() !== target?.qr_string) {
         return res.status(400).json({ error: 'Invalid Sigil scanned.' });
       }
-    } 
+    }
     else if (step.task_type === 'gps') {
       if (!lat || !lng) return res.status(400).json({ error: 'Missing GPS coordinates.' });
-      
+
       // Haversine formula to calculate distance in meters
       const R = 6371e3; // Earth radius in metres
-      const φ1 = lat * Math.PI/180;
-      const φ2 = target.lat * Math.PI/180;
-      const Δφ = (target.lat-lat) * Math.PI/180;
-      const Δλ = (target.lng-lng) * Math.PI/180;
-      const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
-                Math.cos(φ1) * Math.cos(φ2) *
-                Math.sin(Δλ/2) * Math.sin(Δλ/2);
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      const φ1 = lat * Math.PI / 180;
+      const φ2 = target.lat * Math.PI / 180;
+      const Δφ = (target.lat - lat) * Math.PI / 180;
+      const Δλ = (target.lng - lng) * Math.PI / 180;
+      const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+        Math.cos(φ1) * Math.cos(φ2) *
+        Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
       const distance = R * c;
 
       const allowedRadius = target.radius_meters || 50; // Default 50m allowance for GPS drift
       if (distance > allowedRadius) {
         return res.status(400).json({ error: `Location rejected. You are ${Math.round(distance)} meters away from the target.` });
       }
-    } 
+    }
     else if (['photo', 'draw', 'audio'].includes(step.task_type)) {
       if (!media_id) return res.status(400).json({ error: 'Evidence file required.' });
-      
+
       // Log the submission into the database for the ST to review later
       await pool.query(
-        'INSERT INTO hunt_submissions (user_id, step_id, media_id, status) VALUES (?, ?, ?, ?)', 
+        'INSERT INTO hunt_submissions (user_id, step_id, media_id, status) VALUES (?, ?, ?, ?)',
         [req.user.id, step.id, media_id, 'pending']
       );
       broadcastNtfyAlert(`Player submitted evidence for **Hunt Challenge #${step.id}**.\n\n*Awaiting manual review in the ST panel.*`, { title: 'Hunt Submission', tags: 'mag', priority: 'high' });
@@ -7586,13 +7591,13 @@ app.post('/api/hunts/submit', authRequired, async (req, res) => {
 
     // --- 3. GET NEXT STEP ---
     const [[nextStep]] = await pool.query(
-      'SELECT * FROM hunt_steps WHERE hunt_id=? AND step_order > ? ORDER BY step_order ASC LIMIT 1', 
+      'SELECT * FROM hunt_steps WHERE hunt_id=? AND step_order > ? ORDER BY step_order ASC LIMIT 1',
       [step.hunt_id, step.step_order]
     );
 
     // --- 4. ADVANCE THE TEAM / COTERIE ---
     let targetUserIds = [req.user.id]; // Default to solo player
-    
+
     // Check if the user is in a group for this specific hunt
     const [[myGroup]] = await pool.query(`
       SELECT group_id FROM hunt_group_members 
@@ -7608,14 +7613,14 @@ app.post('/api/hunts/submit', authRequired, async (req, res) => {
     // Update progress for every player in the targetUserIds array
     if (nextStep) {
       await pool.query(
-        'UPDATE hunt_progress SET current_step_id=? WHERE hunt_id=? AND user_id IN (?)', 
+        'UPDATE hunt_progress SET current_step_id=? WHERE hunt_id=? AND user_id IN (?)',
         [nextStep.id, step.hunt_id, targetUserIds]
       );
       res.json({ success: true, completed: false });
     } else {
       // No more steps: The team has won!
       await pool.query(
-        'UPDATE hunt_progress SET completed=1 WHERE hunt_id=? AND user_id IN (?)', 
+        'UPDATE hunt_progress SET completed=1 WHERE hunt_id=? AND user_id IN (?)',
         [step.hunt_id, targetUserIds]
       );
       res.json({ success: true, completed: true });
@@ -7652,7 +7657,7 @@ app.put('/api/users/:id/avatar', authRequired, upload.single('avatar'), async (r
     if (!req.file) {
       return res.status(400).json({ error: 'No image file provided.' });
     }
-    
+
     const buffer = await sharp(req.file.buffer)
       .resize(500, 500, { fit: 'cover' })
       .webp({ quality: 80 })
@@ -7769,17 +7774,17 @@ app.post('/api/admin/domains/draw-problems', authRequired, requireAdmin, async (
   try {
     const [domains] = await pool.query('SELECT id FROM domains');
     if (domains.length === 0) return res.status(400).json({ error: 'No domains exist' });
-    
+
     const shuffled = domains.sort(() => 0.5 - Math.random());
     const selected = shuffled.slice(0, 3);
     const problemList = ['SI Surveillance Activity', 'Lupine Pack Sighted', 'Masquerade Breach Video Leaked', 'Anarch Agitators', 'Blood Shortage'];
-    
+
     for (const dom of selected) {
       const prob = problemList[Math.floor(Math.random() * problemList.length)];
       await pool.query('INSERT INTO domain_problems (domain_id, problem_text) VALUES (?, ?)', [dom.id, prob]);
       await pool.query('UPDATE domains SET safety_rating = GREATEST(safety_rating - 2, 0) WHERE id=?', [dom.id]);
     }
-    
+
     await pool.query('INSERT INTO admin_audit_logs (admin_id, action, details) VALUES (?, ?, ?)', [req.user.id, 'DRAW_DOMAIN_PROBLEMS', `Drew monthly problems for ${selected.length} domains.`]);
     res.json({ ok: true });
   } catch (e) {
@@ -7812,7 +7817,7 @@ app.get('/api/admin/blood-web', authRequired, requireAdmin, async (req, res) => 
     const [chars] = await pool.query('SELECT c.id, c.name, c.sheet, u.display_name FROM characters c JOIN users u ON c.user_id = u.id WHERE c.is_ex = 0 AND c.is_deceased = 0');
     const web = chars.map(c => {
       let sheet = {};
-      try { sheet = JSON.parse(c.sheet) || {}; } catch (e) {}
+      try { sheet = JSON.parse(c.sheet) || {}; } catch (e) { }
       return { id: c.id, name: c.name, player: c.display_name, hunger: Number(sheet.hunger) || 0, bloodPotency: Number(sheet.bloodPotency) || 0 };
     });
     res.json({ web });
@@ -7856,37 +7861,37 @@ app.post('/api/characters/:id/rouse', authRequired, async (req, res) => {
   try {
     const charId = req.params.id;
     const { advantage } = req.body;
-    
+
     // Simple permission check: must own character or be admin
     const [rows] = await pool.query('SELECT user_id, sheet FROM characters WHERE id=?', [charId]);
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
     if (Number(rows[0].user_id) !== Number(req.user.id) && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Forbidden' });
     }
-    
+
     let sheet = rows[0].sheet;
     if (typeof sheet === 'string') {
-      try { sheet = JSON.parse(sheet); } catch(e) { sheet = {}; }
+      try { sheet = JSON.parse(sheet); } catch (e) { sheet = {}; }
     }
     if (!sheet) sheet = {};
     const currentHunger = Number(sheet.hunger) || 0;
-    
+
     const die1 = Math.floor(Math.random() * 10) + 1;
     let die2 = null;
     let success = die1 >= 6;
-    
+
     if (advantage) {
       die2 = Math.floor(Math.random() * 10) + 1;
       if (die2 >= 6) success = true;
     }
-    
+
     let nextHunger = currentHunger;
     if (!success) {
       nextHunger = Math.min(5, currentHunger + 1);
       sheet.hunger = nextHunger;
       await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), charId]);
     }
-    
+
     res.json({
       success,
       die1,
@@ -7902,32 +7907,32 @@ app.post('/api/characters/:id/rouse', authRequired, async (req, res) => {
 app.post('/api/characters/:id/spend-wp', authRequired, async (req, res) => {
   try {
     const charId = req.params.id;
-    
+
     const [rows] = await pool.query('SELECT user_id, sheet FROM characters WHERE id=?', [charId]);
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
     if (rows[0].user_id !== req.user.id && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Forbidden' });
     }
-    
+
     let sheet = rows[0].sheet;
     if (typeof sheet === 'string') {
-      try { sheet = JSON.parse(sheet); } catch(e) { sheet = {}; }
+      try { sheet = JSON.parse(sheet); } catch (e) { sheet = {}; }
     }
     if (!sheet) sheet = {};
     if (!sheet.willpower) sheet.willpower = { superficial: 0, aggravated: 0 };
-    
+
     const comp = Number(sheet.attributes?.Composure) || 1;
     const reso = Number(sheet.attributes?.Resolve) || 1;
     const max = comp + reso;
     const currentWp = (Number(sheet.willpower.superficial) || 0) + (Number(sheet.willpower.aggravated) || 0);
-    
+
     if (currentWp >= max) {
       return res.status(400).json({ error: 'Not enough Willpower' });
     }
-    
+
     sheet.willpower.superficial = (Number(sheet.willpower.superficial) || 0) + 1;
     await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), charId]);
-    
+
     res.json({ ok: true, sheet });
   } catch (e) {
     res.status(500).json({ error: 'WP spend failed' });
@@ -7938,16 +7943,16 @@ app.post('/api/characters/:id/apply-damage', authRequired, async (req, res) => {
   try {
     const charId = req.params.id;
     const { amount, type } = req.body;
-    
+
     const [rows] = await pool.query('SELECT user_id, sheet FROM characters WHERE id=?', [charId]);
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
     if (rows[0].user_id !== req.user.id && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Forbidden' });
     }
-    
+
     let sheet = JSON.parse(rows[0].sheet || '{}');
     if (!sheet.health) sheet.health = { superficial: 0, aggravated: 0 };
-    
+
     // Halve superficial damage if the character is a vampire (assuming it is)
     // We will just do it automatically. If it's aggravated, don't halve it.
     let appliedAmount = Number(amount) || 0;
@@ -7957,9 +7962,9 @@ app.post('/api/characters/:id/apply-damage', authRequired, async (req, res) => {
     } else {
       sheet.health.aggravated = (sheet.health.aggravated || 0) + appliedAmount;
     }
-    
+
     await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), charId]);
-    
+
     res.json({ ok: true, sheet, appliedAmount });
   } catch (e) {
     res.status(500).json({ error: 'Apply damage failed' });
@@ -7994,15 +7999,15 @@ const PORT = process.env.PORT || 3001;
 
 const server = require('http').createServer(app);
 const { Server } = require('socket.io');
-const io = new Server(server, { 
-  cors: { origin: '*' } 
+const io = new Server(server, {
+  cors: { origin: '*' }
 });
 
 io.on('connection', (socket) => {
   socket.on('join_session', (sessionId) => {
     socket.join(`session_${sessionId}`);
   });
-  
+
   socket.on('chat_message', (payload) => {
     io.to(`session_${payload.sessionId}`).emit('chat_message', payload);
   });
@@ -8014,3 +8019,4 @@ server.listen(PORT, () => {
   log.start(`API server started`, { port: PORT, env: process.env.NODE_ENV || 'stable' });
   broadcastNtfyAlert(`API server started on port ${PORT}`, { title: 'Server Online', tags: 'rocket' });
 });
+//port is set to 3001
