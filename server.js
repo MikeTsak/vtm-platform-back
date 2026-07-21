@@ -4817,8 +4817,6 @@ app.post('/api/chat/read', authRequired, async (req, res) => {
 
 /* -------------------- ADMIN DISCORD SETTINGS -------------------- */
 
-/* -------------------- ADMIN DISCORD SETTINGS -------------------- */
-
 // Get current Discord settings
 app.get('/api/admin/discord/config', authRequired, requireAdmin, async (req, res) => {
   try {
@@ -4830,6 +4828,7 @@ app.get('/api/admin/discord/config', authRequired, requireAdmin, async (req, res
     const notify_mail = await getSetting('discord_notify_mail', 'true') === 'true';
     const notify_news = await getSetting('discord_notify_news', 'true') === 'true';
     const notify_prems = await getSetting('discord_notify_prems', 'true') === 'true';
+    const ai_enabled = await getSetting('giannakis_ai_enabled', 'true') === 'true';
 
     res.json({
       discord_channel_id: channelId,
@@ -4838,6 +4837,7 @@ app.get('/api/admin/discord/config', authRequired, requireAdmin, async (req, res
       notify_mail,
       notify_news,
       notify_prems,
+      ai_enabled,
       bot_status: discordClient?.isReady() ? 'Online' : 'Offline',
       bot_name: discordClient?.user?.tag || 'N/A'
     });
@@ -4852,7 +4852,7 @@ app.post('/api/admin/discord/config', authRequired, requireAdmin, async (req, re
   try {
     const { 
       discord_channel_id, discord_schedule_time, 
-      discord_enabled, notify_mail, notify_news, notify_prems 
+      discord_enabled, notify_mail, notify_news, notify_prems, ai_enabled 
     } = req.body;
     
     if (discord_channel_id !== undefined) await setSetting('discord_channel_id', String(discord_channel_id).trim());
@@ -4868,6 +4868,7 @@ app.post('/api/admin/discord/config', authRequired, requireAdmin, async (req, re
     if (notify_mail !== undefined) await setSetting('discord_notify_mail', String(notify_mail));
     if (notify_news !== undefined) await setSetting('discord_notify_news', String(notify_news));
     if (notify_prems !== undefined) await setSetting('discord_notify_prems', String(notify_prems));
+    if (ai_enabled !== undefined) await setSetting('giannakis_ai_enabled', String(ai_enabled));
 
     log.adm('Updated Discord settings', { admin_id: req.user.id });
     res.json({ ok: true });

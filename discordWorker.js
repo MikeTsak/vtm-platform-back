@@ -107,6 +107,12 @@ if (commandText === 'whoami') {
   // --- SCHRECKNET NODE AI - "ΓΙΑΝΝΑΚΗΣ" (WITH IMPROVED DB CROSS-REFERENCING) ---
   if (message.mentions.has(discordClient.user, { ignoreRoles: true, ignoreEveryone: true })) {
     try {
+      // Check if AI is enabled in settings
+      const aiEnabled = await getSetting('giannakis_ai_enabled', 'true');
+      if (aiEnabled !== 'true' && aiEnabled !== '1' && aiEnabled !== true) {
+        return message.reply("The AI Node is currently offline for maintenance.");
+      }
+
       await message.channel.sendTyping();
 
       // Ultimate Fallback: Discord Username
