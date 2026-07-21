@@ -5,7 +5,10 @@
   "scripts": {
     "dev": "nodemon server.js",
     "start": "node server.js",
-    "migrate": "node migrations/run-migrations.js"
+    "migrate": "node migrations/run-migrations.js",
+    "migrate-avatars": "node migrate-avatars.js",
+    "migrate-npc-avatars": "node migrate-npc-avatars.js",
+    "migrate-retainers": "node migrate-retainers.js"
   },
   "dependencies": {
     "@discordjs/voice": "^0.19.2",
