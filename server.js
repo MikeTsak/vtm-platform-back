@@ -2323,7 +2323,10 @@ app.get('/api/retainers/:id/avatar', async (req, res) => {
     if (rows.length === 0 || !rows[0].avatar) {
       return res.status(404).send('No avatar found');
     }
-    const mime = getMimeType(rows[0].avatar);
+    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) {
+        return res.redirect(302, rows[0].avatar);
+      }
+      const mime = getMimeType(rows[0].avatar);
     res.set('Content-Type', mime);
     res.set('Cache-Control', 'public, max-age=31557600');
     res.send(rows[0].avatar);
@@ -3661,7 +3664,10 @@ app.get('/api/npcs/:id/avatar', async (req, res) => {
     if (rows.length === 0 || !rows[0].avatar) {
       return res.status(404).send('Avatar not found');
     }
-    const mime = getMimeType(rows[0].avatar);
+    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) {
+        return res.redirect(302, rows[0].avatar);
+      }
+      const mime = getMimeType(rows[0].avatar);
     res.set('Content-Type', mime);
     res.set('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
     res.send(rows[0].avatar);
@@ -4036,7 +4042,10 @@ app.get('/api/identities/:id/avatar', async (req, res) => {
     if (rows.length === 0 || !rows[0].avatar) {
       return res.status(404).send('Avatar not found');
     }
-    const mime = getMimeType(rows[0].avatar);
+    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) {
+        return res.redirect(302, rows[0].avatar);
+      }
+      const mime = getMimeType(rows[0].avatar);
     res.setHeader('Content-Type', mime);
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
     res.send(rows[0].avatar);
@@ -4655,6 +4664,62 @@ app.post('/api/chat/messages', authRequired, async (req, res) => {
   } catch (e) {
     log.err('Failed to send message', { message: e.message });
     res.status(500).json({ error: 'Failed' });
+  }
+});
+
+
+/* --- Chat Media --- */
+
+// POST /api/chat/upload
+app.post('/api/chat/upload', authRequired, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  try {
+    const fileBlob = new Blob([req.file.buffer], { type: req.file.mimetype });
+    const ext = req.file.originalname ? req.file.originalname.split('.').pop() : 'bin';
+    const filename = 'chat_media_' + Date.now() + '.' + ext;
+
+    const uploadRes = await imageClient.uploadImage(fileBlob, filename);
+    if (!uploadRes.success) throw new Error('Upload failed: ' + uploadRes.error);
+
+    const [ins] = await pool.query(
+      'INSERT INTO chat_media (uploader_id, filename, mime, size, data) VALUES (?, ?, ?, ?, ?)',
+      [req.user.id, req.file.originalname || filename, req.file.mimetype, req.file.size, uploadRes.url]
+    );
+
+    res.json({ id: ins.insertId, url: uploadRes.url, mime: req.file.mimetype });
+  } catch (e) {
+    log.err('Chat upload failed', { message: e.message });
+    res.status(500).json({ error: 'Upload failed' });
+  }
+});
+
+// GET /api/chat/media/:id/info
+app.get('/api/chat/media/:id/info', authRequired, async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT data, mime FROM chat_media WHERE id=?', [req.params.id]);
+    if (!rows.length) return res.status(404).send('Not found');
+    const data = rows[0].data;
+    const isUrl = typeof data === 'string' && data.startsWith('http');
+    res.json({ url: isUrl ? data : null, mime: rows[0].mime });
+  } catch (e) {
+    res.status(500).json({ error: 'Error fetching media info' });
+  }
+});
+
+// Backward compatibility or direct DB fetch: Redirect /api/chat/media/:id to external URL
+app.get('/api/chat/media/:id', authRequired, async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT data, mime FROM chat_media WHERE id=?', [req.params.id]);
+    if (!rows.length || !rows[0].data) return res.status(404).send('Not found');
+    
+    if (typeof rows[0].data === 'string' && rows[0].data.startsWith('http')) {
+      return res.redirect(302, rows[0].data);
+    }
+    
+    if (rows[0].mime) res.setHeader('Content-Type', rows[0].mime);
+    res.send(rows[0].data);
+  } catch (e) {
+    res.status(500).json({ error: 'Error fetching media' });
   }
 });
 
@@ -6190,7 +6255,10 @@ app.get('/api/premonitions/media/:id', authRequired, async (req, res) => {
     }
 
     const { mime, size, data } = rows[0];
-    res.setHeader('Content-Type', mime || 'application/octet-stream');
+      if (typeof data === 'string' && data.startsWith('http')) {
+        return res.redirect(302, data);
+      }
+      res.setHeader('Content-Type', mime || 'application/octet-stream');
     res.setHeader('Content-Length', size);
     res.setHeader('Cache-Control', 'private, max-age=3600'); // 1 hour
     res.end(data); // send raw blob
@@ -6768,7 +6836,11 @@ app.get('/api/news/media/:id', async (req, res) => {
 
     const { mime, size, data } = rows[0];
 
-    // Handle HTML5 Video Range Requests (Crucial for iOS/Safari & scrubbing)
+      if (typeof data === 'string' && data.startsWith('http')) {
+        return res.redirect(302, data);
+      }
+
+      // Handle HTML5 Video Range Requests (Crucial for iOS/Safari & scrubbing)
     const range = req.headers.range;
     if (range && mime.startsWith('video/')) {
       const parts = range.replace(/bytes=/, "").split("-");
@@ -7643,7 +7715,10 @@ app.get('/api/users/:id/avatar', async (req, res) => {
     if (rows.length === 0 || !rows[0].avatar) {
       return res.status(404).send('Avatar not found');
     }
-    const mime = getMimeType(rows[0].avatar);
+    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) {
+        return res.redirect(302, rows[0].avatar);
+      }
+      const mime = getMimeType(rows[0].avatar);
     res.set('Content-Type', mime);
     res.set('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
     res.send(rows[0].avatar);
