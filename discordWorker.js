@@ -3,14 +3,18 @@ const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder
 const { log } = require('./logger');
 const pool = require('./db');
 const { getSetting } = require('./utils/settings');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+// AI disabled for memory optimization
 const axios = require('axios');
 const sharp = require('sharp');
 const TextToSVG = require('text-to-svg');
 
+const path = require('path');
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID || '1338600871302860882';
 let textToSVG = null;
-try { textToSVG = TextToSVG.loadSync('./public/fonts/impact.ttf'); } catch (e) { log.err('Meme font failed', e); }
+try { 
+  const fontPath = path.join(__dirname, 'Roboto_Condensed-Bold.ttf');
+  textToSVG = TextToSVG.loadSync(fontPath); 
+} catch (e) { log.err('Meme font failed', e); }
 // --- Discord Bot Setup ---
 let discordClient = null;
 let discordLoginError = null; // <--- 1. New variable to hold the specific error
@@ -155,7 +159,8 @@ if (commandText === 'whoami') {
           return message.reply({ content: "Συγγνώμη κ. Administrator... το κλειδί πρόσβασής μου (API Key) λείπει." });
       }
 
-      const genAI = new GoogleGenerativeAI(apiKey);
+      // AI has been completely deactivated for memory optimization
+      return message.reply({ content: "The AI module is currently disabled to conserve server resources." });
 
       const tools = [{
         functionDeclarations: [

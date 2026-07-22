@@ -42,12 +42,13 @@ const discordClient = null;
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BI7rfJ8M56Md66_JfP7gTbPyNEhnhsPzXK63hAD-NSP2eXzgeHmcj412N0urchrrW7mOTwLvyeKUUfJQ0e0fxxA';
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'za0fUJF4koF5n25WMZtlrSKtHbKbqVJ77M5ojqKUSls';
 webpush.setVapidDetails('mailto:admin@attlarp.gr', VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, NoSubscriberBehavior } = require('@discordjs/voice');
-const play = require('play-dl');
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+// Voice and AI disabled for memory optimization
 // For meme generation
 const sharp = require('sharp');
-const TextToSVG = require('text-to-svg');
+// Optimize sharp for low memory environments (like 2GB Plesk)
+sharp.cache(false);
+sharp.concurrency(1);
+// TextToSVG disabled
 const rateLimit = require('express-rate-limit');
 // --- Swagger Imports ---
 const swaggerUi = require('swagger-ui-express');
@@ -148,6 +149,8 @@ log.start('API booting…');
 const vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
 const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
 
+// Start Discord Worker
+require('./discordWorker');
 
 const app = express();
 // CORS: In production, set CORS_ORIGIN env var to your frontend URL
@@ -201,15 +204,8 @@ try {
   log.err('Could not load custom meme font. Memes might show tofu boxes.', { error: e.message });
 }
 
-// --- Load Custom Font for Memes as Vector Paths ---
-let textToSVG;
-try {
-  const fontPath = path.join(__dirname, 'Roboto_Condensed-Bold.ttf');
-  textToSVG = TextToSVG.loadSync(fontPath);
-  log.start('Text-to-SVG loaded custom font successfully.');
-} catch (e) {
-  log.err('Could not load custom meme font for TextToSVG.', { error: e.message });
-}
+// TextToSVG disabled for memory optimization
+// let textToSVG;
 
 // Create a multer instance that stores files in memory as buffers
 // Limit file size to 50MB to match the JSON payload limits
@@ -2413,7 +2409,7 @@ app.put('/api/retainers/:id/avatar', authRequired, upload.single('avatar'), asyn
 
     if (!result.success) throw new Error(result.error);
 
-    await pool.query('UPDATE retainers SET avatar_url = ?, avatar = ? WHERE id = ?', [result.url, buffer, req.params.id]);
+    await pool.query('UPDATE retainers SET avatar_url = ?, avatar = ? WHERE id = ?', [result.url, processedBuffer, req.params.id]);
     res.json({ success: true, url: result.url });
   } catch (e) {
     log.err('Failed to update retainer avatar', { error: e.message });
@@ -3586,72 +3582,8 @@ app.get('/api/admin/chat/npc/history', authRequired, requireAdmin, async (req, r
 });
 
 app.post('/api/admin/chat/summarize', authRequired, requireAdmin, async (req, res) => {
-  try {
-    const { text, context } = req.body;
-    if (!text) return res.status(400).json({ error: 'No text provided' });
-    if (!process.env.GOOGLE_API_KEY) return res.status(500).json({ error: 'Server missing GOOGLE_API_KEY' });
-
-    // Initialize Gemini
-    const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
-
-    // List of models to try in order of preference.
-    // We prioritize stable, production-ready models to avoid 503 errors.
-    const candidateModels = [
-      "gemini-2.5-flash-lite",      // Specific stable version
-      "gemini-3-flash-preview",      // Newer stable version
-      "gemini-2.5-flash",        // Specific stable version
-      "	gemini-2.5-pro",        // Newer stable version
-      "gemini-1.0-pro",            // Fallback legacy
-      "gemini-pro"                 // Generic fallback
-    ];
-
-    let summary = null;
-    let lastError = null;
-
-    // Construct Prompt
-    const prompt = `
-      You are an assistant for a Vampire: The Masquerade game.
-      Summarize the following roleplay chat log between: ${context || 'Unknown Participants'}.
-      
-      Requirements:
-      - Highlight key plot developments, agreements, and secrets revealed.
-      - Describe the emotional tone.
-      - Keep it concise (under 200 words).
-      - Use bullet points.
-      - If the chat is in Greek, provide the summary in Greek.
-
-      Chat Log:
-      ${text.substring(0, 30000)} 
-    `; // Limit text length to avoid token limits
-
-    // Loop through models until one works
-    for (const modelName of candidateModels) {
-      try {
-        const model = genAI.getGenerativeModel({ model: modelName });
-        const result = await model.generateContent(prompt);
-        const response = await result.response;
-        summary = response.text();
-
-        // If successful, stop trying other models
-        break;
-      } catch (e) {
-        // Log warning but continue to next model
-        log.warn(`AI Model ${modelName} failed`, { message: e.message });
-        lastError = e;
-      }
-    }
-
-    if (!summary) {
-      throw lastError || new Error("All AI models failed to respond.");
-    }
-
-    res.json({ summary });
-
-  } catch (e) {
-    log.err('AI Summarize failed', { message: e.message });
-    // Return 503 (Service Unavailable) if it was an AI overload issue
-    res.status(503).json({ error: 'AI service is currently busy. Please try again.' });
-  }
+  // AI generation has been disabled entirely for memory optimization
+  res.status(501).json({ error: 'AI features have been disabled to optimize server memory.' });
 });
 
 app.post('/api/admin/chat/npc/messages', authRequired, requireAdmin, async (req, res) => {
