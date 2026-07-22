@@ -1,9 +1,12 @@
-var express = require('express');
-var router = express.Router();
+module.exports = async function (fastify, opts) {
+  const { authRequired } = opts;
 
-/* GET users listing. */
-router.get('/', function(req, res, next) {
-  res.send('respond with a resource');
-});
+  // PATCH /api/users/me/ui_sounds
+  fastify.patch('/me/ui_sounds', { preHandler: [authRequired] }, async (req, reply) => {
+    const { enabled } = req.body;
+    await fastify.db.query('UPDATE users SET ui_sounds_enabled = ? WHERE id = ?', [enabled ? 1 : 0, req.user.id]);
+    reply.send({ ok: true, ui_sounds_enabled: !!enabled });
+  });
 
-module.exports = router;
+  // More user routes can be added here...
+};
