@@ -61,8 +61,8 @@ async function migrate() {
             const filename = `${table}_${row.id}.jpg`; // Will let PHP deduce correct extension if possible
             
             console.log(`  ⏳ [UPLOAD] Row ID ${row.id}: Uploading ${filename} (${Math.round(blob.length/1024)} KB)...`);
-            const fileBlob = new Blob([blob]);
-            const result = await client.uploadImage(fileBlob, filename);
+            // const fileBlob = new Blob([blob]);
+            const result = await client.uploadImage(blob, filename);
 
             if (result.success) {
                 await pool.query(`UPDATE ${table} SET ${urlCol} = ? WHERE id = ?`, [result.url, row.id]);

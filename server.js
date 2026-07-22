@@ -2407,9 +2407,9 @@ app.put('/api/retainers/:id/avatar', authRequired, upload.single('avatar'), asyn
       .webp({ quality: 80 })
       .toBuffer();
       
-    const fileBlob = new Blob([processedBuffer]);
+    // const fileBlob = new Blob([processedBuffer]);
     const filename = "retainers_" + req.params.id + ".jpg";
-    const result = await imageClient.uploadImage(fileBlob, filename);
+    const result = await imageClient.uploadImage(processedBuffer, filename);
 
     if (!result.success) throw new Error(result.error);
 
@@ -3756,9 +3756,9 @@ app.put('/api/npcs/:id/avatar', authRequired, requireAdmin, upload.single('avata
       .webp({ quality: 80 })
       .toBuffer();
 
-    const fileBlob = new Blob([buffer]);
+    // const fileBlob = new Blob([buffer]);
     const filename = "npcs_" + req.params.id + ".jpg";
-    const result = await imageClient.uploadImage(fileBlob, filename);
+    const result = await imageClient.uploadImage(buffer, filename);
 
     if (!result.success) throw new Error(result.error);
 
@@ -4140,9 +4140,9 @@ app.put('/api/identities/:id/avatar', authRequired, requireAdmin, upload.single(
       .webp({ quality: 80 })
       .toBuffer();
 
-    const fileBlob = new Blob([buffer]);
+    // const fileBlob = new Blob([buffer]);
     const filename = "email_identities_" + req.params.id + ".jpg";
-    const result = await imageClient.uploadImage(fileBlob, filename);
+    const result = await imageClient.uploadImage(buffer, filename);
 
     if (!result.success) throw new Error(result.error);
 
@@ -6150,10 +6150,10 @@ app.post('/api/admin/premonitions/upload', authRequired, requireAdmin, memoryUpl
     }
     const { originalname, mimetype, size, buffer } = req.file;
     
-    const fileBlob = new Blob([buffer]);
+    // const fileBlob = new Blob([buffer]);
     const ext = originalname ? originalname.split('.').pop() : 'bin';
     const filenameToUpload = 'premonitions_media_' + Date.now() + '.' + ext;
-    const result = await imageClient.uploadImage(fileBlob, filenameToUpload);
+    const result = await imageClient.uploadImage(buffer, filenameToUpload);
 
     if (!result.success) throw new Error(result.error);
 
@@ -6914,10 +6914,10 @@ app.post('/api/news/upload', authRequired, memoryUpload.single('file'), async (r
 
     const { originalname, mimetype, size, buffer } = req.file;
 
-    const fileBlob = new Blob([buffer]);
+    // const fileBlob = new Blob([buffer]);
     const ext = originalname ? originalname.split('.').pop() : 'bin';
     const filenameToUpload = 'news_media_' + Date.now() + '.' + ext;
-    const result = await imageClient.uploadImage(fileBlob, filenameToUpload);
+    const result = await imageClient.uploadImage(buffer, filenameToUpload);
 
     if (!result.success) throw new Error(result.error);
 
@@ -7851,9 +7851,9 @@ app.put('/api/users/:id/avatar', authRequired, upload.single('avatar'), async (r
       .webp({ quality: 80 })
       .toBuffer();
 
-    const fileBlob = new Blob([buffer]);
+    // const fileBlob = new Blob([buffer]);
     const filename = "users_" + req.params.id + ".jpg";
-    const result = await imageClient.uploadImage(fileBlob, filename);
+    const result = await imageClient.uploadImage(buffer, filename);
 
     if (!result.success) throw new Error(result.error);
 
