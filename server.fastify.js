@@ -7,7 +7,6 @@ const os = require('os');
 // Import the new logger and its utility functions
 const { log, attachRequestLogger, expressErrorHandler, installProcessHandlers } = require('./logger');
 
-const express = require('express');
 const cors = require('@fastify/cors');
 const cron = require('node-cron');
 const bcrypt = require('bcryptjs');
