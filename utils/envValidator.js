@@ -5,7 +5,7 @@ const envSchema = z.object({
   // Server Config
   PORT: z.string().optional().default('5000'),
   CORS_ORIGIN: z.string().optional(),
-  
+
   // Database
   DB_HOST: z.string(),
   DB_PORT: z.string(),

@@ -6998,17 +6998,24 @@ io.on('connection', (socket) => {
 
 fastify.decorate('io', io);
 
-fastify.listen(
-  isNaN(Number(PORT)) ? { path: PORT } : { port: Number(PORT), host: '0.0.0.0' },
-  (err, address) => {
-    if (err) {
-      log.err(`API server failed to start`, { error: err.message });
-      console.error(err);
-      process.exit(1);
-    }
-    log.start(`API server started on ${address}`, { port: PORT, env: process.env.NODE_ENV || 'stable' });
-    broadcastNtfyAlert(`API server started on port ${PORT}`, { title: 'Server Online', tags: 'rocket' });
+fastify.ready().then(() => {
+  if (typeof PhusionPassenger !== 'undefined' || process.env.PORT === 'passenger') {
+    // Passenger requires the exact string 'passenger' to trigger its monkey-patch
+    fastify.server.listen('passenger', () => {
+      log.start(`API server started via Passenger`, { env: process.env.NODE_ENV || 'stable' });
+    });
+  } else {
+    // Standard local listening
+    fastify.listen({ port: Number(PORT), host: '0.0.0.0' }, (err, address) => {
+      if (err) {
+        log.err(`API server failed to start`, { error: err.message });
+        console.error(err);
+        process.exit(1);
+      }
+      log.start(`API server started on ${address}`, { port: PORT, env: process.env.NODE_ENV || 'stable' });
+      broadcastNtfyAlert(`API server started on port ${PORT}`, { title: 'Server Online', tags: 'rocket' });
+    });
   }
-);
+});
 
 //port is set to 3001
