@@ -1,3 +1,4 @@
+
 // server.js (with advanced logging)
 require('dotenv').config();
 const { validateEnv } = require('./utils/envValidator');
@@ -2379,11 +2380,11 @@ app.get('/api/retainers/:id/avatar', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT avatar_url, avatar FROM retainers WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return res.status(404).send('No avatar found');
-    
+
     if (rows[0].avatar_url) return res.redirect(302, rows[0].avatar_url);
     if (!rows[0].avatar) return res.status(404).send('No avatar found');
     if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return res.redirect(302, rows[0].avatar);
-    
+
     const mime = getMimeType(rows[0].avatar);
     res.set('Content-Type', mime);
     res.set('Cache-Control', 'public, max-age=31557600');
@@ -2402,7 +2403,7 @@ app.put('/api/retainers/:id/avatar', authRequired, upload.single('avatar'), asyn
       .resize(500, 500, { fit: 'cover' })
       .webp({ quality: 80 })
       .toBuffer();
-      
+
     // const fileBlob = new Blob([processedBuffer]);
     const filename = "retainers_" + req.params.id + ".jpg";
     const result = await imageClient.uploadImage(processedBuffer, filename);
@@ -3663,11 +3664,11 @@ app.get('/api/npcs/:id/avatar', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT avatar_url, avatar FROM npcs WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return res.status(404).send('Avatar not found');
-    
+
     if (rows[0].avatar_url) return res.redirect(302, rows[0].avatar_url);
     if (!rows[0].avatar) return res.status(404).send('Avatar not found');
     if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return res.redirect(302, rows[0].avatar);
-    
+
     const mime = getMimeType(rows[0].avatar);
     res.set('Content-Type', mime);
     res.set('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
@@ -4047,11 +4048,11 @@ app.get('/api/identities/:id/avatar', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT avatar_url, avatar FROM email_identities WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return res.status(404).send('Avatar not found');
-    
+
     if (rows[0].avatar_url) return res.redirect(302, rows[0].avatar_url);
     if (!rows[0].avatar) return res.status(404).send('Avatar not found');
     if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return res.redirect(302, rows[0].avatar);
-    
+
     const mime = getMimeType(rows[0].avatar);
     res.setHeader('Content-Type', mime);
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
@@ -4711,12 +4712,12 @@ app.get('/api/chat/media/:id/info', authRequired, async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT data_url, data, mime FROM chat_media WHERE id=?', [req.params.id]);
     if (!rows.length) return res.status(404).send('Not found');
-    
+
     let url = rows[0].data_url;
     if (!url && typeof rows[0].data === 'string' && rows[0].data.startsWith('http')) {
       url = rows[0].data;
     }
-    
+
     res.json({ url: url || null, mime: rows[0].mime });
   } catch (e) {
     res.status(500).json({ error: 'Error fetching media info' });
@@ -4728,14 +4729,14 @@ app.get('/api/chat/media/:id', authRequired, async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT data_url, data, mime FROM chat_media WHERE id=?', [req.params.id]);
     if (!rows.length) return res.status(404).send('Not found');
-    
+
     if (rows[0].data_url) return res.redirect(302, rows[0].data_url);
     if (!rows[0].data) return res.status(404).send('Not found');
-    
+
     if (typeof rows[0].data === 'string' && rows[0].data.startsWith('http')) {
       return res.redirect(302, rows[0].data);
     }
-    
+
     if (rows[0].mime) res.setHeader('Content-Type', rows[0].mime);
     res.send(rows[0].data);
   } catch (e) {
@@ -6081,7 +6082,7 @@ app.post('/api/admin/premonitions/upload', authRequired, requireAdmin, memoryUpl
       return res.status(400).json({ error: 'File is required' });
     }
     const { originalname, mimetype, size, buffer } = req.file;
-    
+
     // const fileBlob = new Blob([buffer]);
     const ext = originalname ? originalname.split('.').pop() : 'bin';
     const filenameToUpload = 'premonitions_media_' + Date.now() + '.' + ext;
@@ -6285,10 +6286,10 @@ app.get('/api/premonitions/media/:id', authRequired, async (req, res) => {
     if (data_url) return res.redirect(302, data_url);
     if (!data) return res.status(404).send('Not found');
 
-      if (typeof data === 'string' && data.startsWith('http')) {
-        return res.redirect(302, data);
-      }
-      res.setHeader('Content-Type', mime || 'application/octet-stream');
+    if (typeof data === 'string' && data.startsWith('http')) {
+      return res.redirect(302, data);
+    }
+    res.setHeader('Content-Type', mime || 'application/octet-stream');
     res.setHeader('Content-Length', size);
     res.setHeader('Cache-Control', 'private, max-age=3600'); // 1 hour
     res.end(data); // send raw blob
@@ -6873,15 +6874,15 @@ app.get('/api/news/media/:id', async (req, res) => {
     if (!rows.length) return res.status(404).send('Not found');
 
     const { data_url, mime, size, data } = rows[0];
-    
+
     if (data_url) return res.redirect(302, data_url);
     if (!data) return res.status(404).send('Not found');
 
-      if (typeof data === 'string' && data.startsWith('http')) {
-        return res.redirect(302, data);
-      }
+    if (typeof data === 'string' && data.startsWith('http')) {
+      return res.redirect(302, data);
+    }
 
-      // Handle HTML5 Video Range Requests (Crucial for iOS/Safari & scrubbing)
+    // Handle HTML5 Video Range Requests (Crucial for iOS/Safari & scrubbing)
     const range = req.headers.range;
     if (range && mime.startsWith('video/')) {
       const parts = range.replace(/bytes=/, "").split("-");
@@ -7754,11 +7755,11 @@ app.get('/api/users/:id/avatar', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT avatar_url, avatar FROM users WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return res.status(404).send('Avatar not found');
-    
+
     if (rows[0].avatar_url) return res.redirect(302, rows[0].avatar_url);
     if (!rows[0].avatar) return res.status(404).send('Avatar not found');
     if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return res.redirect(302, rows[0].avatar);
-    
+
     const mime = getMimeType(rows[0].avatar);
     res.set('Content-Type', mime);
     res.set('Cache-Control', 'public, max-age=86400'); // Cache for 1 day

@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Erebus Portal - API Status</title>
+<style>
+  :root { 
+    --bg:#0b0410; --card:#15091f; --card-border:#2a113d; 
+    --fg:#e8e8ea; --muted:#9a8baf; 
+    --ok:#10b981; /* Emerald green for OK */
+    --ok-glow: rgba(16, 185, 129, 0.4);
+    --bad:#ef4444; /* Bright red for bad */
+    --bad-glow: rgba(239, 68, 68, 0.4);
+    --dim:#201030; --err-bg: #2a0b12; 
+  }
+  * { box-sizing:border-box; }
+  body { 
+    margin:0; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
+    background:var(--bg); color:var(--fg); 
+    display:flex; justify-content:center; align-items:center; min-height:100vh; padding: 40px 0;
+    background-image: radial-gradient(circle at 50% 0%, #220e36 0%, transparent 60%);
+  }
+  .card { 
+    background:var(--card); 
+    border:1px solid var(--card-border); 
+    border-top: 3px solid var(--card-border);
+    border-radius:12px; padding:30px 40px; 
+    width:min(800px, 92vw); 
+    box-shadow:0 15px 40px rgba(0,0,0,.6), 0 0 20px rgba(74, 30, 115, 0.3); 
+  }
+  .header { text-align: center; margin-bottom: 30px; }
+  .logo { max-width: 150px; margin-bottom: 15px; filter: brightness(0) invert(1) drop-shadow(0 0 8px rgba(255,255,255,0.2)); }
+  
+  h1 { margin:0 0 5px; font-size:28px; font-weight:300; letter-spacing:2px; text-transform:uppercase; color: var(--fg); }
+  .subtitle { color: var(--muted); font-size: 13px; font-style: italic; letter-spacing: 1px; margin-bottom: 15px; }
+  
+  .status-badge {
+    display: inline-block; padding: 6px 16px; border-radius: 4px;
+    font-size: 13px; font-weight: bold; letter-spacing: 1.5px;
+    border: 1px solid currentColor; text-transform: uppercase;
+  }
+  .status-badge.ok { color: var(--ok); border-color: var(--ok); background: rgba(16,185,129,0.1); box-shadow: 0 0 10px var(--ok-glow); }
+  .status-badge.bad { color: var(--bad); border-color: var(--bad); background: rgba(239,68,68,0.1); box-shadow: 0 0 10px var(--bad-glow); }
+  
+  .grid-container { display: flex; flex-direction: column; gap: 25px; }
+  .section-title { 
+    font-size: 11px; text-transform: uppercase; letter-spacing: 2px; 
+    color: var(--muted); border-bottom: 1px solid var(--dim); padding-bottom: 8px; margin-bottom: 12px;
+  }
+  
+  .grid { display:grid; grid-template-columns: 140px 1fr; row-gap:10px; column-gap:15px; align-items: center; }
+  .k { color:var(--muted); font-size: 13px; font-weight: 500; }
+  .v { font-weight:400; font-size: 13px; }
+  .ok { color:var(--ok); text-shadow: 0 0 5px var(--ok-glow); }
+  .bad { color:var(--bad); text-shadow: 0 0 5px var(--bad-glow); font-weight: 600; }
+  
+  code { background:var(--dim); padding:4px 8px; border-radius:4px; font-family:ui-monospace, monospace; font-size: 12px; color: #d0c2e8; }
+  a { color:#a78bfa; text-decoration:none; border-bottom: 1px dotted #a78bfa; padding-bottom: 1px; transition: all 0.2s; }
+  a:hover { color:#c4b5fd; border-bottom-style: solid; text-shadow: 0 0 5px rgba(167, 139, 250, 0.4); }
+  
+  .error-section { margin-top: 25px; padding: 15px; border-radius: 6px; background: var(--err-bg); border: 1px solid var(--bad); border-left: 4px solid var(--bad); }
+  .error-title { color: var(--bad); font-weight: bold; font-size: 13px; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px; }
+  .error-list { margin: 0; padding-left: 20px; color: #ffb8b8; font-size: 13px; }
+  .error-list li { margin-bottom: 5px; }
+  
+  .footer { margin-top: 40px; text-align: center; font-size: 11px; color: var(--card-border); letter-spacing: 3px; font-weight: bold; text-transform: uppercase; }
+</style>
+</head>
+<body>
+  <main class="card" role="status" aria-live="polite">
+    <div class="header">
+      <img src="/public/images/pixel-logo-removebg-preview.png" alt="Erebus Logo" class="logo" onerror="this.style.display='none'">
+      <h1>Erebus Portal</h1>
+      <div class="subtitle">Vampire: The Masquerade API</div>
+      <div style="margin-top: 20px;">
+        <span class="status-badge {{SYSTEM_CLASS}}">{{SYSTEM_STATUS}}</span>
+      </div>
+    </div>
+    
+    <div class="grid-container">
+      <!-- 1. Service Dependencies ON TOP -->
+      <div>
+        <div class="section-title">Service Dependencies</div>
+        <div class="grid">
+          <div class="k">Database</div><div class="v {{DB_CLASS}}">{{DB_STATUS}}</div>
+          <div class="k">Discord Bot</div><div class="v {{DISCORD_CLASS}}">{{DISCORD_STATUS}}</div>
+          <div class="k">Email Service</div><div class="v {{EMAIL_CLASS}}">{{EMAIL_STATUS}}</div>
+        </div>
+      </div>
+
+      <!-- 2. Application Info -->
+      <div>
+        <div class="section-title">Application Info</div>
+        <div class="grid">
+          <div class="k">Name</div><div class="v"><code>{{APP_NAME}}</code></div>
+          <div class="k">Version</div><div class="v"><code>{{APP_VERSION}}</code></div>
+          <div class="k">Environment</div><div class="v"><code>{{NODE_ENV}}</code></div>
+          <div class="k">Health JSON</div><div class="v"><a href="/api/health">/api/health</a></div>
+          {{API_DOCS_LINK}}
+        </div>
+      </div>
+
+      <!-- 3. Environment & Configuration -->
+      <div>
+        <div class="section-title">Environment & Security</div>
+        <div class="grid">
+          <div class="k">JWT Auth</div><div class="v {{JWT_CLASS}}">{{JWT_STATUS}}</div>
+          <div class="k">Ntfy Alerts</div><div class="v {{NTFY_CLASS}}">{{NTFY_STATUS}}</div>
+          <div class="k">CORS Policy</div><div class="v"><code>{{CORS_STATUS}}</code></div>
+        </div>
+      </div>
+
+      <!-- 4. Runtime Information -->
+      <div>
+        <div class="section-title">Runtime Information</div>
+        <div class="grid">
+          <div class="k">Started At</div><div class="v">{{STARTED_AT}}</div>
+          <div class="k">Current Time</div><div class="v">{{NOW}}</div>
+          <div class="k">Uptime</div><div class="v">{{UPTIME}}</div>
+          <div class="k">Node.js</div><div class="v"><code>{{NODE_VERSION}}</code></div>
+          <div class="k">V8 Engine</div><div class="v"><code>{{V8_VERSION}}</code></div>
+          <div class="k">Process PID</div><div class="v"><code>{{PROCESS_PID}}</code></div>
+          <div class="k">Working Dir</div><div class="v"><code>{{PROCESS_CWD}}</code></div>
+        </div>
+      </div>
+
+      <!-- 5. System Resources & Network -->
+      <div>
+        <div class="section-title">System Resources & Network</div>
+        <div class="grid">
+          <div class="k">Platform</div><div class="v"><code>{{OS_PLATFORM}}</code></div>
+          <div class="k">Hostname</div><div class="v"><code>{{HOSTNAME}}</code></div>
+          <div class="k">Local IP Address</div><div class="v"><code>{{LOCAL_IP}}</code></div>
+          <div class="k">System User</div><div class="v"><code>{{OS_USER}}</code></div>
+          <div class="k">CPU</div><div class="v">{{CPU_INFO}}</div>
+          <div class="k">System Memory</div><div class="v">{{OS_MEMORY}}</div>
+          <div class="k">Process Memory</div><div class="v">{{PROC_MEMORY}}</div>
+          <div class="k">Load Avg</div><div class="v">{{LOAD_AVG}}</div>
+        </div>
+      </div>
+    </div>
+    
+    {{ERRORS}}
+    
+    <div class="footer">
+      Powered by Fastify & Node.js • Made by <a href="https://miketsak.gr" target="_blank" rel="noopener noreferrer">miketsak.gr</a>
+    </div>
+  </main>
+</body>
+</html>

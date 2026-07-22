@@ -1,4 +1,4 @@
-﻿// server.js (with advanced logging)
+// server.js (with advanced logging)
 require('dotenv').config();
 const { validateEnv } = require('./utils/envValidator');
 validateEnv();
@@ -130,11 +130,25 @@ const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
 // Start Discord Worker
 require('./discordWorker');
 
-const fastify = require('fastify')({ logger: true, bodyLimit: 73400320 });
+const fastify = require('fastify')({ 
+  logger: {
+    transport: {
+      target: 'pino-pretty',
+      options: {
+        translateTime: 'HH:MM:ss Z',
+        ignore: 'pid,hostname',
+      },
+    },
+  }, 
+  bodyLimit: 73400320 
+});
 const app = fastify; // Alias for compatibility with some routes
 
 // --- FASTIFY OPTIMIZATIONS: Database Lifecycle & Global Error Handler ---
 fastify.decorate('db', pool);
+fastify.decorateReply('json', function (payload) {
+  return this.send(payload);
+});
 
 fastify.addHook('onClose', async (instance, done) => {
   try {
@@ -181,7 +195,17 @@ const helmet = require('@fastify/helmet');
 fastify.register(helmet, {
   crossOriginResourcePolicy: { policy: "cross-origin" },
 });
-fastify.register(cors, { origin: corsOrigin, credentials: true });
+fastify.register(cors, { 
+  origin: corsOrigin, 
+  credentials: true,
+  methods: ['GET', 'PUT', 'POST', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'Pragma', 'Expires', 'Idempotency-Key', 'X-Requested-With', 'Accept']
+});
+
+fastify.register(require('@fastify/static'), {
+  root: path.join(__dirname, 'public'),
+  prefix: '/public/',
+});
 // trust proxy disabled by default in fastify
 // Add compression middleware
 fastify.register(compression);
@@ -1185,11 +1209,13 @@ fastify.get('/', async (req, reply) => {
     // OS Info
     enhancedInfo.os = {
       platform: os.platform(),
+      release: os.release(),
       arch: os.arch(),
       hostname: os.hostname(),
       totalmem: os.totalmem(),
       freemem: os.freemem(),
-      loadavg: os.loadavg()
+      loadavg: os.loadavg(),
+      user: os.userInfo().username
     };
 
     // CPU Info
@@ -1204,6 +1230,8 @@ fastify.get('/', async (req, reply) => {
 
     // Process Info
     enhancedInfo.process = {
+      pid: process.pid,
+      cwd: process.cwd(),
       memoryUsage: process.memoryUsage(),
       versions: process.versions,
       uptime: process.uptime()
@@ -1231,147 +1259,116 @@ fastify.get('/', async (req, reply) => {
   const systemStatus = (dbStatus === 'OK' && discordClass !== 'bad' && emailClass !== 'bad') ? 'OK' : 'DEGRADED';
   const systemClass = systemStatus === 'OK' ? 'ok' : 'bad';
 
-  reply.header('Cache-Control', 'no-store').type('html').send(`<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>API Status</title>
-<style>
-  :root { --bg:#0b0b0c; --card:#141418; --fg:#e8e8ea; --muted:#a3a3ad; --ok:#3ecf8e; --bad:#ff6b6b; --dim:#1f1f24; --err-bg: #2a1215; }
-  * { box-sizing:border-box; }
-  body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Ubuntu,Helvetica,Arial,sans-serif; background:var(--bg); color:var(--fg); display:grid; place-items:center; min-height:100vh; }
-  .card { background:var(--card); border:1px solid var(--dim); border-radius:14px; padding:20px 22px; width:min(680px,92vw); box-shadow:0 10px 30px rgba(0,0,0,.35); }
-  h1 { margin:0 0 6px; font-size:22px; letter-spacing:.25px; }
-  .muted { color:var(--muted); font-size:13px; }
-  .grid { display:grid; grid-template-columns: 160px 1fr; row-gap:8px; column-gap:12px; margin-top:14px; }
-  .k { color:var(--muted); }
-  .v { font-weight:600; }
-  .ok { color:var(--ok); }
-  .bad { color:var(--bad); }
-  .muted-text { color:var(--muted); }
-  code { background:var(--dim); padding:2px 6px; border-radius:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; }
-  a { color:#8ab4f8; text-decoration:none; }
-  a:hover { text-decoration:underline; }
+  let html = '';
+  try {
+    html = await fs.promises.readFile(path.join(__dirname, 'views', 'status.html'), 'utf8');
+  } catch (err) {
+    html = '<h1>Status Page Error</h1><p>' + err.message + '</p>';
+  }
   
-  .error-section { margin-top: 20px; padding: 12px; border-radius: 8px; background: var(--err-bg); border: 1px solid var(--bad); }
-  .error-title { color: var(--bad); font-weight: bold; font-size: 14px; margin-bottom: 6px; }
-  .error-list { margin: 0; padding-left: 20px; color: #ffb8b8; font-size: 13px; }
-  .error-list li { margin-bottom: 4px; }
-</style>
-</head>
-<body>
-  <main class="card" role="status" aria-live="polite">
-    <h1>Erebus🦇 API Status: <span class="${systemClass}">${systemStatus}</span></h1>
-    <div class="muted">This page is served by the API process.</div>
-    
-    <div class="grid">
-      <div class="k">Environment</div><div class="v"><code>${process.env.NODE_ENV || 'stable'}</code></div>
-      <div class="k">Node.js</div><div class="v"><code>${process.version}</code></div>
-      ${(() => {
-      const total = Math.floor(process.uptime());
+  // uptime calculation
+  const total = Math.floor(process.uptime());
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  const parts = [];
+  if (days) parts.push(`${days}d`);
+  if (hours) parts.push(`${hours}h`);
+  if (minutes) parts.push(`${minutes}m`);
+  parts.push(`${seconds}s`);
+  const uptimeStr = parts.join(" ");
 
-      const days = Math.floor(total / 86400);
-      const hours = Math.floor((total % 86400) / 3600);
-      const minutes = Math.floor((total % 3600) / 60);
-      const seconds = total % 60;
+  // system memory
+  const osTotalMem = Math.floor(((enhancedInfo.os || {}).totalmem || 0) / 1024 / 1024);
+  const osFreeMem = Math.floor(((enhancedInfo.os || {}).freemem || 0) / 1024 / 1024);
+  const osUsedPct = Math.round(100 - (((enhancedInfo.os || {}).freemem || 0) / ((enhancedInfo.os || {}).totalmem || 1)) * 100) / 100;
+  const osMemoryStr = `${osTotalMem} MB Total • ${osFreeMem} MB Free • ${osUsedPct}% Used`;
 
-      const parts = [];
-      if (days) parts.push(`${days}d`);
-      if (hours) parts.push(`${hours}h`);
-      if (minutes) parts.push(`${minutes}m`);
-      parts.push(`${seconds}s`);
+  // process memory
+  const heapUsed = Math.floor((enhancedInfo.process?.memoryUsage?.heapUsed || 0) / 1024 / 1024);
+  const heapTotal = Math.floor((enhancedInfo.process?.memoryUsage?.heapTotal || 0) / 1024 / 1024);
+  const procRss = Math.floor((enhancedInfo.process?.memoryUsage?.rss || 0) / 1024 / 1024);
+  const procMemoryStr = `${heapUsed} MB Heap Used / ${heapTotal} MB Heap Total • ${procRss} MB RSS`;
 
-      return `
-          <div class="k">Uptime</div>
-          <div class="v">${parts.join(" ")}</div>
-        `;
-    })()}
+  // CPU
+  const cpuModel = (enhancedInfo.cpu || {}).model || 'N/A';
+  const cpuInfoStr = `${((enhancedInfo.cpu || {}).count || 'N/A')}× ${cpuModel.substring(0, 30)}${cpuModel.length > 30 ? '...' : ''}`;
 
-      <div class="k">Started</div>
-      <div class="v">${formatDate(startedAt)}</div>
+  // Load Avg
+  const loadavg = (enhancedInfo.os || {}).loadavg;
+  const loadAvgStr = Array.isArray(loadavg) ? `${(loadavg[0] || 0).toFixed(2)}, ${(loadavg[1] || 0).toFixed(2)}, ${(loadavg[2] || 0).toFixed(2)}` : 'N/A';
 
-      <div class="k">Now</div>
-      <div class="v">${formatDate(new Date())}</div>
-
-      <div class="k" style="margin-top:10px">Database</div>
-      <div class="v ${dbStatus === 'OK' ? 'ok' : 'bad'}" style="margin-top:10px">${dbStatus}</div>
-      
-      <div class="k">Discord Bot</div>
-      <div class="v ${discordClass}">${discordStatus}</div>
-      
-      <div class="k">Email Service</div>
-      <div class="v ${emailClass}">${emailStatus}</div>
-      
-      <div class="k">Health JSON</div><div class="v"><a href="/api/health">/api/health</a></div>
-
-      ${typeof enhancedInfo.app !== 'undefined' && enhancedInfo.app.version ? `
-        <div class="k">API Docs</div><div class="v"><a href="/api-docs">/api-docs</a></div>
-      ` : ''}
-
-      <div class="section-header"></div>
-      <div class="section-title">System Resources</div>
-
-      <div class="k">Platform</div>
-      <div class="v"><code>${enhancedInfo.os?.platform || 'N/A'} ${enhancedInfo.os?.arch || ''}</code></div>
-
-      <div class="k">Hostname</div>
-      <div class="v"><code>${enhancedInfo.os?.hostname || 'N/A'}</code></div>
-
-      <div class="k">CPU</div>
-      <div class="v">${((enhancedInfo.cpu || {}).count || 'N/A')}× ${((enhancedInfo.cpu || {}).model || 'N/A').substring(0, 30)}${((enhancedInfo.cpu || {}).model || 'N/A').length > 30 ? '...' : ''}</div>
-
-      <div class="k">Memory</div>
-      <div class="v">
-        ${Math.floor(((enhancedInfo.os || {}).totalmem || 0) / 1024 / 1024)} MB Total •
-        ${Math.floor(((enhancedInfo.os || {}).freemem || 0) / 1024 / 1024)} MB Free •
-        ${Math.round(100 - (((enhancedInfo.os || {}).freemem || 0) / ((enhancedInfo.os || {}).totalmem || 1)) * 100) / 100}% Used
-      </div>
-
-      <div class="k">Load Avg</div>
-      <div class="v">
-        ${Array.isArray((enhancedInfo.os || {}).loadavg) ?
-      `${((enhancedInfo.os || {}).loadavg[0] || 0).toFixed(2)}, ${((enhancedInfo.os || {}).loadavg[1] || 0).toFixed(2)}, ${((enhancedInfo.os || {}).loadavg[2] || 0).toFixed(2)}` :
-      'N/A'}
-      </div>
-
-      <div class="section-header"></div>
-      <div class="section-title">Process Information</div>
-
-      <div class="k">Node.js</div>
-      <div class="v"><code>${process.version}</code></div>
-
-      <div class="k">V8</div>
-      <div class="v"><code>${process.versions.v8 || 'N/A'}</code></div>
-
-      <div class="k">Memory Usage</div>
-      <div class="v">
-        ${Math.floor((enhancedInfo.process?.memoryUsage?.heapUsed || 0) / 1024 / 1024)} MB Heap Used /
-        ${Math.floor((enhancedInfo.process?.memoryUsage?.heapTotal || 0) / 1024 / 1024)} MB Heap Total •
-        ${Math.floor((enhancedInfo.process?.memoryUsage?.rss || 0) / 1024 / 1024)} MB RSS
-      </div>
-
-      <div class="section-header"></div>
-      <div class="section-title">Application Info</div>
-
-      <div class="k">Name</div>
-      <div class="v"><code>${((enhancedInfo.app || {}).name || 'back')}</code></div>
-
-      <div class="k">Version</div>
-      <div class="v"><code>${((enhancedInfo.app || {}).version || '0.0.0')}</code></div>
-    </div>
-
-    ${errors.length > 0 ? `
+  const errorsHtml = errors.length > 0 ? `
     <div class="error-section">
       <div class="error-title">Active Errors detected:</div>
       <ul class="error-list">
         ${errors.map(e => `<li>${e}</li>`).join('')}
       </ul>
     </div>
-    ` : ''}
-  </main>
-</body>
-</html>`);
+  ` : '';
+
+  // local IP
+  let localIp = '127.0.0.1';
+  try {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+      for (const net of interfaces[name]) {
+        if (net.family === 'IPv4' && !net.internal) {
+          localIp = net.address;
+          break;
+        }
+      }
+    }
+  } catch (e) { }
+
+  // Environment checks
+  const jwtStatus = process.env.JWT_SECRET ? 'CONFIGURED' : 'MISSING';
+  const jwtClass = process.env.JWT_SECRET ? 'ok' : 'bad';
+  
+  const ntfyStatus = process.env.NTFY_TOPIC ? `CONFIGURED (${process.env.NTFY_TOPIC})` : 'NOT SET';
+  const ntfyClass = process.env.NTFY_TOPIC ? 'ok' : 'bad';
+
+  const corsStatus = process.env.CORS_ORIGIN || 'Allow All (*)';
+
+  const apiDocsLink = enhancedInfo.app && enhancedInfo.app.version ? `<div class="k">API Docs</div><div class="v"><a href="/api-docs">/api-docs</a></div>` : '';
+
+  html = html
+    .replace('{{SYSTEM_CLASS}}', systemClass)
+    .replace('{{SYSTEM_STATUS}}', systemStatus)
+    .replace('{{APP_NAME}}', (enhancedInfo.app || {}).name || 'back')
+    .replace('{{APP_VERSION}}', (enhancedInfo.app || {}).version || '0.0.0')
+    .replace('{{NODE_ENV}}', process.env.NODE_ENV || 'stable')
+    .replace('{{STARTED_AT}}', formatDate(startedAt))
+    .replace('{{NOW}}', formatDate(new Date()))
+    .replace('{{UPTIME}}', uptimeStr)
+    .replace('{{NODE_VERSION}}', process.version)
+    .replace('{{V8_VERSION}}', process.versions?.v8 || 'N/A')
+    .replace('{{API_DOCS_LINK}}', apiDocsLink)
+    .replace('{{OS_PLATFORM}}', `${enhancedInfo.os?.platform || 'N/A'} ${enhancedInfo.os?.release || ''} (${enhancedInfo.os?.arch || ''})`)
+    .replace('{{HOSTNAME}}', enhancedInfo.os?.hostname || 'N/A')
+    .replace('{{LOCAL_IP}}', localIp)
+    .replace('{{OS_USER}}', enhancedInfo.os?.user || 'N/A')
+    .replace('{{PROCESS_PID}}', enhancedInfo.process?.pid || 'N/A')
+    .replace('{{PROCESS_CWD}}', enhancedInfo.process?.cwd || 'N/A')
+    .replace('{{CPU_INFO}}', cpuInfoStr)
+    .replace('{{OS_MEMORY}}', osMemoryStr)
+    .replace('{{PROC_MEMORY}}', procMemoryStr)
+    .replace('{{LOAD_AVG}}', loadAvgStr)
+    .replace('{{DB_CLASS}}', dbStatus === 'OK' ? 'ok' : 'bad')
+    .replace('{{DB_STATUS}}', dbStatus)
+    .replace('{{DISCORD_CLASS}}', discordClass)
+    .replace('{{DISCORD_STATUS}}', discordStatus)
+    .replace('{{EMAIL_CLASS}}', emailClass)
+    .replace('{{EMAIL_STATUS}}', emailStatus)
+    .replace('{{JWT_CLASS}}', jwtClass)
+    .replace('{{JWT_STATUS}}', jwtStatus)
+    .replace('{{NTFY_CLASS}}', ntfyClass)
+    .replace('{{NTFY_STATUS}}', ntfyStatus)
+    .replace('{{CORS_STATUS}}', corsStatus)
+    .replace('{{ERRORS}}', errorsHtml);
+
+  reply.header('Cache-Control', 'no-store').header('Content-Type', 'text/html; charset=utf-8').send(html);
 });
 
 
@@ -1945,22 +1942,24 @@ fastify.get('/api/chat/my-recent', { preHandler: [authRequired] }, async (req, r
 });
 
 // Upload Image & Audio
-fastify.post('/api/chat/upload', { preHandler: [authRequired, uploadLimiter, async (req, reply) => { /* TODO: Implement multipart parsing here */ }] }, async (req, reply) => {
+fastify.post('/api/chat/upload', { preHandler: [authRequired, uploadLimiter] }, async (req, reply) => {
   try {
-    if (!req.file) return reply.status(400).json({ error: 'No file provided' });
+    const fileData = await req.file();
+    if (!fileData) return reply.status(400).send({ error: 'No file provided' });
 
-    // ✅ FIX: Allow any image or audio file instead of just specific image extensions
-    if (!req.file.mimetype.startsWith('image/') && !req.file.mimetype.startsWith('audio/')) {
-      return reply.status(400).json({ error: 'Invalid file type. Only images and audio allowed.' });
+    const mimetype = fileData.mimetype || '';
+    if (!mimetype.startsWith('image/') && !mimetype.startsWith('audio/')) {
+      return reply.status(400).send({ error: 'Invalid file type. Only images and audio allowed.' });
     }
 
-    let finalBuffer = req.file.buffer;
-    let finalMime = req.file.mimetype;
-    let finalSize = req.file.size;
-    let finalFilename = req.file.originalname;
+    const rawBuffer = await fileData.toBuffer();
+    let finalBuffer = rawBuffer;
+    let finalMime = mimetype;
+    let finalSize = rawBuffer.length;
+    let finalFilename = fileData.filename || 'uploaded_chat_media';
 
-    if (req.file.mimetype.startsWith('image/')) {
-      finalBuffer = await sharp(req.file.buffer)
+    if (mimetype.startsWith('image/')) {
+      finalBuffer = await sharp(rawBuffer)
         .resize(1000, 1000, { fit: 'inside', withoutEnlargement: true })
         .webp({ quality: 80 })
         .toBuffer();
@@ -1978,8 +1977,8 @@ fastify.post('/api/chat/upload', { preHandler: [authRequired, uploadLimiter, asy
     log.ok('Chat media uploaded', { user_id: req.user.id, media_id: ins.insertId });
     reply.send({ id: ins.insertId, url: `/api/chat/media/${ins.insertId}` });
   } catch (e) {
-    log.err('Chat upload failed', { message: e.message });
-    reply.status(500).json({ error: 'Upload failed' });
+    log.err('Chat upload failed', { message: e.message, stack: e.stack });
+    reply.status(500).send({ error: 'Upload failed' });
   }
 });
 
@@ -2479,9 +2478,9 @@ fastify.get('/api/npcs/:id/avatar', async (req, reply) => {
     const [rows] = await pool.query('SELECT avatar_url, avatar FROM npcs WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return reply.status(404).send('Avatar not found');
     
-    if (rows[0].avatar_url) return reply.redirect(302, rows[0].avatar_url);
+    if (rows[0].avatar_url) return reply.redirect(rows[0].avatar_url);
     if (!rows[0].avatar) return reply.status(404).send('Avatar not found');
-    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return reply.redirect(302, rows[0].avatar);
+    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return reply.redirect(rows[0].avatar);
     
     const mime = getMimeType(rows[0].avatar);
     reply.header('Content-Type', mime);
@@ -2489,31 +2488,83 @@ fastify.get('/api/npcs/:id/avatar', async (req, reply) => {
     reply.send(rows[0].avatar);
   } catch (e) {
     log.err('NPC Avatar GET error', { message: e.message });
-    reply.status(500).json({ error: 'Server error retrieving avatar.' });
+    reply.status(500).send({ error: 'Server error retrieving avatar.' });
   }
 });
 
-fastify.put('/api/npcs/:id/avatar', { preHandler: [authRequired, requireAdmin, async (req, reply) => { /* TODO: Implement multipart parsing here */ }] }, async (req, reply) => {
+fastify.put('/api/npcs/:id/avatar', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   try {
-    if (!req.file) {
-      return reply.status(400).json({ error: 'No image file provided.' });
+    const fileData = await req.file();
+    if (!fileData) {
+      return reply.status(400).send({ error: 'No image file provided.' });
     }
-    const buffer = await sharp(req.file.buffer)
+    const rawBuffer = await fileData.toBuffer();
+
+    const buffer = await sharp(rawBuffer)
       .resize(500, 500, { fit: 'cover' })
       .webp({ quality: 80 })
       .toBuffer();
 
-    // const fileBlob = new Blob([buffer]);
     const filename = "npcs_" + req.params.id + ".jpg";
-    const result = await imageClient.uploadImage(buffer, filename);
+    let avatarUrl = null;
+    try {
+      const result = await imageClient.uploadImage(buffer, filename);
+      if (result && result.success) avatarUrl = result.url;
+    } catch (imgErr) {
+      log.warn('CDN upload failed for NPC avatar, using DB buffer fallback', { error: imgErr.message });
+    }
 
-    if (!result.success) throw new Error(result.error);
-
-    await pool.query('UPDATE npcs SET avatar_url = ?, avatar = ? WHERE id = ?', [result.url, buffer, req.params.id]);
-    reply.send({ success: true, message: 'NPC Avatar updated successfully.', url: result.url });
+    await pool.query('UPDATE npcs SET avatar_url = ?, avatar = ? WHERE id = ?', [avatarUrl, buffer, req.params.id]);
+    reply.send({ success: true, message: 'NPC Avatar updated successfully.', url: avatarUrl });
   } catch (e) {
     log.err('NPC Avatar PUT error', { message: e.message });
-    reply.status(500).json({ error: 'Server error updating npc avatar.' });
+    reply.status(500).send({ error: 'Server error updating npc avatar.' });
+  }
+});
+
+// GET retainer avatar
+fastify.get('/api/retainers/:id/avatar', async (req, reply) => {
+  try {
+    const [rows] = await pool.query('SELECT avatar_url, avatar FROM retainers WHERE id = ?', [req.params.id]);
+    if (rows.length === 0) return reply.status(404).send('No avatar found');
+    if (rows[0].avatar_url) return reply.redirect(rows[0].avatar_url);
+    if (!rows[0].avatar) return reply.status(404).send('No avatar found');
+    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return reply.redirect(rows[0].avatar);
+    const mime = getMimeType(rows[0].avatar);
+    reply.header('Content-Type', mime);
+    reply.header('Cache-Control', 'public, max-age=86400');
+    reply.send(rows[0].avatar);
+  } catch (e) {
+    log.err('Failed to get retainer avatar', { error: e.message });
+    reply.status(500).send('Server Error');
+  }
+});
+
+// PUT retainer avatar
+fastify.put('/api/retainers/:id/avatar', { preHandler: [authRequired] }, async (req, reply) => {
+  try {
+    const fileData = await req.file();
+    if (!fileData) return reply.status(400).send({ error: 'No file uploaded' });
+    const rawBuffer = await fileData.toBuffer();
+    const processedBuffer = await sharp(rawBuffer)
+      .resize(500, 500, { fit: 'cover' })
+      .webp({ quality: 80 })
+      .toBuffer();
+      
+    const filename = "retainers_" + req.params.id + ".jpg";
+    let avatarUrl = null;
+    try {
+      const result = await imageClient.uploadImage(processedBuffer, filename);
+      if (result && result.success) avatarUrl = result.url;
+    } catch (imgErr) {
+      log.warn('CDN upload failed for retainer, using DB buffer fallback', { error: imgErr.message });
+    }
+
+    await pool.query('UPDATE retainers SET avatar_url = ?, avatar = ? WHERE id = ?', [avatarUrl, processedBuffer, req.params.id]);
+    reply.send({ success: true, url: avatarUrl });
+  } catch (e) {
+    log.err('Failed to update retainer avatar', { error: e.message });
+    reply.status(500).send({ error: 'Failed to update avatar' });
   }
 });
 
@@ -2863,9 +2914,9 @@ fastify.get('/api/identities/:id/avatar', async (req, reply) => {
     const [rows] = await pool.query('SELECT avatar_url, avatar FROM email_identities WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return reply.status(404).send('Avatar not found');
     
-    if (rows[0].avatar_url) return reply.redirect(302, rows[0].avatar_url);
+    if (rows[0].avatar_url) return reply.redirect(rows[0].avatar_url);
     if (!rows[0].avatar) return reply.status(404).send('Avatar not found');
-    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return reply.redirect(302, rows[0].avatar);
+    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return reply.redirect(rows[0].avatar);
     
     const mime = getMimeType(rows[0].avatar);
     reply.header('Content-Type', mime);
@@ -2877,12 +2928,15 @@ fastify.get('/api/identities/:id/avatar', async (req, reply) => {
   }
 });
 
-fastify.put('/api/identities/:id/avatar', { preHandler: [authRequired, requireAdmin, async (req, reply) => { /* TODO: Implement multipart parsing here */ }] }, async (req, reply) => {
+fastify.put('/api/identities/:id/avatar', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   try {
-    if (!req.file) {
+    const fileData = await req.file();
+    if (!fileData) {
       return reply.status(400).json({ error: 'No image file provided.' });
     }
-    const buffer = await sharp(req.file.buffer)
+    const rawBuffer = await fileData.toBuffer();
+
+    const buffer = await sharp(rawBuffer)
       .resize(500, 500, { fit: 'cover', position: 'top' })
       .webp({ quality: 80 })
       .toBuffer();
@@ -3464,7 +3518,7 @@ fastify.post('/api/chat/messages', { preHandler: [authRequired] }, async (req, r
 
     // Allow empty body ONLY if there is an attachment
     if (!recipient_id || (!attachment_id && (!body || !body.trim()))) {
-      return reply.status(400).json({ error: 'Recipient and content required' });
+      return reply.status(400).send({ error: 'Recipient and content required' });
     }
 
     const [r] = await pool.query(
@@ -3488,10 +3542,10 @@ fastify.post('/api/chat/messages', { preHandler: [authRequired] }, async (req, r
       message.attachment_id ? '📷 Image Attachment' : message.body
     )
 
-    reply.status(201).json({ message });
+    reply.status(201).send({ message });
   } catch (e) {
     log.err('Failed to send message', { message: e.message });
-    reply.status(500).json({ error: 'Failed' });
+    reply.status(500).send({ error: 'Failed' });
   }
 });
 
@@ -4883,35 +4937,41 @@ fastify.get('/api/admin/premonitions/malkavians', { preHandler: [authRequired, r
 });
 
 // ADMIN: Upload media and store it in the DB
-fastify.post('/api/admin/premonitions/upload', { preHandler: [authRequired, requireAdmin, async (req, reply) => { /* TODO: Implement multipart parsing here */ }] }, async (req, reply) => {
+fastify.post('/api/admin/premonitions/upload', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   try {
-    await _ensurePremonitionsMediaTables(); // Ensure media table exists
-    if (!req.file) {
-      return reply.status(400).json({ error: 'File is required' });
+    const fileData = await req.file();
+    if (!fileData) {
+      return reply.status(400).send({ error: 'File is required' });
     }
-    const { originalname, mimetype, size, buffer } = req.file;
-    
-    // const fileBlob = new Blob([buffer]);
+    const originalname = fileData.filename || 'upload';
+    const mimetype = fileData.mimetype || 'application/octet-stream';
+    const buffer = await fileData.toBuffer();
+    const size = buffer.length;
+
     const ext = originalname ? originalname.split('.').pop() : 'bin';
     const filenameToUpload = 'premonitions_media_' + Date.now() + '.' + ext;
-    const result = await imageClient.uploadImage(buffer, filenameToUpload);
-
-    if (!result.success) throw new Error(result.error);
+    let resultUrl = null;
+    try {
+      const result = await imageClient.uploadImage(buffer, filenameToUpload);
+      if (result && result.success) resultUrl = result.url;
+    } catch (imgErr) {
+      log.warn('CDN upload failed for premonition media, using DB buffer fallback', { error: imgErr.message });
+    }
 
     const [ins] = await pool.query(
       'INSERT INTO premonition_media (filename, mime, size, data_url, data) VALUES (?,?,?,?,?)',
-      [originalname || 'upload', mimetype, size, result.url, req.file.buffer]
+      [originalname, mimetype, size, resultUrl, buffer]
     );
     const media_id = ins.insertId;
 
     reply.send({
       media_id,
       media_mime: mimetype,
-      media_stream_url: result.url
+      media_stream_url: resultUrl || `/api/premonitions/media/${media_id}`
     });
   } catch (e) {
     log.err('Premonition media upload failed', { message: e.message });
-    reply.status(500).json({ error: 'Failed to upload media' });
+    reply.status(500).send({ error: 'Failed to upload media' });
   }
 });
 
@@ -5058,7 +5118,6 @@ fastify.get('/api/premonitions/mine', { preHandler: [authRequired] }, async (req
 // MEDIA: Stream media from DB
 fastify.get('/api/premonitions/media/:id', { preHandler: [authRequired] }, async (req, reply) => {
   try {
-    await _ensurePremonitionsMediaTables();
     const id = Number(req.params.id) || 0;
 
     // **FIX: Initialize hasAccess here**
@@ -5644,33 +5703,40 @@ fastify.get('/api/news/recent', { preHandler: [authRequired] }, async (req, repl
 
 
 // POST /api/news/upload (Admin/Court) - Upload media
-fastify.post('/api/news/upload', { preHandler: [authRequired, async (req, reply) => { /* TODO: Implement multipart parsing here */ }] }, async (req, reply) => {
+fastify.post('/api/news/upload', { preHandler: [authRequired] }, async (req, reply) => {
   try {
     // Check permissions: Admin or Court
     if (req.user.role !== 'admin' && req.user.role !== 'courtuser') {
-      return reply.status(403).json({ error: 'Forbidden' });
+      return reply.status(403).send({ error: 'Forbidden' });
     }
 
-    if (!req.file) return reply.status(400).json({ error: 'File required' });
+    const fileData = await req.file();
+    if (!fileData) return reply.status(400).send({ error: 'File required' });
 
-    const { originalname, mimetype, size, buffer } = req.file;
+    const originalname = fileData.filename || 'upload';
+    const mimetype = fileData.mimetype || 'application/octet-stream';
+    const buffer = await fileData.toBuffer();
+    const size = buffer.length;
 
-    // const fileBlob = new Blob([buffer]);
     const ext = originalname ? originalname.split('.').pop() : 'bin';
     const filenameToUpload = 'news_media_' + Date.now() + '.' + ext;
-    const result = await imageClient.uploadImage(buffer, filenameToUpload);
-
-    if (!result.success) throw new Error(result.error);
+    let resultUrl = null;
+    try {
+      const result = await imageClient.uploadImage(buffer, filenameToUpload);
+      if (result && result.success) resultUrl = result.url;
+    } catch (imgErr) {
+      log.warn('CDN upload failed for news media, using DB buffer fallback', { error: imgErr.message });
+    }
 
     const [ins] = await pool.query(
       'INSERT INTO news_media (filename, mime, size, data_url, data) VALUES (?,?,?,?,?)',
-      [originalname || 'upload', mimetype, size, result.url, Buffer.from('')]
+      [originalname, mimetype, size, resultUrl, buffer]
     );
 
-    reply.send({ url: result.url });
+    reply.send({ url: resultUrl || `/api/news/media/${ins.insertId}` });
   } catch (e) {
     log.err('News upload failed', { message: e.message });
-    reply.status(500).json({ error: 'Upload failed' });
+    reply.status(500).send({ error: 'Upload failed' });
   }
 });
 
@@ -6564,9 +6630,9 @@ fastify.get('/api/users/:id/avatar', async (req, reply) => {
     const [rows] = await pool.query('SELECT avatar_url, avatar FROM users WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return reply.status(404).send('Avatar not found');
     
-    if (rows[0].avatar_url) return reply.redirect(302, rows[0].avatar_url);
+    if (rows[0].avatar_url) return reply.redirect(rows[0].avatar_url);
     if (!rows[0].avatar) return reply.status(404).send('Avatar not found');
-    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return reply.redirect(302, rows[0].avatar);
+    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return reply.redirect(rows[0].avatar);
     
     const mime = getMimeType(rows[0].avatar);
     reply.header('Content-Type', mime);
@@ -6574,35 +6640,40 @@ fastify.get('/api/users/:id/avatar', async (req, reply) => {
     reply.send(rows[0].avatar);
   } catch (e) {
     log.err('Avatar GET error', { message: e.message });
-    reply.status(500).json({ error: 'Server error retrieving avatar.' });
+    reply.status(500).send({ error: 'Server error retrieving avatar.' });
   }
 });
 
-fastify.put('/api/users/:id/avatar', { preHandler: [authRequired, async (req, reply) => { /* TODO: Implement multipart parsing here */ }] }, async (req, reply) => {
+fastify.put('/api/users/:id/avatar', { preHandler: [authRequired] }, async (req, reply) => {
   try {
     if (req.user.id !== parseInt(req.params.id) && req.user.role !== 'admin') {
-      return reply.status(403).json({ error: 'Forbidden. You can only update your own avatar.' });
+      return reply.status(403).send({ error: 'Forbidden. You can only update your own avatar.' });
     }
-    if (!req.file) {
-      return reply.status(400).json({ error: 'No image file provided.' });
+    const fileData = await req.file();
+    if (!fileData) {
+      return reply.status(400).send({ error: 'No image file provided.' });
     }
+    const rawBuffer = await fileData.toBuffer();
 
-    const buffer = await sharp(req.file.buffer)
+    const buffer = await sharp(rawBuffer)
       .resize(500, 500, { fit: 'cover' })
       .webp({ quality: 80 })
       .toBuffer();
 
-    // const fileBlob = new Blob([buffer]);
     const filename = "users_" + req.params.id + ".jpg";
-    const result = await imageClient.uploadImage(buffer, filename);
+    let avatarUrl = null;
+    try {
+      const result = await imageClient.uploadImage(buffer, filename);
+      if (result && result.success) avatarUrl = result.url;
+    } catch (imgErr) {
+      log.warn('CDN upload failed, using DB buffer fallback', { error: imgErr.message });
+    }
 
-    if (!result.success) throw new Error(result.error);
-
-    await pool.query('UPDATE users SET avatar_url = ?, avatar = ? WHERE id = ?', [result.url, buffer, req.params.id]);
-    reply.send({ success: true, message: 'Avatar updated successfully.', url: result.url });
+    await pool.query('UPDATE users SET avatar_url = ?, avatar = ? WHERE id = ?', [avatarUrl, buffer, req.params.id]);
+    reply.send({ success: true, message: 'Avatar updated successfully.', url: avatarUrl });
   } catch (e) {
-    log.err('Avatar PUT error', { message: e.message });
-    reply.status(500).json({ error: 'Server error updating avatar.' });
+    log.err('Avatar PUT error', { message: e.message, stack: e.stack });
+    reply.status(500).send({ error: 'Server error updating avatar.' });
   }
 });
 
@@ -6927,8 +6998,14 @@ io.on('connection', (socket) => {
 
 fastify.decorate('io', io);
 
-fastify.listen({ port: PORT, host: '0.0.0.0' }, () => {
-  log.start(`API server started`, { port: PORT, env: process.env.NODE_ENV || 'stable' });
+fastify.listen({ port: Number(PORT), host: '0.0.0.0' }, (err, address) => {
+  if (err) {
+    log.err(`API server failed to start`, { error: err.message });
+    console.error(err);
+    process.exit(1);
+  }
+  log.start(`API server started on ${address}`, { port: PORT, env: process.env.NODE_ENV || 'stable' });
   broadcastNtfyAlert(`API server started on port ${PORT}`, { title: 'Server Online', tags: 'rocket' });
 });
+
 //port is set to 3001
