@@ -1,4 +1,15 @@
 // server.js (with advanced logging)
+// EMERGENCY CRASH LOGGER FOR PLESK
+const fs = require('fs');
+process.on('uncaughtException', (err) => {
+  fs.appendFileSync('plesk_crash.log', `[${new Date().toISOString()}] UNCAUGHT EXCEPTION:\n${err.stack}\n\n`);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  fs.appendFileSync('plesk_crash.log', `[${new Date().toISOString()}] UNHANDLED REJECTION:\n${reason && reason.stack ? reason.stack : String(reason)}\n\n`);
+});
+fs.appendFileSync('plesk_crash.log', `[${new Date().toISOString()}] Server boot sequence started...\n`);
+
 require('dotenv').config();
 const { validateEnv } = require('./utils/envValidator');
 validateEnv();
