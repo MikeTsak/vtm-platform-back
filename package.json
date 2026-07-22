@@ -30,6 +30,7 @@
     "http-errors": "~1.6.3",
     "jsonwebtoken": "^9.0.2",
     "libsodium-wrappers": "^0.8.4",
+    "mikes-php-image-handler": "^1.0.0",
     "morgan": "^1.10.1",
     "multer": "^2.0.2",
     "mysql2": "^3.14.3",

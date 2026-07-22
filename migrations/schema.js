@@ -125,6 +125,7 @@ async function _ensureCoreTables() {
         role VARCHAR(50) DEFAULT 'user',
         discord_id VARCHAR(50),
         avatar LONGBLOB,
+        avatar_url VARCHAR(2048),
         push_settings JSON,
         ntfy_topic VARCHAR(150),
         ntfy_subscribed_npcs JSON NULL,
@@ -184,8 +185,10 @@ async function _ensureCoreTables() {
     // ✅ AUTOMATICALLY ENSURE THE AVATAR COLUMN EXISTS
     const [avatarCols] = await pool.query("SHOW COLUMNS FROM users LIKE 'avatar'");
     if (avatarCols.length === 0) {
-      await pool.query("ALTER TABLE users ADD COLUMN avatar LONGBLOB");
-      log.ok('Added avatar column to users table');
+      await pool.query("ALTER TABLE users ADD COLUMN avatar LONGBLOB, ADD COLUMN avatar_url VARCHAR(2048)");
+      log.ok('Added avatar and avatar_url columns to users table');
+    } else {
+      try { await pool.query("ALTER TABLE users ADD COLUMN avatar_url VARCHAR(2048)"); } catch(e) {}
     }
 
     // ✅ AUTOMATICALLY ENSURE THE NTFY_TOPIC COLUMN EXISTS
@@ -240,12 +243,18 @@ async function _ensureCoreTables() {
         is_deceased BOOLEAN DEFAULT FALSE,
         is_hidden BOOLEAN DEFAULT FALSE,
         avatar LONGBLOB NULL,
+        avatar_url VARCHAR(2048) NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
     try {
       await pool.query("ALTER TABLE npcs ADD COLUMN avatar LONGBLOB");
+    } catch (e) {
+      if (e.code !== 'ER_DUP_FIELDNAME') throw e;
+    }
+    try {
+      await pool.query("ALTER TABLE npcs ADD COLUMN avatar_url VARCHAR(2048)");
     } catch (e) {
       if (e.code !== 'ER_DUP_FIELDNAME') throw e;
     }
@@ -542,6 +551,7 @@ async function _ensureRetainersTable() {
         sheet JSON NULL,
         xp INT DEFAULT 0,
         avatar LONGBLOB NULL,
+        avatar_url VARCHAR(2048) NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -550,6 +560,11 @@ async function _ensureRetainersTable() {
       await pool.query("ALTER TABLE retainers ADD COLUMN avatar LONGBLOB NULL");
     } catch (e) {
       if (e.code !== 'ER_DUP_FIELDNAME') console.warn("Notice adding avatar to retainers:", e.message);
+    }
+    try {
+      await pool.query("ALTER TABLE retainers ADD COLUMN avatar_url VARCHAR(2048) NULL");
+    } catch (e) {
+      if (e.code !== 'ER_DUP_FIELDNAME') console.warn("Notice adding avatar_url to retainers:", e.message);
     }
     log.ok('Retainers table verified/created.');
   } catch (e) {
@@ -644,6 +659,7 @@ async function _ensureChatTables() {
         mime VARCHAR(100) NOT NULL,
         size INT UNSIGNED NOT NULL,
         data LONGBLOB NOT NULL,
+        data_url VARCHAR(2048) NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
@@ -866,6 +882,7 @@ async function _ensurePremonitionsMediaTables() {
         mime VARCHAR(100) NOT NULL,
         size INT UNSIGNED NOT NULL,
         data LONGBLOB NOT NULL,
+        data_url VARCHAR(2048) NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
@@ -886,12 +903,18 @@ async function _ensureGroupChatTables() {
         name VARCHAR(100) NOT NULL,
         created_by INT NOT NULL,
         avatar LONGBLOB NULL,
+        avatar_url VARCHAR(2048) NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
     try {
       await pool.query("ALTER TABLE chat_groups ADD COLUMN avatar LONGBLOB");
+    } catch (e) {
+      if (e.code !== 'ER_DUP_FIELDNAME') throw e;
+    }
+    try {
+      await pool.query("ALTER TABLE chat_groups ADD COLUMN avatar_url VARCHAR(2048)");
     } catch (e) {
       if (e.code !== 'ER_DUP_FIELDNAME') throw e;
     }
@@ -944,6 +967,8 @@ async function _ensureEmailTables() {
         id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
         email_address VARCHAR(150) NOT NULL UNIQUE,
         display_name VARCHAR(150),
+        avatar LONGBLOB NULL,
+        avatar_url VARCHAR(2048) NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
@@ -1235,6 +1260,7 @@ async function _ensureNewsTables() {
         mime VARCHAR(100) NOT NULL,
         size INT UNSIGNED NOT NULL,
         data LONGBLOB NOT NULL,
+        data_url VARCHAR(2048) NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);

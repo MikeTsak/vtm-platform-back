@@ -29,6 +29,8 @@ const { spawn } = require('child_process');
 const { EventEmitter } = require('events');
 const bannerEmitter = new EventEmitter();
 const multer = require('multer'); // Import multer
+const { VampireImageClient } = require('mikes-php-image-handler');
+const imageClient = new VampireImageClient({ baseUrl: 'https://img.miketsak.gr', apiKey: process.env.IMAGE_API_KEY });
 const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require('discord.js');
 const webpush = require('web-push');
 
@@ -896,6 +898,66 @@ app.get('/api/system/banner/stream', (req, res) => {
 });
 
 // Admin: Run Migrations Stream (SSE)
+
+// Admin: Run Media Migration Stream (SSE)
+app.get('/api/admin/migrate-media/stream', authRequired, requireAdmin, (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders(); // Establish SSE with client
+
+  const scripts = ['migrate_media.js'];
+  const total = scripts.length;
+  let current = 0;
+
+  const sendEvent = (event, data) => {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+    if (res.flush) res.flush();
+  };
+
+  sendEvent('start', { total });
+
+  const runNext = () => {
+    if (current >= total) {
+      sendEvent('done', { message: 'Media migration complete!' });
+      return res.end();
+    }
+
+    const script = scripts[current];
+    sendEvent('progress', { script, current: current + 1, total });
+    sendEvent('log', `\n--- Running ${script} ---`);
+
+    const child = require('child_process').spawn(process.execPath, [script], { cwd: __dirname });
+
+    child.stdout.on('data', (data) => {
+      sendEvent('log', data.toString());
+    });
+
+    child.stderr.on('data', (data) => {
+      sendEvent('log', `[ERROR] ${data.toString()}`);
+    });
+
+    child.on('close', (code) => {
+      sendEvent('log', `--- ${script} finished with code ${code} ---`);
+      current++;
+      runNext();
+    });
+
+    child.on('error', (err) => {
+      sendEvent('log', `[FATAL] Failed to start ${script}: ${err.message}`);
+      current++;
+      runNext();
+    });
+  };
+
+  runNext();
+
+  req.on('close', () => {
+    res.end();
+  });
+});
+
 app.get('/api/admin/run-migrations/stream', authRequired, requireAdmin, (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -2319,14 +2381,14 @@ app.get('/api/admin/retainers', requireAdmin, async (req, res) => {
 // GET retainer avatar
 app.get('/api/retainers/:id/avatar', async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT avatar FROM retainers WHERE id = ?', [req.params.id]);
-    if (rows.length === 0 || !rows[0].avatar) {
-      return res.status(404).send('No avatar found');
-    }
-    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) {
-        return res.redirect(302, rows[0].avatar);
-      }
-      const mime = getMimeType(rows[0].avatar);
+    const [rows] = await pool.query('SELECT avatar_url, avatar FROM retainers WHERE id = ?', [req.params.id]);
+    if (rows.length === 0) return res.status(404).send('No avatar found');
+    
+    if (rows[0].avatar_url) return res.redirect(302, rows[0].avatar_url);
+    if (!rows[0].avatar) return res.status(404).send('No avatar found');
+    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return res.redirect(302, rows[0].avatar);
+    
+    const mime = getMimeType(rows[0].avatar);
     res.set('Content-Type', mime);
     res.set('Cache-Control', 'public, max-age=31557600');
     res.send(rows[0].avatar);
@@ -2344,8 +2406,15 @@ app.put('/api/retainers/:id/avatar', authRequired, upload.single('avatar'), asyn
       .resize(500, 500, { fit: 'cover' })
       .webp({ quality: 80 })
       .toBuffer();
-    await pool.query('UPDATE retainers SET avatar = ? WHERE id = ?', [processedBuffer, req.params.id]);
-    res.json({ success: true });
+      
+    const fileBlob = new Blob([processedBuffer]);
+    const filename = "retainers_" + req.params.id + ".jpg";
+    const result = await imageClient.uploadImage(fileBlob, filename);
+
+    if (!result.success) throw new Error(result.error);
+
+    await pool.query('UPDATE retainers SET avatar_url = ?, avatar = ? WHERE id = ?', [result.url, buffer, req.params.id]);
+    res.json({ success: true, url: result.url });
   } catch (e) {
     log.err('Failed to update retainer avatar', { error: e.message });
     res.status(500).json({ error: 'Failed to update avatar' });
@@ -3660,14 +3729,14 @@ app.get('/api/admin/camarilla/roster', authRequired, requireAdmin, async (req, r
 
 app.get('/api/npcs/:id/avatar', async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT avatar FROM npcs WHERE id = ?', [req.params.id]);
-    if (rows.length === 0 || !rows[0].avatar) {
-      return res.status(404).send('Avatar not found');
-    }
-    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) {
-        return res.redirect(302, rows[0].avatar);
-      }
-      const mime = getMimeType(rows[0].avatar);
+    const [rows] = await pool.query('SELECT avatar_url, avatar FROM npcs WHERE id = ?', [req.params.id]);
+    if (rows.length === 0) return res.status(404).send('Avatar not found');
+    
+    if (rows[0].avatar_url) return res.redirect(302, rows[0].avatar_url);
+    if (!rows[0].avatar) return res.status(404).send('Avatar not found');
+    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return res.redirect(302, rows[0].avatar);
+    
+    const mime = getMimeType(rows[0].avatar);
     res.set('Content-Type', mime);
     res.set('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
     res.send(rows[0].avatar);
@@ -3687,8 +3756,14 @@ app.put('/api/npcs/:id/avatar', authRequired, requireAdmin, upload.single('avata
       .webp({ quality: 80 })
       .toBuffer();
 
-    await pool.query('UPDATE npcs SET avatar = ? WHERE id = ?', [buffer, req.params.id]);
-    res.json({ success: true, message: 'NPC Avatar updated successfully.' });
+    const fileBlob = new Blob([buffer]);
+    const filename = "npcs_" + req.params.id + ".jpg";
+    const result = await imageClient.uploadImage(fileBlob, filename);
+
+    if (!result.success) throw new Error(result.error);
+
+    await pool.query('UPDATE npcs SET avatar_url = ?, avatar = ? WHERE id = ?', [result.url, buffer, req.params.id]);
+    res.json({ success: true, message: 'NPC Avatar updated successfully.', url: result.url });
   } catch (e) {
     log.err('NPC Avatar PUT error', { message: e.message });
     res.status(500).json({ error: 'Server error updating npc avatar.' });
@@ -4038,14 +4113,14 @@ app.delete('/api/admin/domains/:id/members/:character_id', authRequired, require
 
 app.get('/api/identities/:id/avatar', async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT avatar FROM email_identities WHERE id = ?', [req.params.id]);
-    if (rows.length === 0 || !rows[0].avatar) {
-      return res.status(404).send('Avatar not found');
-    }
-    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) {
-        return res.redirect(302, rows[0].avatar);
-      }
-      const mime = getMimeType(rows[0].avatar);
+    const [rows] = await pool.query('SELECT avatar_url, avatar FROM email_identities WHERE id = ?', [req.params.id]);
+    if (rows.length === 0) return res.status(404).send('Avatar not found');
+    
+    if (rows[0].avatar_url) return res.redirect(302, rows[0].avatar_url);
+    if (!rows[0].avatar) return res.status(404).send('Avatar not found');
+    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return res.redirect(302, rows[0].avatar);
+    
+    const mime = getMimeType(rows[0].avatar);
     res.setHeader('Content-Type', mime);
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
     res.send(rows[0].avatar);
@@ -4065,9 +4140,15 @@ app.put('/api/identities/:id/avatar', authRequired, requireAdmin, upload.single(
       .webp({ quality: 80 })
       .toBuffer();
 
-    await pool.query('UPDATE email_identities SET avatar = ? WHERE id = ?', [buffer, req.params.id]);
+    const fileBlob = new Blob([buffer]);
+    const filename = "email_identities_" + req.params.id + ".jpg";
+    const result = await imageClient.uploadImage(fileBlob, filename);
+
+    if (!result.success) throw new Error(result.error);
+
+    await pool.query('UPDATE email_identities SET avatar_url = ?, avatar = ? WHERE id = ?', [result.url, buffer, req.params.id]);
     log.adm('Identity avatar updated', { identity_id: req.params.id, admin_id: req.user.id });
-    res.json({ ok: true, message: 'Identity avatar updated successfully' });
+    res.json({ ok: true, message: 'Identity avatar updated successfully', url: result.url });
   } catch (err) {
     log.err('Identity avatar upload error', err);
     res.status(500).json({ error: 'Error processing or saving avatar' });
@@ -4682,8 +4763,8 @@ app.post('/api/chat/upload', authRequired, upload.single('file'), async (req, re
     if (!uploadRes.success) throw new Error('Upload failed: ' + uploadRes.error);
 
     const [ins] = await pool.query(
-      'INSERT INTO chat_media (uploader_id, filename, mime, size, data) VALUES (?, ?, ?, ?, ?)',
-      [req.user.id, req.file.originalname || filename, req.file.mimetype, req.file.size, uploadRes.url]
+      'INSERT INTO chat_media (uploader_id, filename, mime, size, data_url, data) VALUES (?, ?, ?, ?, ?, ?)',
+      [req.user.id, req.file.originalname || filename, req.file.mimetype, req.file.size, uploadRes.url, req.file.buffer]
     );
 
     res.json({ id: ins.insertId, url: uploadRes.url, mime: req.file.mimetype });
@@ -4696,11 +4777,15 @@ app.post('/api/chat/upload', authRequired, upload.single('file'), async (req, re
 // GET /api/chat/media/:id/info
 app.get('/api/chat/media/:id/info', authRequired, async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT data, mime FROM chat_media WHERE id=?', [req.params.id]);
+    const [rows] = await pool.query('SELECT data_url, data, mime FROM chat_media WHERE id=?', [req.params.id]);
     if (!rows.length) return res.status(404).send('Not found');
-    const data = rows[0].data;
-    const isUrl = typeof data === 'string' && data.startsWith('http');
-    res.json({ url: isUrl ? data : null, mime: rows[0].mime });
+    
+    let url = rows[0].data_url;
+    if (!url && typeof rows[0].data === 'string' && rows[0].data.startsWith('http')) {
+      url = rows[0].data;
+    }
+    
+    res.json({ url: url || null, mime: rows[0].mime });
   } catch (e) {
     res.status(500).json({ error: 'Error fetching media info' });
   }
@@ -4709,8 +4794,11 @@ app.get('/api/chat/media/:id/info', authRequired, async (req, res) => {
 // Backward compatibility or direct DB fetch: Redirect /api/chat/media/:id to external URL
 app.get('/api/chat/media/:id', authRequired, async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT data, mime FROM chat_media WHERE id=?', [req.params.id]);
-    if (!rows.length || !rows[0].data) return res.status(404).send('Not found');
+    const [rows] = await pool.query('SELECT data_url, data, mime FROM chat_media WHERE id=?', [req.params.id]);
+    if (!rows.length) return res.status(404).send('Not found');
+    
+    if (rows[0].data_url) return res.redirect(302, rows[0].data_url);
+    if (!rows[0].data) return res.status(404).send('Not found');
     
     if (typeof rows[0].data === 'string' && rows[0].data.startsWith('http')) {
       return res.redirect(302, rows[0].data);
@@ -6061,17 +6149,24 @@ app.post('/api/admin/premonitions/upload', authRequired, requireAdmin, memoryUpl
       return res.status(400).json({ error: 'File is required' });
     }
     const { originalname, mimetype, size, buffer } = req.file;
+    
+    const fileBlob = new Blob([buffer]);
+    const ext = originalname ? originalname.split('.').pop() : 'bin';
+    const filenameToUpload = 'premonitions_media_' + Date.now() + '.' + ext;
+    const result = await imageClient.uploadImage(fileBlob, filenameToUpload);
+
+    if (!result.success) throw new Error(result.error);
 
     const [ins] = await pool.query(
-      'INSERT INTO premonition_media (filename, mime, size, data) VALUES (?,?,?,?)',
-      [originalname || 'upload', mimetype, size, buffer]
+      'INSERT INTO premonition_media (filename, mime, size, data_url, data) VALUES (?,?,?,?,?)',
+      [originalname || 'upload', mimetype, size, result.url, req.file.buffer]
     );
     const media_id = ins.insertId;
 
     res.json({
       media_id,
       media_mime: mimetype,
-      media_stream_url: `/api/premonitions/media/${media_id}`
+      media_stream_url: result.url
     });
   } catch (e) {
     log.err('Premonition media upload failed', { message: e.message });
@@ -6249,12 +6344,15 @@ app.get('/api/premonitions/media/:id', authRequired, async (req, res) => {
     }
 
     // User has access, fetch the media
-    const [rows] = await pool.query('SELECT mime, size, data FROM premonition_media WHERE id=? LIMIT 1', [id]);
+    const [rows] = await pool.query('SELECT data_url, mime, size, data FROM premonition_media WHERE id=? LIMIT 1', [id]);
     if (!rows.length) {
       return res.status(404).send('Not found');
     }
 
-    const { mime, size, data } = rows[0];
+    const { data_url, mime, size, data } = rows[0];
+    if (data_url) return res.redirect(302, data_url);
+    if (!data) return res.status(404).send('Not found');
+
       if (typeof data === 'string' && data.startsWith('http')) {
         return res.redirect(302, data);
       }
@@ -6815,12 +6913,20 @@ app.post('/api/news/upload', authRequired, memoryUpload.single('file'), async (r
     if (!req.file) return res.status(400).json({ error: 'File required' });
 
     const { originalname, mimetype, size, buffer } = req.file;
+
+    const fileBlob = new Blob([buffer]);
+    const ext = originalname ? originalname.split('.').pop() : 'bin';
+    const filenameToUpload = 'news_media_' + Date.now() + '.' + ext;
+    const result = await imageClient.uploadImage(fileBlob, filenameToUpload);
+
+    if (!result.success) throw new Error(result.error);
+
     const [ins] = await pool.query(
-      'INSERT INTO news_media (filename, mime, size, data) VALUES (?,?,?,?)',
-      [originalname || 'upload', mimetype, size, buffer]
+      'INSERT INTO news_media (filename, mime, size, data_url, data) VALUES (?,?,?,?,?)',
+      [originalname || 'upload', mimetype, size, result.url, Buffer.from('')]
     );
 
-    res.json({ url: `/api/news/media/${ins.insertId}` });
+    res.json({ url: result.url });
   } catch (e) {
     log.err('News upload failed', { message: e.message });
     res.status(500).json({ error: 'Upload failed' });
@@ -6831,10 +6937,13 @@ app.post('/api/news/upload', authRequired, memoryUpload.single('file'), async (r
 app.get('/api/news/media/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const [rows] = await pool.query('SELECT mime, size, data FROM news_media WHERE id=? LIMIT 1', [id]);
+    const [rows] = await pool.query('SELECT data_url, mime, size, data FROM news_media WHERE id=? LIMIT 1', [id]);
     if (!rows.length) return res.status(404).send('Not found');
 
-    const { mime, size, data } = rows[0];
+    const { data_url, mime, size, data } = rows[0];
+    
+    if (data_url) return res.redirect(302, data_url);
+    if (!data) return res.status(404).send('Not found');
 
       if (typeof data === 'string' && data.startsWith('http')) {
         return res.redirect(302, data);
@@ -7711,14 +7820,14 @@ app.post('/api/hunts/submit', authRequired, async (req, res) => {
 
 app.get('/api/users/:id/avatar', async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT avatar FROM users WHERE id = ?', [req.params.id]);
-    if (rows.length === 0 || !rows[0].avatar) {
-      return res.status(404).send('Avatar not found');
-    }
-    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) {
-        return res.redirect(302, rows[0].avatar);
-      }
-      const mime = getMimeType(rows[0].avatar);
+    const [rows] = await pool.query('SELECT avatar_url, avatar FROM users WHERE id = ?', [req.params.id]);
+    if (rows.length === 0) return res.status(404).send('Avatar not found');
+    
+    if (rows[0].avatar_url) return res.redirect(302, rows[0].avatar_url);
+    if (!rows[0].avatar) return res.status(404).send('Avatar not found');
+    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return res.redirect(302, rows[0].avatar);
+    
+    const mime = getMimeType(rows[0].avatar);
     res.set('Content-Type', mime);
     res.set('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
     res.send(rows[0].avatar);
@@ -7742,8 +7851,14 @@ app.put('/api/users/:id/avatar', authRequired, upload.single('avatar'), async (r
       .webp({ quality: 80 })
       .toBuffer();
 
-    await pool.query('UPDATE users SET avatar = ? WHERE id = ?', [buffer, req.params.id]);
-    res.json({ success: true, message: 'Avatar updated successfully.' });
+    const fileBlob = new Blob([buffer]);
+    const filename = "users_" + req.params.id + ".jpg";
+    const result = await imageClient.uploadImage(fileBlob, filename);
+
+    if (!result.success) throw new Error(result.error);
+
+    await pool.query('UPDATE users SET avatar_url = ?, avatar = ? WHERE id = ?', [result.url, buffer, req.params.id]);
+    res.json({ success: true, message: 'Avatar updated successfully.', url: result.url });
   } catch (e) {
     log.err('Avatar PUT error', { message: e.message });
     res.status(500).json({ error: 'Server error updating avatar.' });
