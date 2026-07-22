@@ -118,9 +118,6 @@ console.log('🦇 Erebus Portal Backend v1.0.0 (Vampire: The Masquerade)');
 console.log(`💻 Node.js: ${process.version}`);
 console.log('======================================================\n');
 
-const _start = Date.now();
-while (Date.now() - _start < 2000) { /* synchronous 2-second wait */ }
-
 log.start('API booting…');
 
 // Load keys from .env
@@ -130,7 +127,7 @@ const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
 // Start Discord Worker
 require('./discordWorker');
 
-const fastify = require('fastify')({ 
+const fastify = require('fastify')({
   logger: {
     transport: {
       target: 'pino-pretty',
@@ -139,8 +136,8 @@ const fastify = require('fastify')({
         ignore: 'pid,hostname',
       },
     },
-  }, 
-  bodyLimit: 73400320 
+  },
+  bodyLimit: 73400320
 });
 const app = fastify; // Alias for compatibility with some routes
 
@@ -165,12 +162,12 @@ fastify.setErrorHandler(async (error, request, reply) => {
   if (error.validation) {
     return reply.status(400).send({ error: 'Validation Error', details: error.validation });
   }
-  
+
   log.err('Unhandled Fastify Error', { error: error.message, stack: error.stack, url: request.url });
   if (typeof reportErrorToDiscord === 'function') {
-    await reportErrorToDiscord(`Fastify Route ${request.url}`, error).catch(() => {});
+    await reportErrorToDiscord(`Fastify Route ${request.url}`, error).catch(() => { });
   }
-  
+
   reply.status(500).send({ error: 'Internal Server Error' });
 });
 // ------------------------------------------------------------------------
@@ -195,8 +192,8 @@ const helmet = require('@fastify/helmet');
 fastify.register(helmet, {
   crossOriginResourcePolicy: { policy: "cross-origin" },
 });
-fastify.register(cors, { 
-  origin: corsOrigin, 
+fastify.register(cors, {
+  origin: corsOrigin,
   credentials: true,
   methods: ['GET', 'PUT', 'POST', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'Pragma', 'Expires', 'Idempotency-Key', 'X-Requested-With', 'Accept']
@@ -1265,7 +1262,7 @@ fastify.get('/', async (req, reply) => {
   } catch (err) {
     html = '<h1>Status Page Error</h1><p>' + err.message + '</p>';
   }
-  
+
   // uptime calculation
   const total = Math.floor(process.uptime());
   const days = Math.floor(total / 86400);
@@ -1325,7 +1322,7 @@ fastify.get('/', async (req, reply) => {
   // Environment checks
   const jwtStatus = process.env.JWT_SECRET ? 'CONFIGURED' : 'MISSING';
   const jwtClass = process.env.JWT_SECRET ? 'ok' : 'bad';
-  
+
   const ntfyStatus = process.env.NTFY_TOPIC ? `CONFIGURED (${process.env.NTFY_TOPIC})` : 'NOT SET';
   const ntfyClass = process.env.NTFY_TOPIC ? 'ok' : 'bad';
 
@@ -2477,11 +2474,11 @@ fastify.get('/api/npcs/:id/avatar', async (req, reply) => {
   try {
     const [rows] = await pool.query('SELECT avatar_url, avatar FROM npcs WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return reply.status(404).send('Avatar not found');
-    
+
     if (rows[0].avatar_url) return reply.redirect(rows[0].avatar_url);
     if (!rows[0].avatar) return reply.status(404).send('Avatar not found');
     if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return reply.redirect(rows[0].avatar);
-    
+
     const mime = getMimeType(rows[0].avatar);
     reply.header('Content-Type', mime);
     reply.header('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
@@ -2550,7 +2547,7 @@ fastify.put('/api/retainers/:id/avatar', { preHandler: [authRequired] }, async (
       .resize(500, 500, { fit: 'cover' })
       .webp({ quality: 80 })
       .toBuffer();
-      
+
     const filename = "retainers_" + req.params.id + ".jpg";
     let avatarUrl = null;
     try {
@@ -2913,11 +2910,11 @@ fastify.get('/api/identities/:id/avatar', async (req, reply) => {
   try {
     const [rows] = await pool.query('SELECT avatar_url, avatar FROM email_identities WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return reply.status(404).send('Avatar not found');
-    
+
     if (rows[0].avatar_url) return reply.redirect(rows[0].avatar_url);
     if (!rows[0].avatar) return reply.status(404).send('Avatar not found');
     if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return reply.redirect(rows[0].avatar);
-    
+
     const mime = getMimeType(rows[0].avatar);
     reply.header('Content-Type', mime);
     reply.header('Cache-Control', 'public, max-age=31536000, immutable');
@@ -3580,12 +3577,12 @@ fastify.get('/api/chat/media/:id/info', { preHandler: [authRequired] }, async (r
   try {
     const [rows] = await pool.query('SELECT data_url, data, mime FROM chat_media WHERE id=?', [req.params.id]);
     if (!rows.length) return reply.status(404).send('Not found');
-    
+
     let url = rows[0].data_url;
     if (!url && typeof rows[0].data === 'string' && rows[0].data.startsWith('http')) {
       url = rows[0].data;
     }
-    
+
     reply.send({ url: url || null, mime: rows[0].mime });
   } catch (e) {
     reply.status(500).json({ error: 'Error fetching media info' });
@@ -5153,10 +5150,10 @@ fastify.get('/api/premonitions/media/:id', { preHandler: [authRequired] }, async
     if (data_url) return reply.redirect(302, data_url);
     if (!data) return reply.status(404).send('Not found');
 
-      if (typeof data === 'string' && data.startsWith('http')) {
-        return reply.redirect(302, data);
-      }
-      reply.header('Content-Type', mime || 'application/octet-stream');
+    if (typeof data === 'string' && data.startsWith('http')) {
+      return reply.redirect(302, data);
+    }
+    reply.header('Content-Type', mime || 'application/octet-stream');
     reply.header('Content-Length', size);
     reply.header('Cache-Control', 'private, max-age=3600'); // 1 hour
     reply.send(data); // send raw blob
@@ -5748,15 +5745,15 @@ fastify.get('/api/news/media/:id', async (req, reply) => {
     if (!rows.length) return reply.status(404).send('Not found');
 
     const { data_url, mime, size, data } = rows[0];
-    
+
     if (data_url) return reply.redirect(302, data_url);
     if (!data) return reply.status(404).send('Not found');
 
-      if (typeof data === 'string' && data.startsWith('http')) {
-        return reply.redirect(302, data);
-      }
+    if (typeof data === 'string' && data.startsWith('http')) {
+      return reply.redirect(302, data);
+    }
 
-      // Handle HTML5 Video Range Requests (Crucial for iOS/Safari & scrubbing)
+    // Handle HTML5 Video Range Requests (Crucial for iOS/Safari & scrubbing)
     const range = req.headers.range;
     if (range && mime.startsWith('video/')) {
       const parts = range.replace(/bytes=/, "").split("-");
@@ -6629,11 +6626,11 @@ fastify.get('/api/users/:id/avatar', async (req, reply) => {
   try {
     const [rows] = await pool.query('SELECT avatar_url, avatar FROM users WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return reply.status(404).send('Avatar not found');
-    
+
     if (rows[0].avatar_url) return reply.redirect(rows[0].avatar_url);
     if (!rows[0].avatar) return reply.status(404).send('Avatar not found');
     if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return reply.redirect(rows[0].avatar);
-    
+
     const mime = getMimeType(rows[0].avatar);
     reply.header('Content-Type', mime);
     reply.header('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
@@ -6978,7 +6975,7 @@ fastify.post('/api/characters/:id/apply-damage', { preHandler: [authRequired] },
 });
 
 /* -------------------- Start Server -------------------- */
-const PORT = process.env.PORT || 3001;
+const PORT = Number(process.env.PORT) || 3001;
 
 const server = fastify.server;
 const { Server } = require('socket.io');
@@ -6999,23 +6996,27 @@ io.on('connection', (socket) => {
 fastify.decorate('io', io);
 
 fastify.ready().then(() => {
-  if (typeof PhusionPassenger !== 'undefined' || process.env.PORT === 'passenger') {
-    // Passenger requires the exact string 'passenger' to trigger its monkey-patch
-    fastify.server.listen('passenger', () => {
-      log.start(`API server started via Passenger`, { env: process.env.NODE_ENV || 'stable' });
-    });
-  } else {
-    // Standard local listening
-    fastify.listen({ port: Number(PORT), host: '0.0.0.0' }, (err, address) => {
-      if (err) {
-        log.err(`API server failed to start`, { error: err.message });
-        console.error(err);
-        process.exit(1);
-      }
-      log.start(`API server started on ${address}`, { port: PORT, env: process.env.NODE_ENV || 'stable' });
-      broadcastNtfyAlert(`API server started on port ${PORT}`, { title: 'Server Online', tags: 'rocket' });
-    });
-  }
+  // IMPORTANT: Always call fastify.listen() with a plain object, unconditionally.
+  //
+  // Phusion Passenger's Node.js integration needs zero special-casing: it hooks
+  // into the FIRST http.Server that calls .listen() in the process and silently
+  // redirects it to the Unix domain socket / port it actually wants to use. The
+  // port/host value you pass is irrelevant when running under Passenger - it is
+  // only used when there's no Passenger in front (e.g. local dev). There is no
+  // magic 'passenger' string to pass, and calling fastify.server.listen('passenger', ...)
+  // directly (bypassing Fastify) was actually trying to bind a real Unix socket
+  // file literally named "passenger" in the app's working directory - which
+  // fails (or hangs) in Plesk's chrooted/restricted filesystem and is exactly
+  // why Passenger timed out waiting for the app to come online.
+  fastify.listen({ port: PORT, host: '0.0.0.0' }, (err, address) => {
+    if (err) {
+      log.err(`API server failed to start`, { error: err.message });
+      console.error(err);
+      process.exit(1);
+    }
+    log.start(`API server started on ${address}`, { port: PORT, env: process.env.NODE_ENV || 'stable' });
+    broadcastNtfyAlert(`API server started on port ${PORT}`, { title: 'Server Online', tags: 'rocket' });
+  });
 });
 
 //port is set to 3001
