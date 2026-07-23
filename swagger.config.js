@@ -100,8 +100,8 @@ const swaggerOptions = {
       },
     ],
   },
-  // This looks for @swagger comments in the server.js file
-  apis: ['./server.js'],
+  // Look for @swagger comments in server files and route files
+  apis: ['./server.fastify.js', './server.js', './server.express.js', './routes/*.js'],
 };
 
 const swaggerSpec = swaggerJsdoc(swaggerOptions);

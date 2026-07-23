@@ -51,7 +51,8 @@ sharp.concurrency(1);
 // TextToSVG disabled
 const rateLimit = require('@fastify/rate-limit');
 // --- Swagger Imports ---
-// swagger removed temporarily
+const fastifySwagger = require('@fastify/swagger');
+const fastifySwaggerUi = require('@fastify/swagger-ui');
 const swaggerSpec = require('./swagger.config');
 
 // Rate limiting
@@ -213,6 +214,22 @@ fastify.register(compression);
 
 // Add Idempotency Middleware for all routes
 fastify.register(idempotencyPlugin);
+
+// --- Swagger Setup ---
+fastify.register(fastifySwagger, {
+  mode: 'static',
+  specification: {
+    document: swaggerSpec,
+  },
+});
+fastify.register(fastifySwaggerUi, {
+  routePrefix: '/api-docs',
+  uiConfig: {
+    docExpansion: 'list',
+    deepLinking: true
+  },
+  exposeRoute: true
+});
 
 // Disable caching for all admin API routes to prevent 304 errors
 fastify.addHook('preHandler', async (request, reply) => { if (request.url.startsWith('/api/admin')) { reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, private'); } });
@@ -6973,7 +6990,10 @@ fastify.post('/api/characters/:id/apply-damage', { preHandler: [authRequired] },
   }
 });
 
-const RAW_PORT = process.env.PORT;
+/* -------------------- Start Server -------------------- */
+const PORT = Number(process.env.PORT) || 3001;
+
+const server = fastify.server;
 const { Server } = require('socket.io');
 const io = new Server(server, {
   cors: { origin: '*' }
@@ -6992,25 +7012,27 @@ io.on('connection', (socket) => {
 fastify.decorate('io', io);
 
 fastify.ready().then(() => {
-  // If Passenger is providing a named pipe (like 'passenger' or '/tmp/passenger.sock')
-  // we must pass it natively to the underlying Node http.Server so Passenger can hook it.
-  if (RAW_PORT && isNaN(Number(RAW_PORT))) {
-    fastify.server.listen(RAW_PORT, () => {
-      log.start(`API server started on Passenger socket: ${RAW_PORT}`, { env: process.env.NODE_ENV || 'stable' });
-    });
-  } else {
-    // Local dev or standard numeric port
-    const portNum = Number(RAW_PORT) || 3001;
-    fastify.listen({ port: portNum, host: '0.0.0.0' }, (err, address) => {
-      if (err) {
-        log.err(`API server failed to start`, { error: err.message });
-        console.error(err);
-        process.exit(1);
-      }
-      log.start(`API server started on ${address}`, { port: portNum, env: process.env.NODE_ENV || 'stable' });
-      broadcastNtfyAlert(`API server started on port ${portNum}`, { title: 'Server Online', tags: 'rocket' });
-    });
-  }
+  // IMPORTANT: Always call fastify.listen() with a plain object, unconditionally.
+  //
+  // Phusion Passenger's Node.js integration needs zero special-casing: it hooks
+  // into the FIRST http.Server that calls .listen() in the process and silently
+  // redirects it to the Unix domain socket / port it actually wants to use. The
+  // port/host value you pass is irrelevant when running under Passenger - it is
+  // only used when there's no Passenger in front (e.g. local dev). There is no
+  // magic 'passenger' string to pass, and calling fastify.server.listen('passenger', ...)
+  // directly (bypassing Fastify) was actually trying to bind a real Unix socket
+  // file literally named "passenger" in the app's working directory - which
+  // fails (or hangs) in Plesk's chrooted/restricted filesystem and is exactly
+  // why Passenger timed out waiting for the app to come online.
+  fastify.listen({ port: PORT, host: '0.0.0.0' }, (err, address) => {
+    if (err) {
+      log.err(`API server failed to start`, { error: err.message });
+      console.error(err);
+      process.exit(1);
+    }
+    log.start(`API server started on ${address}`, { port: PORT, env: process.env.NODE_ENV || 'stable' });
+    broadcastNtfyAlert(`API server started on port ${PORT}`, { title: 'Server Online', tags: 'rocket' });
+  });
 });
 
 //port is set to 3001
