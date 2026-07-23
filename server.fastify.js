@@ -29,7 +29,7 @@ const { EventEmitter } = require('events');
 const bannerEmitter = new EventEmitter();
 // multer removed
 // Import multer
-const { VampireImageClient } = require('mikes-php-image-handler');
+const { VampireImageClient } = require('./utils/mikes-php-image-handler');
 const imageClient = new VampireImageClient({ baseUrl: 'https://img.miketsak.gr', apiKey: process.env.IMAGE_API_KEY });
 const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require('discord.js');
 const webpush = require('web-push');
