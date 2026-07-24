@@ -1,4 +1,0 @@
-const fs = require('fs');
-const content = fs.readFileSync('../node_modules/fastify/lib/route.js', 'utf8');
-const patched = content.replace('console.log("PREPARING VALUE IS:", context.preParsing); const request = new context.Request(id, params, req, query, childLogger, context)', 'console.log("CONTEXT KEYS:", Object.keys(context)); console.log("Is Fastify Context:", context.constructor.name); const request = new context.Request(id, params, req, query, childLogger, context)');
-fs.writeFileSync('../node_modules/fastify/lib/route.js', patched);

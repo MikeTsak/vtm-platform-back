@@ -460,6 +460,7 @@ fastify.delete('/api/characters/:id/inventory/:itemId', { preHandler: [authRequi
 // DUP: });
 
 // ================== Retainers ==================
+/*
 fastify.get('/api/characters/:id/retainers', { preHandler: [authRequired] }, async (req, reply) => {
   try {
     const [rows] = await pool.query('SELECT id, character_id, name, tier, sheet, xp, created_at FROM retainers WHERE character_id=?', [req.params.id]);
@@ -483,6 +484,7 @@ fastify.post('/api/characters/:id/retainers', { preHandler: [authRequired] }, as
     reply.status(500).json({ error: 'Failed to create retainer' });
   }
 });
+*/
 
 
 fastify.put('/api/retainers/:retainerId/upgrade', { preHandler: [authRequired] }, async (req, reply) => {
