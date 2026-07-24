@@ -19,7 +19,6 @@ const migrations = [
     { table: 'users', column: 'avatar', urlCol: 'avatar_url' },
     { table: 'npcs', column: 'avatar', urlCol: 'avatar_url' },
     { table: 'retainers', column: 'avatar', urlCol: 'avatar_url' },
-    { table: 'email_identities', column: 'avatar', urlCol: 'avatar_url' },
     { table: 'chat_groups', column: 'avatar', urlCol: 'avatar_url' },
     { table: 'chat_media', column: 'data', urlCol: 'data_url' },
     { table: 'news_media', column: 'data', urlCol: 'data_url' },
