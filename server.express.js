@@ -6559,9 +6559,7 @@ app.patch('/api/live-session/:id/players/:charId', authRequired, requireCourt, a
     let sheet = {};
     try {
       sheet = typeof rows[0].sheet === 'string' ? JSON.parse(rows[0].sheet || '{}') : (rows[0].sheet || {});
-    } catch (e) {
-      return res.status(500).json({ error: 'Failed to parse existing character sheet data.' });
-    }
+    } catch (e) { }
 
     if (hungerDelta !== undefined) sheet.hunger = Math.max(0, Math.min(5, Number(sheet.hunger || 0) + Number(hungerDelta)));
     if (humanityDelta !== undefined) {
@@ -8000,11 +7998,7 @@ app.post('/api/characters/:id/rouse', authRequired, async (req, res) => {
 
     let sheet = rows[0].sheet;
     if (typeof sheet === 'string') {
-      try { 
-        sheet = JSON.parse(sheet || '{}'); 
-      } catch (e) { 
-        return res.status(500).json({ error: 'Failed to parse existing character sheet data.' }); 
-      }
+      try { sheet = JSON.parse(sheet); } catch (e) { sheet = {}; }
     }
     if (!sheet) sheet = {};
     const currentHunger = Number(sheet.hunger) || 0;
@@ -8049,11 +8043,7 @@ app.post('/api/characters/:id/spend-wp', authRequired, async (req, res) => {
 
     let sheet = rows[0].sheet;
     if (typeof sheet === 'string') {
-      try { 
-        sheet = JSON.parse(sheet || '{}'); 
-      } catch (e) { 
-        return res.status(500).json({ error: 'Failed to parse existing character sheet data.' }); 
-      }
+      try { sheet = JSON.parse(sheet); } catch (e) { sheet = {}; }
     }
     if (!sheet) sheet = {};
     if (!sheet.willpower) sheet.willpower = { superficial: 0, aggravated: 0 };
