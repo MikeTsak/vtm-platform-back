@@ -1,6 +1,6 @@
 require('dotenv').config();
 const pool = require('./db');
-const { VampireImageClient } = require('mikes-php-image-handler');
+const { VampireImageClient } = require('./utils/mikes-php-image-handler');
 
 // Ensure API Key exists
 const apiKey = process.env.IMAGE_API_KEY;
