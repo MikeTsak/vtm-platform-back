@@ -1451,8 +1451,8 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     if (secretKey) {
       try {
         const verifyRes = await axios.post(`https://www.google.com/recaptcha/api/siteverify?secret=${secretKey}&response=${recaptchaToken}`);
-        if (!verifyRes.data.success || verifyRes.data.score < 0.5) {
-          log.warn('Register invalid captcha or low score', { email, score: verifyRes.data.score });
+        if (!verifyRes.data.success) {
+          log.warn('Register invalid captcha', { email });
           return res.status(400).json({ error: 'Captcha validation failed. Are you a bot?' });
         }
       } catch (err) {

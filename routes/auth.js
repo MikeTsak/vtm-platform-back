@@ -35,8 +35,8 @@ module.exports = async function (fastify, opts) {
     const secretKey = process.env.RECAPTCHA_SITE_SECRET;
     if (secretKey) {
       const verifyRes = await axios.post(`https://www.google.com/recaptcha/api/siteverify?secret=${secretKey}&response=${recaptchaToken}`);
-      if (!verifyRes.data.success || verifyRes.data.score < 0.5) {
-        log.warn('Register invalid captcha or low score', { email, score: verifyRes.data.score });
+      if (!verifyRes.data.success) {
+        log.warn('Register invalid captcha', { email });
         return reply.status(400).send({ error: 'Captcha validation failed. Are you a bot?' });
       }
     }
