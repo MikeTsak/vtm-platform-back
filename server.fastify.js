@@ -951,7 +951,7 @@ fastify.get('/api/admin/migrate-media/stream', { preHandler: [authRequired, requ
   const sendEvent = (event, data) => {
     reply.raw.write(`event: ${event}\n`);
     reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
-    if (res.flush) reply.raw.flush();
+    if (reply.raw.flush) reply.raw.flush();
   };
 
   sendEvent('start', { total });
