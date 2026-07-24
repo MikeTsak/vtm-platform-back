@@ -128,23 +128,39 @@ const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
 require('./discordWorker');
 
 const fastify = require('fastify')({
-  logger: {
-    transport: {
-      target: 'pino-pretty',
-      options: {
-        translateTime: 'HH:MM:ss Z',
-        ignore: 'pid,hostname',
-      },
-    },
-  },
+  logger: false,
+  disableRequestLogging: true,
   bodyLimit: 73400320
 });
 const app = fastify; // Alias for compatibility with some routes
 
-// --- FASTIFY OPTIMIZATIONS: Database Lifecycle & Global Error Handler ---
 fastify.decorate('db', pool);
 fastify.decorateReply('json', function (payload) {
   return this.send(payload);
+});
+
+// Custom request logging hooks
+fastify.addHook('onRequest', (request, reply, done) => {
+  const silent = ['/api/admin/logs'];
+  if (silent.some(p => request.url.startsWith(p))) return done();
+  
+  log.req(`${request.method} ${request.url}`, { ip: request.ip, ua: request.headers['user-agent'] });
+  done();
+});
+
+fastify.addHook('onResponse', (request, reply, done) => {
+  const silent = ['/api/admin/logs'];
+  if (silent.some(p => request.url.startsWith(p))) return done();
+  
+  const ms = Math.round(reply.getResponseTime());
+  const code = reply.statusCode;
+  const base = { status: code, ms };
+  
+  if (code >= 500) log.err(`${code} ${request.method} ${request.url} (${ms}ms)`, base);
+  else if (code >= 400) log.warn(`${code} ${request.method} ${request.url} (${ms}ms)`, base, 'warn');
+  else log.ok(`${code} ${request.method} ${request.url} (${ms}ms)`, base);
+  
+  done();
 });
 
 fastify.addHook('onClose', async (instance, done) => {
