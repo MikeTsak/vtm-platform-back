@@ -207,6 +207,7 @@ function getMimeType(buffer) {
 const helmet = require('@fastify/helmet');
 fastify.register(helmet, {
   crossOriginResourcePolicy: { policy: "cross-origin" },
+  contentSecurityPolicy: false
 });
 fastify.register(cors, {
   origin: corsOrigin,
