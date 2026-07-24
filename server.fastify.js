@@ -901,9 +901,13 @@ fastify.get('/api/system/banner', async (req, reply) => {
 
 // Public: Stream banner updates (SSE)
 fastify.get('/api/system/banner/stream', (req, reply) => {
-  reply.header('Content-Type', 'text/event-stream');
-  reply.header('Cache-Control', 'no-cache');
-  reply.header('Connection', 'keep-alive');
+  reply.hijack();
+  reply.raw.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*'
+  });
   reply.raw.flushHeaders();
 
   // Send an initial ping to establish connection
@@ -929,9 +933,9 @@ fastify.get('/api/system/banner/stream', (req, reply) => {
 
   bannerEmitter.on('update', onUpdate);
 
-  req.on('close', () => {
+  req.raw.on('close', () => {
     bannerEmitter.off('update', onUpdate);
-    reply.send();
+    reply.raw.end();
   });
 });
 
@@ -939,10 +943,14 @@ fastify.get('/api/system/banner/stream', (req, reply) => {
 
 // Admin: Run Media Migration Stream (SSE)
 fastify.get('/api/admin/migrate-media/stream', { preHandler: [authRequired, requireAdmin] }, (req, reply) => {
-  reply.header('Content-Type', 'text/event-stream');
-  reply.header('Cache-Control', 'no-cache');
-  reply.header('Connection', 'keep-alive');
-  reply.raw.flushHeaders(); // Establish SSE with client
+  reply.hijack();
+  reply.raw.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*'
+  });
+  reply.raw.flushHeaders();
 
   const scripts = ['migrate_media.js'];
   const total = scripts.length;
@@ -959,7 +967,9 @@ fastify.get('/api/admin/migrate-media/stream', { preHandler: [authRequired, requ
   const runNext = () => {
     if (current >= total) {
       sendEvent('done', { message: 'Media migration complete!' });
-      return reply.send();
+      return setTimeout(() => {
+        reply.raw.end();
+      }, 500);
     }
 
     const script = scripts[current];
@@ -991,16 +1001,19 @@ fastify.get('/api/admin/migrate-media/stream', { preHandler: [authRequired, requ
 
   runNext();
 
-  req.on('close', () => {
-    reply.send();
+  req.raw.on('close', () => {
+    reply.raw.end();
   });
 });
 
 fastify.get('/api/admin/run-migrations/stream', { preHandler: [authRequired, requireAdmin] }, (req, reply) => {
-  reply.header('Content-Type', 'text/event-stream');
-  reply.header('Cache-Control', 'no-cache');
-  reply.header('Connection', 'keep-alive');
-  reply.raw.flushHeaders(); // Establish SSE with client
+  reply.hijack();
+  reply.raw.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive'
+  });
+  reply.raw.flushHeaders();
 
   const scripts = [
     'migrate-avatars.js',
@@ -1022,7 +1035,7 @@ fastify.get('/api/admin/run-migrations/stream', { preHandler: [authRequired, req
   const runNext = () => {
     if (current >= total) {
       sendEvent('done', { message: 'All migrations complete!' });
-      return reply.send();
+      return reply.raw.end();
     }
 
     const script = scripts[current];
@@ -1054,9 +1067,9 @@ fastify.get('/api/admin/run-migrations/stream', { preHandler: [authRequired, req
 
   runNext();
 
-  req.on('close', () => {
+  req.raw.on('close', () => {
     // Client disconnected, though child processes might still run if we don't kill them.
-    reply.send();
+    reply.raw.end();
   });
 });
 
