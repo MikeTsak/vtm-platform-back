@@ -535,7 +535,11 @@ module.exports = async function (fastify, opts) {
         }
         results.push({ ...row }); // Ensure it's a plain object
       }
-      reply.send(results);
+        const payload = JSON.stringify(results);
+        return reply
+          .header('Content-Type', 'application/json; charset=utf-8')
+          .header('Content-Length', Buffer.byteLength(payload))
+          .send(payload);
     } catch (e) {
       log.err('Failed to get retainers', { message: e.message, character_id: req.params.id });
       reply.status(500).json({ error: 'Failed to fetch retainers' });
@@ -589,8 +593,8 @@ module.exports = async function (fastify, opts) {
       }
 
       await pool.query(
-        'UPDATE retainers SET tier=?, sheet=? WHERE id=?',
-        [tier, JSON.stringify(sheet), req.params.retainerId]
+        'UPDATE retainers SET name=?, tier=?, sheet=? WHERE id=?',
+        [name || oldRetainer.name, tier, JSON.stringify(sheet), req.params.retainerId]
       );
       
       const [updatedRows] = await pool.query('SELECT * FROM retainers WHERE id=?', [req.params.retainerId]);
@@ -664,7 +668,11 @@ module.exports = async function (fastify, opts) {
           try { row.sheet = JSON.parse(row.sheet); } catch (e) {}
         }
       }
-      reply.send(rows);
+        const payload = JSON.stringify(rows);
+        return reply
+          .header('Content-Type', 'application/json; charset=utf-8')
+          .header('Content-Length', Buffer.byteLength(payload))
+          .send(payload);
     } catch (e) {
       log.err('Failed to get all retainers for admin', { error: e.message });
       reply.status(500).json({ error: 'Failed to fetch retainers' });
