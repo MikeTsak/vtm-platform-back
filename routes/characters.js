@@ -523,11 +523,19 @@ module.exports = async function (fastify, opts) {
   // DUP: });
 
   // ================== Retainers ==================
-  /*
   fastify.get('/api/characters/:id/retainers', { preHandler: [authRequired] }, async (req, reply) => {
     try {
+      console.log('GET /api/characters/:id/retainers called with id:', req.params.id);
       const [rows] = await pool.query('SELECT id, character_id, name, tier, sheet, xp, created_at FROM retainers WHERE character_id=?', [req.params.id]);
-      reply.send(rows);
+      console.log('Retainers found:', rows.length);
+      const results = [];
+      for (const row of rows) {
+        if (row.sheet && typeof row.sheet === 'string') {
+          try { row.sheet = JSON.parse(row.sheet); } catch (e) {}
+        }
+        results.push({ ...row }); // Ensure it's a plain object
+      }
+      reply.send(results);
     } catch (e) {
       log.err('Failed to get retainers', { message: e.message, character_id: req.params.id });
       reply.status(500).json({ error: 'Failed to fetch retainers' });
@@ -537,17 +545,23 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/characters/:id/retainers', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const { name, tier, sheet, xp } = req.body;
+      
+      const isGhoul = sheet?.isGhoul === true;
+      const validationError = validateRetainerSheet(Number(tier || 1), sheet, isGhoul);
+      if (validationError) {
+        return reply.status(400).json({ error: validationError });
+      }
+
       const [result] = await pool.query(
         'INSERT INTO retainers (character_id, name, tier, sheet, xp) VALUES (?, ?, ?, ?, ?)',
         [req.params.id, name, tier || 1, JSON.stringify(sheet || {}), xp || 0]
       );
-      reply.send({ id: result.insertId, character_id: req.params.id, name, tier, sheet, xp });
+      reply.send({ id: result.insertId, character_id: Number(req.params.id), name, tier, sheet, xp });
     } catch (e) {
       log.err('Failed to create retainer', { message: e.message, character_id: req.params.id });
       reply.status(500).json({ error: 'Failed to create retainer' });
     }
   });
-  */
 
 
   fastify.put('/api/retainers/:retainerId/upgrade', { preHandler: [authRequired] }, async (req, reply) => {
@@ -578,7 +592,17 @@ module.exports = async function (fastify, opts) {
         'UPDATE retainers SET tier=?, sheet=? WHERE id=?',
         [tier, JSON.stringify(sheet), req.params.retainerId]
       );
-      reply.send({ success: true });
+      
+      const [updatedRows] = await pool.query('SELECT * FROM retainers WHERE id=?', [req.params.retainerId]);
+      if (updatedRows.length > 0) {
+         const ret = updatedRows[0];
+         if (ret.sheet && typeof ret.sheet === 'string') {
+             try { ret.sheet = JSON.parse(ret.sheet); } catch(e){}
+         }
+         reply.send(ret);
+      } else {
+         reply.send({ success: true });
+      }
     } catch (e) {
       log.err('Failed to upgrade retainer', { message: e.message, retainer_id: req.params.retainerId });
       reply.status(500).json({ error: 'Failed to upgrade retainer' });
@@ -597,17 +621,71 @@ module.exports = async function (fastify, opts) {
         return reply.status(400).json({ error: validationError });
       }
 
+      await pool.query(
+        'UPDATE retainers SET name=?, tier=?, sheet=?, xp=? WHERE id=?',
+        [name, tier, JSON.stringify(sheet), xp, retainerId]
+      );
+      
+      const [updatedRows] = await pool.query('SELECT * FROM retainers WHERE id=?', [retainerId]);
+      if (updatedRows.length > 0) {
+         const ret = updatedRows[0];
+         if (ret.sheet && typeof ret.sheet === 'string') {
+             try { ret.sheet = JSON.parse(ret.sheet); } catch(e){}
+         }
+         reply.send(ret);
+      } else {
+         reply.send({ success: true });
+      }
+    } catch (e) {
+      log.err('Failed to update retainer', { message: e.message, retainer_id: req.params.retainerId });
+      reply.status(500).json({ error: 'Failed to update retainer' });
+    }
+  });
+
+  fastify.delete('/api/retainers/:retainerId', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      await pool.query('DELETE FROM retainers WHERE id=?', [req.params.retainerId]);
+      reply.send({ success: true });
+    } catch (e) {
+      log.err('Failed to delete retainer', { message: e.message, retainer_id: req.params.retainerId });
+      reply.status(500).json({ error: 'Failed to delete retainer' });
+    }
+  });
+
+  fastify.get('/api/admin/retainers', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const [rows] = await pool.query(`
+        SELECT r.id, r.character_id, r.name, r.tier, r.sheet, r.created_at, c.name as domitor_name 
+        FROM retainers r
+        JOIN characters c ON r.character_id = c.id
+      `);
+      for (const row of rows) {
+        if (row.sheet && typeof row.sheet === 'string') {
+          try { row.sheet = JSON.parse(row.sheet); } catch (e) {}
+        }
+      }
+      reply.send(rows);
+    } catch (e) {
+      log.err('Failed to get all retainers for admin', { error: e.message });
+      reply.status(500).json({ error: 'Failed to fetch retainers' });
+    }
+  });
+
+  fastify.put('/api/admin/characters/:id/reset', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const charId = req.params.id;
+
       // 1. Clear XP logs so math doesn't break for the new sheet
-      try { await pool.query('DELETE FROM xp_log WHERE character_id=?', [retainerId]); } catch (e) { }
+      try { await pool.query('DELETE FROM xp_log WHERE character_id=?', [charId]); } catch (e) { }
 
       // 2. Reset sheet to NULL and XP to 50
-      await pool.query('UPDATE characters SET sheet=NULL, xp=50 WHERE id=?', [retainerId]);
+      await pool.query('UPDATE characters SET sheet=NULL, xp=50 WHERE id=?', [charId]);
 
-      const [rows] = await pool.query('SELECT * FROM characters WHERE id=?', [retainerId]);
-      log.adm('Character reset by admin', { id: retainerId, admin_id: req.user.id });
+      const [rows] = await pool.query('SELECT * FROM characters WHERE id=?', [charId]);
+      log.adm('Character reset by admin', { id: charId, admin_id: req.user.id });
       reply.send({ character: rows[0] });
     } catch (e) {
-      log.err('Admin reset character failed', { message: e.message, id: req.params.retainerId });
+      log.err('Admin reset character failed', { message: e.message, id: req.params.id });
       reply.status(500).json({ error: 'Failed to reset character' });
     }
   });
