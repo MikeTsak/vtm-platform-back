@@ -3706,10 +3706,10 @@ app.put('/api/npcs/:id/avatar', authRequired, requireAdmin, upload.single('avata
 app.get('/api/camarilla/roster', authRequired, async (req, res) => {
   try {
     const [players] = await pool.query(
-      "SELECT id, user_id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, 'player' as type FROM characters"
+      "SELECT id, user_id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, 'player' as type FROM characters"
     );
     const [npcs] = await pool.query(
-      "SELECT id, NULL as user_id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, 'npc' as type FROM npcs"
+      "SELECT id, NULL as user_id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, 'npc' as type FROM npcs"
     );
 
     const format = (list) => list.map(item => ({
@@ -3717,7 +3717,12 @@ app.get('/api/camarilla/roster', authRequired, async (req, res) => {
       titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || []),
       is_ex: !!item.is_ex,
       is_deceased: !!item.is_deceased,
-      is_hidden: !!item.is_hidden // <--- Add this
+      is_hidden: !!item.is_hidden,
+      is_left: !!item.is_left,
+      is_called: !!item.is_called,
+      is_missing: !!item.is_missing,
+      is_exiled: !!item.is_exiled,
+      is_bloodhunted: !!item.is_bloodhunted
     }));
 
     const combined = [...format(players), ...format(npcs)];
