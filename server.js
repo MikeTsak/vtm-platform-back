@@ -2269,7 +2269,7 @@ app.delete('/api/characters/:id/inventory/:itemId', authRequired, async (req, re
 // ================== Retainers ==================
 app.get('/api/characters/:id/retainers', authRequired, async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT id, character_id, name, tier, sheet, xp, created_at FROM retainers WHERE character_id=?', [req.params.id]);
+    const [rows] = await pool.query('SELECT id, character_id, name, tier, sheet, xp, is_favorite, created_at FROM retainers WHERE character_id=?', [req.params.id]);
     res.json(rows);
   } catch (e) {
     log.err('Failed to get retainers', { message: e.message, character_id: req.params.id });
@@ -2288,6 +2288,24 @@ app.post('/api/characters/:id/retainers', authRequired, async (req, res) => {
   } catch (e) {
     log.err('Failed to create retainer', { message: e.message, character_id: req.params.id });
     res.status(500).json({ error: 'Failed to create retainer' });
+  }
+});
+
+app.put('/api/retainers/:retainerId/favorite', authRequired, async (req, res) => {
+  try {
+    const { is_favorite } = req.body;
+    // Check ownership
+    const [rows] = await pool.query(
+      'SELECT r.id FROM retainers r JOIN characters c ON r.character_id = c.id WHERE r.id = ? AND c.user_id = ?',
+      [req.params.retainerId, req.user.id]
+    );
+    if (rows.length === 0) return res.status(403).json({ error: 'Not authorized or retainer not found' });
+
+    await pool.query('UPDATE retainers SET is_favorite=? WHERE id=?', [is_favorite ? 1 : 0, req.params.retainerId]);
+    res.json({ ok: true, is_favorite });
+  } catch (e) {
+    log.err('Failed to favorite retainer', { message: e.message, retainer_id: req.params.retainerId });
+    res.status(500).json({ error: 'Failed to favorite retainer' });
   }
 });
 

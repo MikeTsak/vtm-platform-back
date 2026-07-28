@@ -552,6 +552,7 @@ async function _ensureRetainersTable() {
         xp INT DEFAULT 0,
         avatar LONGBLOB NULL,
         avatar_url VARCHAR(2048) NULL,
+        is_favorite BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -565,6 +566,11 @@ async function _ensureRetainersTable() {
       await pool.query("ALTER TABLE retainers ADD COLUMN avatar_url VARCHAR(2048) NULL");
     } catch (e) {
       if (e.code !== 'ER_DUP_FIELDNAME') console.warn("Notice adding avatar_url to retainers:", e.message);
+    }
+    try {
+      await pool.query("ALTER TABLE retainers ADD COLUMN is_favorite BOOLEAN DEFAULT FALSE");
+    } catch (e) {
+      if (e.code !== 'ER_DUP_FIELDNAME') console.warn("Notice adding is_favorite to retainers:", e.message);
     }
     log.ok('Retainers table verified/created.');
   } catch (e) {

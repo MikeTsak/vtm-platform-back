@@ -526,7 +526,7 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/characters/:id/retainers', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       console.log('GET /api/characters/:id/retainers called with id:', req.params.id);
-      const [rows] = await pool.query('SELECT id, character_id, name, tier, sheet, xp, created_at FROM retainers WHERE character_id=?', [req.params.id]);
+      const [rows] = await pool.query('SELECT id, character_id, name, tier, sheet, xp, created_at, is_favorite FROM retainers WHERE character_id=?', [req.params.id]);
       console.log('Retainers found:', rows.length);
       const results = [];
       for (const row of rows) {
@@ -564,6 +564,24 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       log.err('Failed to create retainer', { message: e.message, character_id: req.params.id });
       reply.status(500).json({ error: 'Failed to create retainer' });
+    }
+  });
+
+  fastify.put('/api/retainers/:retainerId/favorite', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const { is_favorite } = req.body;
+      // Check ownership
+      const [rows] = await pool.query(
+        'SELECT r.id FROM retainers r JOIN characters c ON r.character_id = c.id WHERE r.id = ? AND c.user_id = ?',
+        [req.params.retainerId, req.user.id]
+      );
+      if (rows.length === 0) return reply.status(403).json({ error: 'Not authorized or retainer not found' });
+      
+      await pool.query('UPDATE retainers SET is_favorite = ? WHERE id = ?', [is_favorite ? 1 : 0, req.params.retainerId]);
+      reply.send({ success: true, is_favorite: !!is_favorite });
+    } catch (e) {
+      log.err('Failed to update favorite status', { message: e.message, retainerId: req.params.retainerId });
+      reply.status(500).json({ error: 'Failed to update favorite status' });
     }
   });
 
