@@ -1510,6 +1510,76 @@ fastify.post('/api/characters/xp/spend', { preHandler: [authRequired] }, async (
   reply.send({ character: outCh, spent: cost });
 });
 
+fastify.post('/api/admin/characters/:id/xp/spend', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  const {
+    type, target, currentLevel, newLevel,
+    ritualLevel, formulaLevel, dots,
+    disciplineKind, patchSheet
+  } = req.body;
+
+  const [rows] = await pool.query('SELECT * FROM characters WHERE id=?', [req.params.id]);
+  const ch = rows[0];
+  if (!ch) {
+    log.warn('XP spend without character (admin)', { char_id: req.params.id });
+    return reply.status(404).json({ error: 'Character not found' });
+  }
+
+  let cost = 0;
+  try {
+    if (
+      type === 'discipline' &&
+      (
+        disciplineKind === 'select' ||
+        Number(newLevel) === Number(currentLevel)
+      )
+    ) {
+      cost = 0;
+    } else {
+      cost = xpCost({ type, newLevel, ritualLevel, formulaLevel, dots, disciplineKind });
+    }
+  } catch (e) {
+    log.warn('XP spend bad type (admin)', { type });
+    return reply.status(400).json({ error: e.message });
+  }
+
+  if (cost > 0) {
+    if ((ch.xp || 0) < cost) {
+      log.warn('XP spend insufficient (admin)', { char_id: ch.id, have: ch.xp, need: cost });
+      return reply.status(400).json({ error: `Not enough XP (need ${cost}, have ${ch.xp})` });
+    }
+    log.xp('XP spend request (admin)', { char_id: ch.id, type, target, currentLevel, newLevel, cost });
+    await pool.query('UPDATE characters SET xp = xp - ? WHERE id=?', [cost, ch.id]);
+  } else {
+    log.xp('Discipline power assignment free (admin)', { char_id: ch.id, target, level: newLevel });
+  }
+
+  if (patchSheet !== undefined) {
+    await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(patchSheet), ch.id]);
+    log.xp('Sheet patched after action (admin)', { character_id: ch.id });
+  }
+
+  try {
+    await pool.query(
+      'INSERT INTO xp_log (character_id, action, target, from_level, to_level, cost, payload) VALUES (?,?,?,?,?,?,?)',
+      [ch.id, type, target || null, currentLevel || null, newLevel || null, cost,
+      JSON.stringify({ disciplineKind, ritualLevel, formulaLevel, dots })]
+    );
+    log.xp('XP logged (admin)', { character_id: ch.id, cost });
+  } catch (_) { }
+
+  const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [ch.id]);
+  const outCh = out[0];
+  if (outCh && outCh.sheet && typeof outCh.sheet === 'string') { try { outCh.sheet = JSON.parse(outCh.sheet); } catch { } }
+
+  if (cost > 0) {
+    log.ok('XP spend complete (admin)', { char_id: ch.id, remaining_xp: outCh?.xp });
+  } else {
+    log.ok('Power assignment saved free (admin)', { char_id: ch.id });
+  }
+
+  reply.send({ character: outCh, spent: cost });
+});
+
 /* -------------------- Admin add/remove XP -------------------- */
 fastify.patch('/api/admin/characters/:id/xp', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   const { delta } = req.body;
@@ -5437,7 +5507,7 @@ fastify.patch('/api/live-session/:id/metadata', { preHandler: [authRequired, req
 });
 
 // Broadcast a message (ST/Admin) - CHANGED TO requireCourt
-app.post('/api/live-session/:id/broadcast', { preHandler: [authRequired, requireCourt] }, async (req, reply) => {
+fastify.post('/api/live-session/:id/broadcast', { preHandler: [authRequired, requireCourt] }, async (req, reply) => {
   const internalId = await getSessionInternalId(req.params.id);
   await pool.query('INSERT INTO live_session_broadcasts (session_id, message, target_character_id) VALUES (?, ?, ?)',
     [internalId, req.body.message, req.body.target_character_id || null]);
@@ -5449,7 +5519,7 @@ app.post('/api/live-session/:id/broadcast', { preHandler: [authRequired, require
   reply.send({ ok: true });
 });
 
-app.get('/api/live-session/:id/broadcast', { preHandler: [authRequired] }, async (req, reply) => {
+fastify.get('/api/live-session/:id/broadcast', { preHandler: [authRequired] }, async (req, reply) => {
   try {
     const internalId = await getSessionInternalId(req.params.id);
     const [rows] = await pool.query(
@@ -7034,6 +7104,94 @@ fastify.post('/api/characters/:id/apply-damage', { preHandler: [authRequired] },
     reply.status(500).json({ error: 'Apply damage failed' });
   }
 });
+
+/* -------------------- Missing Dashboard / Admin Endpoints -------------------- */
+
+// Home Dashboard Data Aggregation
+fastify.get('/api/home/dashboard', { preHandler: [authRequired] }, async (req, reply) => {
+  try {
+    const [chars] = await pool.query('SELECT id FROM characters WHERE user_id=? AND is_ex=0 AND is_deceased=0', [req.user.id]);
+    const ch = chars[0];
+    
+    let downtimes = [];
+    let chats = [];
+    let used = 0;
+    
+    // Configs
+    const openingStr = await getSetting('downtime_opening', null);
+    const downtime_limit = parseInt(await getSetting('downtime_quota', '3'), 10) || 3;
+    const masquerade_threat_level = await getSetting('masquerade_threat_level', '1');
+
+    if (ch) {
+      // 1. Quota Calculation
+      let from = startOfMonth();
+      let to = endOfMonth();
+      if (openingStr) {
+        const parsed = new Date(openingStr);
+        if (!isNaN(parsed.getTime())) {
+          from = parsed;
+          to = new Date(parsed.getTime() + 90 * 24 * 60 * 60 * 1000);
+        }
+      }
+      const [quotaRows] = await pool.query(
+        'SELECT COUNT(*) AS c FROM downtimes WHERE character_id=? AND created_at >= ? AND created_at < ?',
+        [ch.id, from, to]
+      );
+      used = quotaRows[0].c;
+
+      // 2. Recent Downtimes
+      const [dtRows] = await pool.query('SELECT * FROM downtimes WHERE character_id=? ORDER BY created_at DESC LIMIT 5', [ch.id]);
+      downtimes = dtRows;
+    }
+
+    // 3. Recent Chats (where user is recipient)
+    const [chatRows] = await pool.query('SELECT * FROM chat_messages WHERE recipient_id=? ORDER BY created_at DESC LIMIT 5', [req.user.id]);
+    chats = chatRows;
+
+    // 4. Recent News
+    const [newsRows] = await pool.query("SELECT * FROM news WHERE status='published' ORDER BY created_at DESC LIMIT 5");
+
+    reply.send({
+      success: true,
+      data: {
+        quota: { used, limit: downtime_limit },
+        downtimes,
+        chats,
+        news: newsRows,
+        config: { downtime_opening: openingStr },
+        banner: { masquerade_threat_level }
+      }
+    });
+  } catch (e) {
+    log.err('Failed to fetch dashboard data', { error: e.message });
+    reply.status(500).json({ success: false, error: 'Internal Server Error' });
+  }
+});
+
+// Admin: Clean Resolved/Rejected Downtimes
+fastify.delete('/api/admin/downtimes/resolved', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  try {
+    const [result] = await pool.query("DELETE FROM downtimes WHERE status IN ('resolved', 'rejected')");
+    log.adm('Cleaned resolved downtimes', { admin_id: req.user.id, affectedRows: result.affectedRows });
+    reply.send({ success: true, count: result.affectedRows });
+  } catch (e) {
+    log.err('Failed to clean downtimes', { error: e.message });
+    reply.status(500).json({ success: false, error: 'Internal Server Error' });
+  }
+});
+
+// Admin: Clear All Dice Rolls
+fastify.delete('/api/admin/dice/rolls/all', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  try {
+    const [result] = await pool.query("DELETE FROM dice_rolls");
+    log.adm('Cleared all dice rolls', { admin_id: req.user.id, affectedRows: result.affectedRows });
+    reply.send({ success: true, count: result.affectedRows });
+  } catch (e) {
+    log.err('Failed to clear dice rolls', { error: e.message });
+    reply.status(500).json({ success: false, error: 'Internal Server Error' });
+  }
+});
+
 
 /* -------------------- Start Server -------------------- */
 const PORT = Number(process.env.PORT) || 3001;
