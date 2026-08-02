@@ -143,7 +143,7 @@ fastify.decorateReply('json', function (payload) {
 fastify.addHook('onRequest', (request, reply, done) => {
   const silent = ['/api/admin/logs'];
   if (silent.some(p => request.url.startsWith(p))) return done();
-  
+
   log.req(`${request.method} ${request.url}`, { ip: request.ip, ua: request.headers['user-agent'] });
   done();
 });
@@ -151,15 +151,15 @@ fastify.addHook('onRequest', (request, reply, done) => {
 fastify.addHook('onResponse', (request, reply, done) => {
   const silent = ['/api/admin/logs'];
   if (silent.some(p => request.url.startsWith(p))) return done();
-  
+
   const ms = Math.round(reply.getResponseTime());
   const code = reply.statusCode;
   const base = { status: code, ms };
-  
+
   if (code >= 500) log.err(`${code} ${request.method} ${request.url} (${ms}ms)`, base);
   else if (code >= 400) log.warn(`${code} ${request.method} ${request.url} (${ms}ms)`, base, 'warn');
   else log.ok(`${code} ${request.method} ${request.url} (${ms}ms)`, base);
-  
+
   done();
 });
 
@@ -189,7 +189,7 @@ fastify.setErrorHandler(async (error, request, reply) => {
 // ------------------------------------------------------------------------
 
 const multipart = require('@fastify/multipart');
-fastify.register(multipart, { limits: { fileSize: 50 * 1024 * 1024 } });
+fastify.register(multipart, { limits: { fileSize: 50 * 1024 * 1024 } }); fastify.after(() => console.log("Finished loading plugin 1"));
 
 // CORS: In production, set CORS_ORIGIN env var to your frontend URL
 const corsOrigin = process.env.CORS_ORIGIN
@@ -208,21 +208,21 @@ const helmet = require('@fastify/helmet');
 fastify.register(helmet, {
   crossOriginResourcePolicy: { policy: "cross-origin" },
   contentSecurityPolicy: false
-});
+}); fastify.after(() => console.log("Finished loading plugin 2"));
 fastify.register(cors, {
   origin: corsOrigin,
   credentials: true,
   methods: ['GET', 'PUT', 'POST', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'Pragma', 'Expires', 'Idempotency-Key', 'X-Requested-With', 'Accept']
-});
+}); fastify.after(() => console.log("Finished loading plugin 3"));
 
 fastify.register(require('@fastify/static'), {
   root: path.join(__dirname, 'public'),
   prefix: '/public/',
-});
+}); fastify.after(() => console.log("Finished loading plugin 4"));
 // trust proxy disabled by default in fastify
 // Add compression middleware
-fastify.register(compression);
+fastify.register(compression); fastify.after(() => console.log("Finished loading plugin 5"));
 // Increase payload limit to 70MB for Base64 image uploads
 // app.use(express.json());
 // app.use(express.urlencoded());
@@ -230,7 +230,7 @@ fastify.register(compression);
 /* Global limiter skipped */
 
 // Add Idempotency Middleware for all routes
-fastify.register(idempotencyPlugin);
+fastify.register(idempotencyPlugin); fastify.after(() => console.log("Finished loading plugin 6"));
 
 // --- Swagger Setup ---
 fastify.register(fastifySwagger, {
@@ -238,7 +238,7 @@ fastify.register(fastifySwagger, {
   specification: {
     document: swaggerSpec,
   },
-});
+}); fastify.after(() => console.log("Finished loading plugin 7"));
 fastify.register(fastifySwaggerUi, {
   routePrefix: '/api-docs',
   uiConfig: {
@@ -246,7 +246,7 @@ fastify.register(fastifySwaggerUi, {
     deepLinking: true
   },
   exposeRoute: true
-});
+}); fastify.after(() => console.log("Finished loading plugin 8"));
 
 // Disable caching for all admin API routes to prevent 304 errors
 fastify.addHook('preHandler', async (request, reply) => { if (request.url.startsWith('/api/admin')) { reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, private'); } });
@@ -711,7 +711,7 @@ async function sendResetEmailWithEmailJS({
   to,                // recipient email (string)
   name,              // display name (string)
   link,              // absolute reset URL
-  appName = process.env.APP_NAME || 'Erebus Portal',
+  appName = 'Erebus Portal',
   expiresMinutes = 24
 }) {
   // Build exactly what EmailJS expects
@@ -890,7 +890,7 @@ function formatDate(d) {
 // ==========================================
 // --- NEW MODULAR ROUTES ---
 // ==========================================
-fastify.register(require('./routes/dashboard.fastify'), { prefix: '/api/home' });
+fastify.register(require('./routes/dashboard.fastify'), { prefix: '/api/home' }); fastify.after(() => console.log("Finished loading plugin 9"));
 
 // ==========================================
 // --- GLOBAL BANNER ROUTES ---
@@ -1379,7 +1379,7 @@ fastify.get('/', async (req, reply) => {
   html = html
     .replace('{{SYSTEM_CLASS}}', systemClass)
     .replace('{{SYSTEM_STATUS}}', systemStatus)
-    .replace('{{APP_NAME}}', (enhancedInfo.app || {}).name || 'back')
+    .replace('{{APP_NAME}}', 'Erebus API')
     .replace('{{APP_VERSION}}', (enhancedInfo.app || {}).version || '0.0.0')
     .replace('{{NODE_ENV}}', process.env.NODE_ENV || 'stable')
     .replace('{{STARTED_AT}}', formatDate(startedAt))
@@ -1426,15 +1426,15 @@ fastify.register(require('./routes/auth'), {
   broadcastNtfyAlert,
   // We use this fallback since it might not be globally imported here
   sendResetEmailWithEmailJS: (typeof sendResetEmailWithEmailJS === 'function') ? sendResetEmailWithEmailJS : null
-});
+}); fastify.after(() => console.log("Finished loading plugin 10"));
 
 fastify.register(require('./routes/users'), {
   prefix: '/api/users',
   authRequired
-});
+}); fastify.after(() => console.log("Finished loading plugin 11"));
 
 
-fastify.register(require('./routes/characters'), { pool, log, authRequired, moderateLimiter, requireAdmin, validateRetainerSheet, getMimeType, sharp, imageClient, broadcastNtfyAlert });
+fastify.register(require('./routes/characters'), { pool, log, authRequired, moderateLimiter, requireAdmin, validateRetainerSheet, getMimeType, sharp, imageClient, broadcastNtfyAlert }); fastify.after(() => console.log("Finished loading plugin 12"));
 /* -------------------- XP Spend -------------------- */
 fastify.post('/api/characters/xp/spend', { preHandler: [authRequired] }, async (req, reply) => {
   const {
@@ -6997,10 +6997,10 @@ fastify.post('/api/characters/:id/rouse', { preHandler: [authRequired] }, async 
 
     let sheet = rows[0].sheet;
     if (typeof sheet === 'string') {
-      try { 
-        sheet = JSON.parse(sheet || '{}'); 
-      } catch (e) { 
-        return reply.status(500).json({ error: 'Failed to parse existing character sheet data.' }); 
+      try {
+        sheet = JSON.parse(sheet || '{}');
+      } catch (e) {
+        return reply.status(500).json({ error: 'Failed to parse existing character sheet data.' });
       }
     }
     if (!sheet) sheet = {};
@@ -7046,10 +7046,10 @@ fastify.post('/api/characters/:id/spend-wp', { preHandler: [authRequired] }, asy
 
     let sheet = rows[0].sheet;
     if (typeof sheet === 'string') {
-      try { 
-        sheet = JSON.parse(sheet || '{}'); 
-      } catch (e) { 
-        return reply.status(500).json({ error: 'Failed to parse existing character sheet data.' }); 
+      try {
+        sheet = JSON.parse(sheet || '{}');
+      } catch (e) {
+        return reply.status(500).json({ error: 'Failed to parse existing character sheet data.' });
       }
     }
     if (!sheet) sheet = {};
@@ -7108,65 +7108,7 @@ fastify.post('/api/characters/:id/apply-damage', { preHandler: [authRequired] },
 /* -------------------- Missing Dashboard / Admin Endpoints -------------------- */
 
 // Home Dashboard Data Aggregation
-fastify.get('/api/home/dashboard', { preHandler: [authRequired] }, async (req, reply) => {
-  try {
-    const [chars] = await pool.query('SELECT id FROM characters WHERE user_id=? AND is_ex=0 AND is_deceased=0', [req.user.id]);
-    const ch = chars[0];
-    
-    let downtimes = [];
-    let chats = [];
-    let used = 0;
-    
-    // Configs
-    const openingStr = await getSetting('downtime_opening', null);
-    const downtime_limit = parseInt(await getSetting('downtime_quota', '3'), 10) || 3;
-    const masquerade_threat_level = await getSetting('masquerade_threat_level', '1');
 
-    if (ch) {
-      // 1. Quota Calculation
-      let from = startOfMonth();
-      let to = endOfMonth();
-      if (openingStr) {
-        const parsed = new Date(openingStr);
-        if (!isNaN(parsed.getTime())) {
-          from = parsed;
-          to = new Date(parsed.getTime() + 90 * 24 * 60 * 60 * 1000);
-        }
-      }
-      const [quotaRows] = await pool.query(
-        'SELECT COUNT(*) AS c FROM downtimes WHERE character_id=? AND created_at >= ? AND created_at < ?',
-        [ch.id, from, to]
-      );
-      used = quotaRows[0].c;
-
-      // 2. Recent Downtimes
-      const [dtRows] = await pool.query('SELECT * FROM downtimes WHERE character_id=? ORDER BY created_at DESC LIMIT 5', [ch.id]);
-      downtimes = dtRows;
-    }
-
-    // 3. Recent Chats (where user is recipient)
-    const [chatRows] = await pool.query('SELECT * FROM chat_messages WHERE recipient_id=? ORDER BY created_at DESC LIMIT 5', [req.user.id]);
-    chats = chatRows;
-
-    // 4. Recent News
-    const [newsRows] = await pool.query("SELECT * FROM news WHERE status='published' ORDER BY created_at DESC LIMIT 5");
-
-    reply.send({
-      success: true,
-      data: {
-        quota: { used, limit: downtime_limit },
-        downtimes,
-        chats,
-        news: newsRows,
-        config: { downtime_opening: openingStr },
-        banner: { masquerade_threat_level }
-      }
-    });
-  } catch (e) {
-    log.err('Failed to fetch dashboard data', { error: e.message });
-    reply.status(500).json({ success: false, error: 'Internal Server Error' });
-  }
-});
 
 // Admin: Clean Resolved/Rejected Downtimes
 fastify.delete('/api/admin/downtimes/resolved', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
@@ -7214,28 +7156,15 @@ io.on('connection', (socket) => {
 
 fastify.decorate('io', io);
 
-fastify.ready().then(() => {
-  // IMPORTANT: Always call fastify.listen() with a plain object, unconditionally.
-  //
-  // Phusion Passenger's Node.js integration needs zero special-casing: it hooks
-  // into the FIRST http.Server that calls .listen() in the process and silently
-  // redirects it to the Unix domain socket / port it actually wants to use. The
-  // port/host value you pass is irrelevant when running under Passenger - it is
-  // only used when there's no Passenger in front (e.g. local dev). There is no
-  // magic 'passenger' string to pass, and calling fastify.server.listen('passenger', ...)
-  // directly (bypassing Fastify) was actually trying to bind a real Unix socket
-  // file literally named "passenger" in the app's working directory - which
-  // fails (or hangs) in Plesk's chrooted/restricted filesystem and is exactly
-  // why Passenger timed out waiting for the app to come online.
-  fastify.listen({ port: PORT, host: '0.0.0.0' }, (err, address) => {
-    if (err) {
-      log.err(`API server failed to start`, { error: err.message });
-      console.error(err);
-      process.exit(1);
-    }
-    log.start(`API server started on ${address}`, { port: PORT, env: process.env.NODE_ENV || 'stable' });
-    broadcastNtfyAlert(`API server started on port ${PORT}`, { title: 'Server Online', tags: 'rocket' });
-  });
+console.log("[TRACE] Before fastify.ready");
+fastify.listen({ port: PORT, host: '0.0.0.0' }, (err, address) => {
+  if (err) {
+    log.err(`API server failed to start`, { error: err.message });
+    console.error(err);
+    process.exit(1);
+  }
+  log.start(`API server started on ${address}`, { port: PORT, env: process.env.NODE_ENV || 'stable' });
+  broadcastNtfyAlert(`API server started on port ${PORT}`, { title: 'Server Online', tags: 'rocket' });
 });
 
 //port is set to 3001

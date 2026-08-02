@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>{{APP_NAME}} Status</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f1f5f9; padding: 2rem; margin: 0; line-height: 1.5; }
+    h1 { color: #38bdf8; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0.2rem; }
+    .subtitle { color: #94a3b8; font-size: 0.9rem; margin-bottom: 2rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
+    .card { background: #1e293b; padding: 1.5rem; border-radius: 8px; border: 1px solid #334155; }
+    .card h2 { margin-top: 0; font-size: 1.1rem; color: #cbd5e1; border-bottom: 1px solid #334155; padding-bottom: 0.5rem; margin-bottom: 1rem; }
+    .row { display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 0; border-bottom: 1px solid #334155; }
+    .row:last-child { border-bottom: none; }
+    .k { color: #94a3b8; font-size: 0.9rem; }
+    .v { font-weight: 500; font-family: monospace; }
+    .ok { color: #22c55e; }
+    .bad { color: #ef4444; }
+    .muted { color: #64748b; }
+    .error-section { background: rgba(239,68,68,0.1); border: 1px solid #ef4444; padding: 1rem; border-radius: 8px; margin-bottom: 2rem; }
+    .error-title { color: #ef4444; font-weight: bold; margin-bottom: 0.5rem; }
+    .error-list { color: #fca5a5; margin: 0; padding-left: 1.5rem; }
+    a { color: #38bdf8; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <h1>{{APP_NAME}} <span class="{{SYSTEM_CLASS}}">{{SYSTEM_STATUS}}</span></h1>
+  <div class="subtitle">v{{APP_VERSION}} | Environment: {{NODE_ENV}} | Refreshed at {{NOW}}</div>
+
+  {{ERRORS}}
+
+  <div class="grid">
+    <div class="card">
+      <h2>App Information</h2>
+      <div class="row"><div class="k">Started At</div><div class="v">{{STARTED_AT}}</div></div>
+      <div class="row"><div class="k">Uptime</div><div class="v">{{UPTIME}}</div></div>
+      <div class="row"><div class="k">Node.js</div><div class="v">{{NODE_VERSION}}</div></div>
+      <div class="row"><div class="k">V8 Version</div><div class="v">{{V8_VERSION}}</div></div>
+      <div class="row">{{API_DOCS_LINK}}</div>
+    </div>
+
+    <div class="card">
+      <h2>System Infrastructure</h2>
+      <div class="row"><div class="k">OS Platform</div><div class="v">{{OS_PLATFORM}}</div></div>
+      <div class="row"><div class="k">Hostname</div><div class="v">{{HOSTNAME}}</div></div>
+      <div class="row"><div class="k">Local IP</div><div class="v">{{LOCAL_IP}}</div></div>
+      <div class="row"><div class="k">OS User</div><div class="v">{{OS_USER}}</div></div>
+      <div class="row"><div class="k">CPU</div><div class="v">{{CPU_INFO}}</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Process Metrics</h2>
+      <div class="row"><div class="k">PID</div><div class="v">{{PROCESS_PID}}</div></div>
+      <div class="row"><div class="k">CWD</div><div class="v">{{PROCESS_CWD}}</div></div>
+      <div class="row"><div class="k">System Memory</div><div class="v">{{OS_MEMORY}}</div></div>
+      <div class="row"><div class="k">Process Memory</div><div class="v">{{PROC_MEMORY}}</div></div>
+      <div class="row"><div class="k">Load Average</div><div class="v">{{LOAD_AVG}}</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Service Health</h2>
+      <div class="row"><div class="k">Database</div><div class="v {{DB_CLASS}}">{{DB_STATUS}}</div></div>
+      <div class="row"><div class="k">Discord Bot</div><div class="v {{DISCORD_CLASS}}">{{DISCORD_STATUS}}</div></div>
+      <div class="row"><div class="k">Email Service</div><div class="v {{EMAIL_CLASS}}">{{EMAIL_STATUS}}</div></div>
+      <div class="row"><div class="k">JWT Secret</div><div class="v {{JWT_CLASS}}">{{JWT_STATUS}}</div></div>
+      <div class="row"><div class="k">NTFY Notifications</div><div class="v {{NTFY_CLASS}}">{{NTFY_STATUS}}</div></div>
+      <div class="row"><div class="k">CORS Policy</div><div class="v">{{CORS_STATUS}}</div></div>
+    </div>
+  </div>
+</body>
+</html>
