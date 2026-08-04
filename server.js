@@ -2067,10 +2067,31 @@ app.post('/api/characters/:id/inventory', authRequired, async (req, res) => {
       if (!charRows.length) return res.status(403).json({ error: 'Unauthorized' });
     }
 
+    let finalImage = image || null;
+    if (image && image.startsWith('data:image')) {
+      try {
+        const base64Data = image.split(';base64,').pop();
+        const buffer = Buffer.from(base64Data, 'base64');
+        const extMatch = image.match(/data:image\/([a-zA-Z0-9]+);/);
+        const ext = extMatch ? extMatch[1] : 'jpeg';
+        const filename = `inventory_${charId}_${Date.now()}.${ext}`;
+        const result = await imageClient.uploadImage(buffer, filename);
+        if (result && result.success) {
+          finalImage = result.url;
+        } else {
+          log.warn('Inventory image upload failed, setting to null');
+          finalImage = null;
+        }
+      } catch (err) {
+        log.err('Error uploading inventory image', { error: err.message });
+        finalImage = null;
+      }
+    }
+
     const [r] = await pool.query(
       `INSERT INTO inventory_items (character_id, name, item_type, description, mechanic_notes, quantity, image, researched) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [charId, name, item_type || 'Mundane', description || null, mechanic_notes || null, quantity || 1, image || null, researched ? 1 : 0]
+      [charId, name, item_type || 'Mundane', description || null, mechanic_notes || null, quantity || 1, finalImage, researched ? 1 : 0]
     );
 
     const [[newItem]] = await pool.query('SELECT * FROM inventory_items WHERE id = ?', [r.insertId]);
@@ -2095,11 +2116,32 @@ app.put('/api/characters/:id/inventory/:itemId', authRequired, async (req, res) 
       if (!charRows.length) return res.status(403).json({ error: 'Unauthorized' });
     }
 
+    let finalImage = image || null;
+    if (image && image.startsWith('data:image')) {
+      try {
+        const base64Data = image.split(';base64,').pop();
+        const buffer = Buffer.from(base64Data, 'base64');
+        const extMatch = image.match(/data:image\/([a-zA-Z0-9]+);/);
+        const ext = extMatch ? extMatch[1] : 'jpeg';
+        const filename = `inventory_${charId}_${Date.now()}.${ext}`;
+        const result = await imageClient.uploadImage(buffer, filename);
+        if (result && result.success) {
+          finalImage = result.url;
+        } else {
+          log.warn('Inventory image upload failed, setting to null');
+          finalImage = null;
+        }
+      } catch (err) {
+        log.err('Error uploading inventory image', { error: err.message });
+        finalImage = null;
+      }
+    }
+
     await pool.query(
       `UPDATE inventory_items 
        SET name=?, item_type=?, description=?, mechanic_notes=?, quantity=?, image=?, researched=? 
        WHERE id=? AND character_id=?`,
-      [name, item_type || 'Mundane', description || null, mechanic_notes || null, quantity || 1, image || null, researched ? 1 : 0, itemId, charId]
+      [name, item_type || 'Mundane', description || null, mechanic_notes || null, quantity || 1, finalImage, researched ? 1 : 0, itemId, charId]
     );
 
     res.json({ success: true });
