@@ -3881,9 +3881,9 @@ app.put('/api/downtimes/:id', authRequired, async (req, res) => {
 
     const submission = rows[0];
 
-    // 2. Only allow edits if status is strictly 'submitted'
-    if (submission.status !== 'submitted') {
-      return res.status(400).json({ error: 'You can only edit actions that are strictly in a submitted state' });
+    // 2. Only allow edits if status is 'submitted' or 'needs a scene'
+    if (submission.status !== 'submitted' && submission.status !== 'needs a scene') {
+      return res.status(400).json({ error: 'You can only edit actions that are not yet approved or resolved.' });
     }
 
     // 3. Check against the CORRECT global deadline setting

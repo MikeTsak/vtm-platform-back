@@ -2859,9 +2859,9 @@ fastify.put('/api/downtimes/:id', { preHandler: [authRequired] }, async (req, re
 
     const submission = rows[0];
 
-    // 2. Only allow edits if status is strictly 'submitted'
-    if (submission.status !== 'submitted') {
-      return reply.status(400).json({ error: 'You can only edit actions that are strictly in a submitted state' });
+    // 2. Only allow edits if status is 'submitted' or 'needs a scene'
+    if (submission.status !== 'submitted' && submission.status !== 'needs a scene') {
+      return reply.status(400).json({ error: 'You can only edit actions that are not yet approved or resolved.' });
     }
 
     // 3. Check against the CORRECT global deadline setting
