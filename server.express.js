@@ -4601,14 +4601,14 @@ app.get('/api/chat/users', authRequired, async (req, res) => {
         ) as unread_count
       FROM users u
       LEFT JOIN characters c ON c.user_id = u.id
-      WHERE u.id <> ?
+      WHERE (? = 1 OR u.id <> ?)
       GROUP BY u.id, u.display_name, u.role
       ORDER BY 
         unread_count DESC,   -- Unread first
         last_message_at DESC, -- Then most recent
         u.display_name ASC    -- Then alphabetical
       `,
-      [myId, myId, myId, myId]
+      [myId, myId, req.query.include_self ? 1 : 0, myId]
     );
 
     const users = rows.map(r => ({
@@ -5689,6 +5689,10 @@ app.post('/api/coteries', authRequired, async (req, res) => {
     if (!name || !Array.isArray(members) || members.length < 3) {
       return res.status(400).json({ error: 'Name and ≥3 members are required' });
     }
+    if (!(req.user.role === 'admin' || req.user.permission_level === 'admin')) {
+      const isMember = members.some(m => Number(m.user_id) === Number(req.user.id));
+      if (!isMember) return res.status(403).json({ error: 'You must include yourself in the coterie' });
+    }
 
     const chasse = Number(traits.chasse || 0);
     const lien = Number(traits.lien || 0);
@@ -5864,6 +5868,10 @@ app.post('/api/coteries/:id/members/set', authRequired, async (req, res) => {
     const { members = [] } = req.body || {};
     if (!Array.isArray(members) || members.length < 3) {
       return res.status(400).json({ error: '≥3 members required' });
+    }
+    if (!(req.user.role === 'admin' || req.user.permission_level === 'admin')) {
+      const isMember = members.some(m => Number(m.user_id) === Number(req.user.id));
+      if (!isMember) return res.status(403).json({ error: 'You must include yourself in the coterie' });
     }
 
     await pool.query(`DELETE FROM coterie_members WHERE coterie_id=?`, [id]);
