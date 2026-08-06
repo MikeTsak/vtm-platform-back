@@ -3547,7 +3547,7 @@ fastify.get('/api/chat/users', { preHandler: [authRequired] }, async (req, reply
         last_message_at DESC, -- Then most recent
         u.display_name ASC    -- Then alphabetical
       `,
-      [myId, myId, req.query.include_self ? 1 : 0, myId]
+      [myId, myId, myId, req.query.include_self ? 1 : 0, myId]
     );
 
     const users = rows.map(r => ({
