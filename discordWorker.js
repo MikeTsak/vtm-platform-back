@@ -476,11 +476,24 @@ if (commandText === 'whoami') {
       }
 
       const downloadedImages = [];
+      let isAnimated = false;
       for (const attachment of attachments) {
         const response = await axios.get(attachment.url, { responseType: 'arraybuffer' });
         const buffer = Buffer.from(response.data, 'binary');
-        const meta = await sharp(buffer).metadata();
-        downloadedImages.push({ buffer, meta });
+        const isGifOrWebp = attachment.contentType === 'image/gif' || attachment.contentType === 'image/webp';
+        
+        let meta;
+        if (isGifOrWebp) {
+          meta = await sharp(buffer, { animated: true }).metadata();
+          if (meta.pages > 1) isAnimated = true;
+        } else {
+          meta = await sharp(buffer).metadata();
+        }
+        downloadedImages.push({ buffer, meta, isGifOrWebp });
+      }
+
+      if (isAnimated && downloadedImages.length > 1) {
+        isAnimated = false;
       }
 
       const targetWidth = downloadedImages[0].meta.width;
@@ -544,33 +557,50 @@ if (commandText === 'whoami') {
         </svg>
       `;
 
-      const compositeLayers = [
-        { input: Buffer.from(svg), top: 0, left: 0 }
-      ];
+      let outputBuffer;
+      let fileName = 'meme.jpg';
 
-      let currentY = textPaddingHeight;
-      for (const img of processedImages) {
-        compositeLayers.push({ input: img.buffer, top: currentY, left: 0 });
-        currentY += img.height; 
-      }
+      if (isAnimated) {
+        outputBuffer = await sharp(downloadedImages[0].buffer, { animated: true })
+          .extend({
+            top: textPaddingHeight,
+            background: { r: 255, g: 255, b: 255, alpha: 1 }
+          })
+          .composite([
+            { input: Buffer.from(svg), top: 0, left: 0 }
+          ])
+          .gif()
+          .toBuffer();
+        fileName = 'meme.gif';
+      } else {
+        const compositeLayers = [
+          { input: Buffer.from(svg), top: 0, left: 0 }
+        ];
 
-      const totalCanvasHeight = textPaddingHeight + totalImageHeight;
-      
-      const outputBuffer = await sharp({
-        create: {
-          width: targetWidth,
-          height: totalCanvasHeight,
-          channels: 4,
-          background: { r: 255, g: 255, b: 255, alpha: 1 } 
+        let currentY = textPaddingHeight;
+        for (const img of processedImages) {
+          compositeLayers.push({ input: img.buffer, top: currentY, left: 0 });
+          currentY += img.height; 
         }
-      })
-      .composite(compositeLayers)
-      .jpeg({ quality: 90 })
-      .toBuffer();
+
+        const totalCanvasHeight = textPaddingHeight + totalImageHeight;
+        
+        outputBuffer = await sharp({
+          create: {
+            width: targetWidth,
+            height: totalCanvasHeight,
+            channels: 4,
+            background: { r: 255, g: 255, b: 255, alpha: 1 } 
+          }
+        })
+        .composite(compositeLayers)
+        .jpeg({ quality: 90 })
+        .toBuffer();
+      }
 
       await message.channel.send({ 
         content: `🎨 Meme created by: <@${message.author.id}>`,
-        files: [{ attachment: outputBuffer, name: 'meme.jpg' }] 
+        files: [{ attachment: outputBuffer, name: fileName }] 
       });
 
       try {
