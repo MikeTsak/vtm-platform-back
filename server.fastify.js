@@ -53,7 +53,7 @@ const rateLimit = require('@fastify/rate-limit');
 // --- Swagger Imports ---
 const fastifySwagger = require('@fastify/swagger');
 const fastifySwaggerUi = require('@fastify/swagger-ui');
-const swaggerSpec = require('./swagger.config');
+const swaggerSpec = require('./swagger_output.json');
 
 // Rate limiting
 const globalLimiter = async (req, reply) => { /* Dummy rate limiter */ };
