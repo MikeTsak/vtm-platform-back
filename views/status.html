@@ -25,8 +25,8 @@
   </style>
 </head>
 <body>
-  <h1>{{APP_NAME}} <span class="{{SYSTEM_CLASS}}">{{SYSTEM_STATUS}}</span></h1>
-  <div class="subtitle">v{{APP_VERSION}} | Environment: {{NODE_ENV}} | Refreshed at {{NOW}}</div>
+  <h1>{{APP_NAME}} : <span class="{{SYSTEM_CLASS}}">{{SYSTEM_STATUS}}</span></h1>
+  <div class="subtitle">Version: {{GIT_HASH}} | Environment: {{NODE_ENV}} | Refreshed at {{NOW}}</div>
 
   {{ERRORS}}
 
@@ -37,6 +37,7 @@
       <div class="row"><div class="k">Uptime</div><div class="v">{{UPTIME}}</div></div>
       <div class="row"><div class="k">Node.js</div><div class="v">{{NODE_VERSION}}</div></div>
       <div class="row"><div class="k">V8 Version</div><div class="v">{{V8_VERSION}}</div></div>
+      <div class="row"><div class="k">Git Hash</div><div class="v">{{GIT_HASH}}</div></div>
       <div class="row">{{API_DOCS_LINK}}</div>
     </div>
 
@@ -45,6 +46,7 @@
       <div class="row"><div class="k">OS Platform</div><div class="v">{{OS_PLATFORM}}</div></div>
       <div class="row"><div class="k">Hostname</div><div class="v">{{HOSTNAME}}</div></div>
       <div class="row"><div class="k">Local IP</div><div class="v">{{LOCAL_IP}}</div></div>
+      <div class="row"><div class="k">Client IP</div><div class="v">{{REQ_IP}}</div></div>
       <div class="row"><div class="k">OS User</div><div class="v">{{OS_USER}}</div></div>
       <div class="row"><div class="k">CPU</div><div class="v">{{CPU_INFO}}</div></div>
     </div>
@@ -63,10 +65,14 @@
       <div class="row"><div class="k">Database</div><div class="v {{DB_CLASS}}">{{DB_STATUS}}</div></div>
       <div class="row"><div class="k">Discord Bot</div><div class="v {{DISCORD_CLASS}}">{{DISCORD_STATUS}}</div></div>
       <div class="row"><div class="k">Email Service</div><div class="v {{EMAIL_CLASS}}">{{EMAIL_STATUS}}</div></div>
+      <div class="row"><div class="k">Real-time Sockets</div><div class="v">{{SOCKET_USERS}}</div></div>
       <div class="row"><div class="k">JWT Secret</div><div class="v {{JWT_CLASS}}">{{JWT_STATUS}}</div></div>
       <div class="row"><div class="k">NTFY Notifications</div><div class="v {{NTFY_CLASS}}">{{NTFY_STATUS}}</div></div>
       <div class="row"><div class="k">CORS Policy</div><div class="v">{{CORS_STATUS}}</div></div>
     </div>
   </div>
+  <footer style="text-align: center; color: #64748b; font-size: 0.85rem; margin-top: 3rem; padding-bottom: 1rem;">
+    Made by <a href="https://miketsak.gr" target="_blank" style="color: #94a3b8; text-decoration: none; border-bottom: 1px dotted #94a3b8;">miketsak.gr</a>
+  </footer>
 </body>
 </html>

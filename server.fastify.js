@@ -1192,8 +1192,11 @@ fastify.get('/', async (req, reply) => {
 
   // 1. Check DB
   let dbStatus = 'UNKNOWN';
+  let dbLatencyMs = 0;
   try {
+    const startDb = Date.now();
     const [rows] = await pool.query('SELECT 1 AS ok');
+    dbLatencyMs = Date.now() - startDb;
     dbStatus = rows?.[0]?.ok === 1 ? 'OK' : 'DOWN';
   } catch (e) {
     dbStatus = 'DOWN';
@@ -1293,14 +1296,36 @@ fastify.get('/', async (req, reply) => {
         name: 'back'
       };
     }
+
+    // Git Hash
+    try {
+      const gitHead = fs.readFileSync(path.join(process.cwd(), '.git', 'HEAD'), 'utf8').trim();
+      let gitHash = 'unknown';
+      if (gitHead.startsWith('ref: ')) {
+        const refPath = gitHead.replace('ref: ', '');
+        gitHash = fs.readFileSync(path.join(process.cwd(), '.git', refPath), 'utf8').trim().substring(0, 7);
+      } else {
+        gitHash = gitHead.substring(0, 7);
+      }
+      enhancedInfo.app.gitHash = gitHash;
+    } catch (e) {
+      enhancedInfo.app.gitHash = 'unknown';
+    }
+
+    // Socket.io Info
+    if (fastify.io) {
+      enhancedInfo.sockets = {
+        connected: fastify.io.engine.clientsCount
+      };
+    }
   } catch (e) {
     // If we can't collect enhanced info, continue with basic info
     console.warn('Could not collect enhanced system info:', e.message);
   }
 
   // Determine overall system health
-  const systemStatus = (dbStatus === 'OK' && discordClass !== 'bad' && emailClass !== 'bad') ? 'OK' : 'DEGRADED';
-  const systemClass = systemStatus === 'OK' ? 'ok' : 'bad';
+  const systemStatus = (dbStatus === 'OK' && discordClass !== 'bad' && emailClass !== 'bad') ? 'Ok' : 'Bad';
+  const systemClass = systemStatus === 'Ok' ? 'ok' : 'bad';
 
   let html = '';
   try {
@@ -1376,10 +1401,40 @@ fastify.get('/', async (req, reply) => {
 
   const apiDocsLink = enhancedInfo.app && enhancedInfo.app.version ? `<div class="k">API Docs</div><div class="v"><a href="/api-docs">/api-docs</a></div>` : '';
 
+  const dbStatusStr = dbStatus === 'OK' ? `OK (${dbLatencyMs}ms)` : dbStatus;
+  const socketUsersStr = (enhancedInfo.sockets?.connected !== undefined) ? `${enhancedInfo.sockets.connected} Connected Users` : 'N/A';
+  const gitHashStr = enhancedInfo.app?.gitHash || 'unknown';
+
+  // JSON Content Negotiation
+  const acceptHeader = req.headers.accept || '';
+  if (acceptHeader.includes('application/json')) {
+    return reply.send({
+      status: systemStatus,
+      app: enhancedInfo.app,
+      startedAt,
+      uptime: total,
+      errors,
+      services: {
+        database: { status: dbStatus, latencyMs: dbLatencyMs },
+        discord: { status: discordStatus.split(' ')[0], details: discordStatus },
+        email: { status: emailStatus },
+        jwt: { status: jwtStatus },
+        ntfy: { status: ntfyStatus.split(' ')[0], details: ntfyStatus },
+      },
+      sockets: enhancedInfo.sockets,
+      os: enhancedInfo.os,
+      cpu: enhancedInfo.cpu,
+      process: enhancedInfo.process,
+      requester: {
+        ip: req.ip
+      }
+    });
+  }
+
   html = html
     .replace('{{SYSTEM_CLASS}}', systemClass)
     .replace('{{SYSTEM_STATUS}}', systemStatus)
-    .replace('{{APP_NAME}}', 'Erebus API')
+    .replaceAll('{{APP_NAME}}', 'Erebus API')
     .replace('{{APP_VERSION}}', (enhancedInfo.app || {}).version || '0.0.0')
     .replace('{{NODE_ENV}}', process.env.NODE_ENV || 'stable')
     .replace('{{STARTED_AT}}', formatDate(startedAt))
@@ -1399,7 +1454,7 @@ fastify.get('/', async (req, reply) => {
     .replace('{{PROC_MEMORY}}', procMemoryStr)
     .replace('{{LOAD_AVG}}', loadAvgStr)
     .replace('{{DB_CLASS}}', dbStatus === 'OK' ? 'ok' : 'bad')
-    .replace('{{DB_STATUS}}', dbStatus)
+    .replace('{{DB_STATUS}}', dbStatusStr)
     .replace('{{DISCORD_CLASS}}', discordClass)
     .replace('{{DISCORD_STATUS}}', discordStatus)
     .replace('{{EMAIL_CLASS}}', emailClass)
@@ -1409,6 +1464,9 @@ fastify.get('/', async (req, reply) => {
     .replace('{{NTFY_CLASS}}', ntfyClass)
     .replace('{{NTFY_STATUS}}', ntfyStatus)
     .replace('{{CORS_STATUS}}', corsStatus)
+    .replaceAll('{{GIT_HASH}}', gitHashStr)
+    .replace('{{SOCKET_USERS}}', socketUsersStr)
+    .replace('{{REQ_IP}}', req.ip)
     .replace('{{ERRORS}}', errorsHtml);
 
   reply.header('Cache-Control', 'no-store').header('Content-Type', 'text/html; charset=utf-8').send(html);
