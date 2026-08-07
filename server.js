@@ -8216,6 +8216,5 @@ app.set('io', io);
 
 server.listen(PORT, () => {
   log.start(`API server started`, { port: PORT, env: process.env.NODE_ENV || 'stable' });
-  broadcastNtfyAlert(`API server started on port ${PORT}`, { title: 'Server Online', tags: 'rocket' });
 });
 //port is set to 3001

@@ -90,6 +90,16 @@ module.exports = async function (fastify, opts) {
     }
 
     log.auth('User logged in', { user_id: user.id, email, ip, ua, req_id: req.id });
+    
+    // Increment daily logins
+    try {
+      await fastify.db.query(
+        "INSERT INTO app_settings (setting_key, setting_value) VALUES ('daily_logins', '1') ON DUPLICATE KEY UPDATE setting_value = CAST(CAST(setting_value AS UNSIGNED) + 1 AS CHAR)"
+      );
+    } catch (e) {
+      log.err('Failed to increment daily_logins', { message: e.message });
+    }
+
     reply.send({ token: issueToken(user) });
   });
 

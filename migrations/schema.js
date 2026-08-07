@@ -832,6 +832,18 @@ async function _ensureSettingsTable() {
       ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)
     `, ['giannakis_system_prompt', newPrompt]);
 
+    // Ensure our new counters exist with a default of 0
+    await pool.query(`
+      INSERT INTO app_settings (setting_key, setting_value) 
+      VALUES (?, ?)
+      ON DUPLICATE KEY UPDATE setting_key = setting_key
+    `, ['daily_server_starts', '0']);
+    await pool.query(`
+      INSERT INTO app_settings (setting_key, setting_value) 
+      VALUES (?, ?)
+      ON DUPLICATE KEY UPDATE setting_key = setting_key
+    `, ['daily_logins', '0']);
+
     settingsTableCreated = true;
     log.ok('Settings table (app_settings) verified and system prompt updated.');
   } catch (e) {
