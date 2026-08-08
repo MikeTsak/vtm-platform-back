@@ -1,14 +1,5 @@
-const { Meilisearch } = require('meilisearch');
-
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired } = opts;
-
-  // Initialize Meilisearch
-  const meiliClient = new Meilisearch({
-    host: process.env.MEILI_HOST || 'http://127.0.0.1:7700',
-    apiKey: process.env.MEILI_MASTER_KEY || 'attlarp-secret-master-key-123'
-  });
-  const articleIndex = meiliClient.index('wiki_articles');
 
   /* -------------------- WIKI ARTICLES -------------------- */
 
@@ -22,10 +13,10 @@ module.exports = async function (fastify, opts) {
          WHERE a.status = 'published' 
          ORDER BY a.created_at DESC LIMIT 50`
       );
-      reply.send({ articles: rows });
+      return reply.send({ articles: rows });
     } catch (e) {
       log.err('Failed to fetch wiki articles', e);
-      reply.status(500).send({ error: 'Database error' });
+      return reply.status(500).send({ error: 'Database error' });
     }
   });
 
@@ -50,10 +41,31 @@ module.exports = async function (fastify, opts) {
          }
       }
 
-      reply.send({ article });
+      return reply.send({ article });
     } catch (e) {
       log.err('Failed to fetch wiki article', e);
-      reply.status(500).send({ error: 'Database error' });
+      return reply.status(500).send({ error: 'Database error' });
+    }
+  });
+
+  // Native MySQL Search
+  fastify.get('/api/wiki/search', async (req, reply) => {
+    const { q } = req.query;
+    if (!q || q.length < 2) return reply.send({ results: [] });
+
+    try {
+      const searchTerm = `%${q}%`;
+      const [rows] = await pool.query(
+        `SELECT id, title, slug, SUBSTRING(content, 1, 150) as snippet
+         FROM wiki_articles 
+         WHERE status = 'published' AND (title LIKE ? OR content LIKE ?)
+         LIMIT 10`,
+        [searchTerm, searchTerm]
+      );
+      return reply.send({ results: rows });
+    } catch (e) {
+      log.err('Failed to search wiki', e);
+      return reply.status(500).send({ error: 'Search failed' });
     }
   });
 
@@ -99,27 +111,6 @@ module.exports = async function (fastify, opts) {
       }
 
       await conn.commit();
-
-      // Update Meilisearch
-      if (status === 'published') {
-        try {
-          await articleIndex.addDocuments([{
-            id: articleId,
-            title: title,
-            slug: slug,
-            content: content
-          }]);
-        } catch (meiliErr) {
-          log.err('Failed to sync to meilisearch', meiliErr);
-        }
-      } else {
-        // If draft or private, ensure it's removed from search
-        try {
-          await articleIndex.deleteDocument(articleId);
-        } catch (meiliErr) {
-          log.err('Failed to delete from meilisearch', meiliErr);
-        }
-      }
 
       log.info('Wiki Article saved', { articleId, user_id: req.user.id, status });
       reply.send({ success: true, articleId });
@@ -373,30 +364,5 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  /* -------------------- MEILISEARCH SYNC -------------------- */
-  
-  // Sync all published articles to Meilisearch
-  fastify.post('/api/admin/meili/sync-wiki', { preHandler: [authRequired] }, async (req, reply) => {
-    if (req.user.role !== 'admin') return reply.status(403).send({ error: 'Admin only' });
-    
-    try {
-      const [rows] = await pool.query('SELECT id, title, slug, content FROM wiki_articles WHERE status = "published"');
-      
-      const documents = rows.map(r => ({
-        id: r.id,
-        title: r.title,
-        slug: r.slug,
-        content: r.content
-      }));
-      
-      if (documents.length > 0) {
-        await articleIndex.addDocuments(documents);
-      }
-      
-      reply.send({ success: true, count: documents.length });
-    } catch (e) {
-      log.err('Failed to sync wiki to Meilisearch', e);
-      reply.status(500).send({ error: 'Failed to sync to Meilisearch' });
-    }
-  });
+
 };
