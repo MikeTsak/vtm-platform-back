@@ -81,6 +81,40 @@ module.exports = async function (fastify, opts) {
     }
   });
 
+  // Graph Data (Lore Graph)
+  fastify.get('/api/wiki/graph', async (req, reply) => {
+    try {
+      const [rows] = await pool.query(
+        `SELECT id, title, slug, content 
+         FROM wiki_articles 
+         WHERE status = 'published'`
+      );
+      
+      const nodes = rows.map(r => ({ id: r.slug, name: r.title }));
+      const links = [];
+      
+      const slugSet = new Set(nodes.map(n => n.id));
+      
+      rows.forEach(r => {
+        // Find [[Link]] patterns
+        const regex = /(?:\\?\[){2}(.*?)(?:\\?\]){2}/g;
+        let match;
+        while ((match = regex.exec(r.content)) !== null) {
+          const targetTitle = match[1].trim();
+          const targetSlug = targetTitle.toLowerCase().replace(/[^\w ]+/g, '').replace(/ +/g, '-');
+          if (slugSet.has(targetSlug)) {
+            links.push({ source: r.slug, target: targetSlug });
+          }
+        }
+      });
+      
+      return reply.send({ nodes, links });
+    } catch (e) {
+      log.err('Failed to generate wiki graph', e);
+      return reply.status(500).send({ error: 'Graph generation failed' });
+    }
+  });
+
   // Sidebar Suggestions (Recently Added, Public, For You)
   fastify.get('/api/wiki/sidebar-suggestions', async (req, reply) => {
     try {
