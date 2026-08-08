@@ -8,5 +8,18 @@ module.exports = async function (fastify, opts) {
     reply.send({ ok: true, ui_sounds_enabled: !!enabled });
   });
 
+  // GET /api/users/search?q=query
+  fastify.get('/search', { preHandler: [authRequired] }, async (req, reply) => {
+    const { q } = req.query;
+    if (!q || q.length < 2) return reply.send({ users: [] });
+    
+    const searchStr = `%${q}%`;
+    const [rows] = await fastify.db.query(
+      'SELECT id, display_name, email FROM users WHERE email LIKE ? OR display_name LIKE ? LIMIT 10',
+      [searchStr, searchStr]
+    );
+    reply.send({ users: rows });
+  });
+
   // More user routes can be added here...
 };

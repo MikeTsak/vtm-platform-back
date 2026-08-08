@@ -597,6 +597,102 @@ async function _ensureIdempotencyTable() {
   }
 }
 
+let wikiTablesCreated = false;
+
+async function _ensureWikiTables() {
+  if (wikiTablesCreated) return;
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS wiki_categories (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          parent_id INT NULL,
+          name VARCHAR(255) NOT NULL,
+          slug VARCHAR(255) NOT NULL UNIQUE,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (parent_id) REFERENCES wiki_categories(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS wiki_articles (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          category_id INT NULL,
+          author_id INT NOT NULL,
+          title VARCHAR(255) NOT NULL,
+          slug VARCHAR(255) NOT NULL UNIQUE,
+          content LONGTEXT NOT NULL,
+          status ENUM('draft', 'published', 'private') DEFAULT 'draft',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          FOREIGN KEY (category_id) REFERENCES wiki_categories(id) ON DELETE SET NULL,
+          INDEX idx_status (status)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS wiki_article_versions (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          article_id INT NOT NULL,
+          editor_id INT NOT NULL,
+          content LONGTEXT NOT NULL,
+          edit_summary VARCHAR(500),
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (article_id) REFERENCES wiki_articles(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS wiki_boards (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          owner_id INT NOT NULL,
+          name VARCHAR(255) NOT NULL,
+          description TEXT,
+          visibility ENUM('private', 'shared', 'public', 'admin_only') DEFAULT 'private',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS wiki_board_members (
+          board_id INT NOT NULL,
+          user_id INT NOT NULL,
+          role ENUM('viewer', 'editor') DEFAULT 'viewer',
+          PRIMARY KEY (board_id, user_id),
+          FOREIGN KEY (board_id) REFERENCES wiki_boards(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS wiki_board_items (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          board_id INT NOT NULL,
+          user_id INT NOT NULL,
+          content TEXT NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (board_id) REFERENCES wiki_boards(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS wiki_notes (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          article_id INT NULL,
+          user_id INT NOT NULL,
+          content TEXT NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          FOREIGN KEY (article_id) REFERENCES wiki_articles(id) ON DELETE CASCADE,
+          UNIQUE KEY unique_user_article_note (user_id, article_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    wikiTablesCreated = true;
+    log.ok('Wiki tables verified/created.');
+  } catch (e) {
+    log.err('Failed to init wiki tables', { error: e.message });
+  }
+}
+
 async function initDatabase() {
   try {
     // 1. Core tables
@@ -625,6 +721,7 @@ async function initDatabase() {
     await _ensureNewsTables();
     await _ensureRetainersTable();
     await _ensureIdempotencyTable();
+    await _ensureWikiTables();
     
     // 5. Apply 50MB LONGBLOB patches to existing media tables
     try {

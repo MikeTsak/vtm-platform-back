@@ -1493,6 +1493,7 @@ fastify.register(require('./routes/users'), {
 
 
 fastify.register(require('./routes/characters'), { pool, log, authRequired, moderateLimiter, requireAdmin, validateRetainerSheet, getMimeType, sharp, imageClient, broadcastNtfyAlert }); fastify.after(() => console.log("Finished loading plugin 12"));
+fastify.register(require('./routes/wiki'), { pool, log, authRequired, requireAdmin }); fastify.after(() => console.log("Finished loading plugin wiki"));
 /* -------------------- XP Spend -------------------- */
 fastify.post('/api/characters/xp/spend', { preHandler: [authRequired] }, async (req, reply) => {
   const {
