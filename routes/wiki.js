@@ -1,16 +1,21 @@
 module.exports = async function (fastify, opts) {
-  const { pool, log, authRequired } = opts;
+  const { pool, log, authRequired, imageClient } = opts;
 
   /* -------------------- WIKI ARTICLES -------------------- */
 
   // Get all published articles (Dashboard / Feed)
   fastify.get('/api/wiki/articles', async (req, reply) => {
     try {
+      // Determine if caller is admin (token optional)
+      let isAdmin = false;
+      try { await authRequired(req, reply); isAdmin = req.user?.role === 'admin'; } catch (_) {}
+
+      const statusFilter = isAdmin ? `a.status IN ('published','private')` : `a.status = 'published'`;
       const [rows] = await pool.query(
-        `SELECT a.id, a.title, a.slug, a.created_at, u.display_name as author_name 
+        `SELECT a.id, a.title, a.slug, a.status, a.created_at, u.display_name as author_name 
          FROM wiki_articles a 
          JOIN users u ON a.author_id = u.id 
-         WHERE a.status = 'published' 
+         WHERE ${statusFilter} 
          ORDER BY a.created_at DESC LIMIT 50`
       );
       return reply.send({ articles: rows });
@@ -41,6 +46,13 @@ module.exports = async function (fastify, opts) {
          }
       }
 
+      const [tagRows] = await pool.query(
+        `SELECT t.name FROM wiki_tags t 
+         JOIN wiki_article_tags wat ON t.id = wat.tag_id 
+         WHERE wat.article_id = ?`, [article.id]
+      );
+      article.tags = tagRows.map(t => t.name).join(', ');
+
       return reply.send({ article });
     } catch (e) {
       log.err('Failed to fetch wiki article', e);
@@ -69,9 +81,46 @@ module.exports = async function (fastify, opts) {
     }
   });
 
+  // Sidebar Suggestions (Recently Added, Public, For You)
+  fastify.get('/api/wiki/sidebar-suggestions', async (req, reply) => {
+    try {
+      // Recently added
+      const [recentRows] = await pool.query(
+        `SELECT id, title, slug FROM wiki_articles 
+         WHERE status = 'published' 
+         ORDER BY created_at DESC LIMIT 5`
+      );
+
+      // Random / General public (using ORDER BY RAND() is okay for small datasets)
+      const [publicRows] = await pool.query(
+        `SELECT id, title, slug FROM wiki_articles 
+         WHERE status = 'published' 
+         ORDER BY RAND() LIMIT 5`
+      );
+
+      // For You (Requires User Context)
+      // Since we don't have full context on user preferences here, we'll just return a random set,
+      // or if we had req.user, we could query based on their clan. For now, another random set or fallback.
+      const [forYouRows] = await pool.query(
+        `SELECT id, title, slug FROM wiki_articles 
+         WHERE status = 'published' 
+         ORDER BY RAND() LIMIT 5`
+      );
+
+      return reply.send({
+        recent: recentRows,
+        public: publicRows,
+        forYou: forYouRows
+      });
+    } catch (e) {
+      log.err('Failed to fetch sidebar suggestions', e);
+      return reply.status(500).send({ error: 'Database error' });
+    }
+  });
+
   // Create or update an article (Draft or Publish)
   fastify.post('/api/wiki/articles', { preHandler: [authRequired] }, async (req, reply) => {
-    const { id, title, slug, content, status, category_id, edit_summary } = req.body;
+    const { id, title, slug, content, status, category_id, edit_summary, tags } = req.body;
     
     // Only admins can publish private articles
     if (status === 'private' && req.user.role !== 'admin') {
@@ -110,6 +159,22 @@ module.exports = async function (fastify, opts) {
         );
       }
 
+      // Sync tags
+      if (tags !== undefined) {
+        await conn.query('DELETE FROM wiki_article_tags WHERE article_id=?', [articleId]);
+        if (tags && tags.trim()) {
+          const tagArray = tags.split(',').map(t => t.trim()).filter(Boolean);
+          for (const tagName of tagArray) {
+            const tagSlug = tagName.toLowerCase().replace(/\\s+/g, '-');
+            await conn.query('INSERT IGNORE INTO wiki_tags (name, slug) VALUES (?, ?)', [tagName, tagSlug]);
+            const [tRows] = await conn.query('SELECT id FROM wiki_tags WHERE slug=?', [tagSlug]);
+            if (tRows.length) {
+              await conn.query('INSERT IGNORE INTO wiki_article_tags (article_id, tag_id) VALUES (?, ?)', [articleId, tRows[0].id]);
+            }
+          }
+        }
+      }
+
       await conn.commit();
 
       log.info('Wiki Article saved', { articleId, user_id: req.user.id, status });
@@ -120,6 +185,84 @@ module.exports = async function (fastify, opts) {
       reply.status(500).send({ error: e.message || 'Database error' });
     } finally {
       if (conn) conn.release();
+    }
+  });
+
+  /* -------------------- WIKI IMAGE UPLOAD & HISTORY -------------------- */
+
+  fastify.post('/api/wiki/upload-image', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      if (!imageClient) return reply.status(500).send({ error: 'Image client not configured' });
+      const data = await req.file();
+      if (!data) return reply.status(400).send({ error: 'No file uploaded' });
+
+      const buffer = await data.toBuffer();
+      const result = await imageClient.uploadImage(buffer, data.filename);
+      if (!result.success) return reply.status(500).send({ error: 'Failed to upload image' });
+      
+      return reply.send({ url: result.url });
+    } catch (e) {
+      log.err('Wiki image upload failed', e);
+      return reply.status(500).send({ error: 'Internal server error' });
+    }
+  });
+
+  fastify.get('/api/wiki/articles/:slug/history', async (req, reply) => {
+    const { slug } = req.params;
+    try {
+      const [artRows] = await pool.query('SELECT id FROM wiki_articles WHERE slug=?', [slug]);
+      if (!artRows.length) return reply.status(404).send({ error: 'Article not found' });
+      
+      const [rows] = await pool.query(
+        `SELECT v.id, v.content, v.edit_summary, v.created_at, u.display_name as editor_name
+         FROM wiki_article_versions v
+         JOIN users u ON v.editor_id = u.id
+         WHERE v.article_id = ?
+         ORDER BY v.created_at DESC`,
+        [artRows[0].id]
+      );
+      reply.send({ history: rows });
+    } catch (e) {
+      log.err('Failed to fetch wiki history', e);
+      reply.status(500).send({ error: 'Database error' });
+    }
+  });
+
+  fastify.post('/api/wiki/articles/:slug/rollback', { preHandler: [authRequired] }, async (req, reply) => {
+    const { slug } = req.params;
+    const { version_id } = req.body;
+    
+    if (req.user.role !== 'admin') return reply.status(403).send({ error: 'Only admins can rollback articles' });
+
+    try {
+      const [artRows] = await pool.query('SELECT id FROM wiki_articles WHERE slug=?', [slug]);
+      if (!artRows.length) return reply.status(404).send({ error: 'Article not found' });
+      const articleId = artRows[0].id;
+
+      const [verRows] = await pool.query('SELECT content FROM wiki_article_versions WHERE id=? AND article_id=?', [version_id, articleId]);
+      if (!verRows.length) return reply.status(404).send({ error: 'Version not found' });
+      
+      const newContent = verRows[0].content;
+      
+      const conn = await pool.getConnection();
+      try {
+        await conn.beginTransaction();
+        await conn.query('UPDATE wiki_articles SET content=? WHERE id=?', [newContent, articleId]);
+        await conn.query(
+          'INSERT INTO wiki_article_versions (article_id, editor_id, content, edit_summary) VALUES (?,?,?,?)',
+          [articleId, req.user.id, newContent, `Reverted to version ${version_id}`]
+        );
+        await conn.commit();
+        reply.send({ success: true, content: newContent });
+      } catch (e) {
+        await conn.rollback();
+        throw e;
+      } finally {
+        conn.release();
+      }
+    } catch (e) {
+      log.err('Failed to rollback wiki article', e);
+      reply.status(500).send({ error: 'Database error' });
     }
   });
 
@@ -364,5 +507,179 @@ module.exports = async function (fastify, opts) {
     }
   });
 
+
+  /* -------------------- TIMELINE -------------------- */
+
+  fastify.get('/api/wiki/timeline', async (req, reply) => {
+    try {
+      const [rows] = await pool.query(
+        `SELECT t.*, u.display_name as created_by_name
+         FROM wiki_timeline_events t
+         LEFT JOIN users u ON t.created_by = u.id
+         ORDER BY t.sort_order ASC, t.created_at ASC`
+      );
+      return reply.send({ events: rows });
+    } catch (e) {
+      log.err('Failed to fetch timeline', e);
+      return reply.status(500).send({ error: 'Database error' });
+    }
+  });
+
+  fastify.post('/api/wiki/timeline', { preHandler: [authRequired] }, async (req, reply) => {
+    if (req.user.role !== 'admin') return reply.status(403).send({ error: 'Admin only' });
+    const { title, date_label, description, article_slug, category, sort_order } = req.body;
+    if (!title || !date_label) return reply.status(400).send({ error: 'title and date_label are required' });
+    try {
+      const [result] = await pool.query(
+        'INSERT INTO wiki_timeline_events (title, date_label, description, article_slug, category, sort_order, created_by) VALUES (?,?,?,?,?,?,?)',
+        [title, date_label, description || '', article_slug || null, category || 'General', sort_order || 0, req.user.id]
+      );
+      return reply.send({ success: true, id: result.insertId });
+    } catch (e) {
+      log.err('Failed to create timeline event', e);
+      return reply.status(500).send({ error: 'Database error' });
+    }
+  });
+
+  fastify.put('/api/wiki/timeline/:id', { preHandler: [authRequired] }, async (req, reply) => {
+    if (req.user.role !== 'admin') return reply.status(403).send({ error: 'Admin only' });
+    const { id } = req.params;
+    const { title, date_label, description, article_slug, category, sort_order } = req.body;
+    try {
+      await pool.query(
+        'UPDATE wiki_timeline_events SET title=?, date_label=?, description=?, article_slug=?, category=?, sort_order=? WHERE id=?',
+        [title, date_label, description || '', article_slug || null, category || 'General', sort_order || 0, id]
+      );
+      return reply.send({ success: true });
+    } catch (e) {
+      log.err('Failed to update timeline event', e);
+      return reply.status(500).send({ error: 'Database error' });
+    }
+  });
+
+  fastify.delete('/api/wiki/timeline/:id', { preHandler: [authRequired] }, async (req, reply) => {
+    if (req.user.role !== 'admin') return reply.status(403).send({ error: 'Admin only' });
+    try {
+      await pool.query('DELETE FROM wiki_timeline_events WHERE id=?', [req.params.id]);
+      return reply.send({ success: true });
+    } catch (e) {
+      log.err('Failed to delete timeline event', e);
+      return reply.status(500).send({ error: 'Database error' });
+    }
+  });
+
+  /* -------------------- PRIVATE JOURNAL -------------------- */
+
+  fastify.get('/api/wiki/journal', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const [rows] = await pool.query(
+        'SELECT id, title, created_at, updated_at FROM wiki_journal_entries WHERE user_id=? ORDER BY updated_at DESC',
+        [req.user.id]
+      );
+      return reply.send({ entries: rows });
+    } catch (e) {
+      log.err('Failed to fetch journal', e);
+      return reply.status(500).send({ error: 'Database error' });
+    }
+  });
+
+  fastify.get('/api/wiki/journal/:id', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const [rows] = await pool.query(
+        'SELECT * FROM wiki_journal_entries WHERE id=? AND user_id=?',
+        [req.params.id, req.user.id]
+      );
+      if (!rows.length) return reply.status(404).send({ error: 'Entry not found' });
+      return reply.send({ entry: rows[0] });
+    } catch (e) {
+      log.err('Failed to fetch journal entry', e);
+      return reply.status(500).send({ error: 'Database error' });
+    }
+  });
+
+  fastify.post('/api/wiki/journal', { preHandler: [authRequired] }, async (req, reply) => {
+    const { id, title, content } = req.body;
+    try {
+      if (id) {
+        // Verify ownership before update
+        const [rows] = await pool.query('SELECT user_id FROM wiki_journal_entries WHERE id=?', [id]);
+        if (!rows.length || rows[0].user_id !== req.user.id) return reply.status(403).send({ error: 'Forbidden' });
+        await pool.query('UPDATE wiki_journal_entries SET title=?, content=? WHERE id=?', [title, content, id]);
+        return reply.send({ success: true, id });
+      } else {
+        const [result] = await pool.query(
+          'INSERT INTO wiki_journal_entries (user_id, title, content) VALUES (?,?,?)',
+          [req.user.id, title || 'Untitled Entry', content || '']
+        );
+        return reply.send({ success: true, id: result.insertId });
+      }
+    } catch (e) {
+      log.err('Failed to save journal entry', e);
+      return reply.status(500).send({ error: 'Database error' });
+    }
+  });
+
+  fastify.delete('/api/wiki/journal/:id', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const [rows] = await pool.query('SELECT user_id FROM wiki_journal_entries WHERE id=?', [req.params.id]);
+      if (!rows.length || rows[0].user_id !== req.user.id) return reply.status(403).send({ error: 'Forbidden' });
+      await pool.query('DELETE FROM wiki_journal_entries WHERE id=?', [req.params.id]);
+      return reply.send({ success: true });
+    } catch (e) {
+      log.err('Failed to delete journal entry', e);
+      return reply.status(500).send({ error: 'Database error' });
+    }
+  });
+
+  /* -------------------- ADMIN NOTES ON ARTICLES -------------------- */
+
+  fastify.get('/api/wiki/articles/:slug/admin-notes', { preHandler: [authRequired] }, async (req, reply) => {
+    if (req.user.role !== 'admin') return reply.status(403).send({ error: 'Admin only' });
+    try {
+      const [artRows] = await pool.query('SELECT id FROM wiki_articles WHERE slug=?', [req.params.slug]);
+      if (!artRows.length) return reply.status(404).send({ error: 'Article not found' });
+      const [rows] = await pool.query(
+        `SELECT n.*, u.display_name as author_name
+         FROM wiki_admin_notes n
+         JOIN users u ON n.author_id = u.id
+         WHERE n.article_id=?
+         ORDER BY n.created_at DESC`,
+        [artRows[0].id]
+      );
+      return reply.send({ notes: rows });
+    } catch (e) {
+      log.err('Failed to fetch admin notes', e);
+      return reply.status(500).send({ error: 'Database error' });
+    }
+  });
+
+  fastify.post('/api/wiki/articles/:slug/admin-notes', { preHandler: [authRequired] }, async (req, reply) => {
+    if (req.user.role !== 'admin') return reply.status(403).send({ error: 'Admin only' });
+    const { content } = req.body;
+    if (!content?.trim()) return reply.status(400).send({ error: 'Content is required' });
+    try {
+      const [artRows] = await pool.query('SELECT id FROM wiki_articles WHERE slug=?', [req.params.slug]);
+      if (!artRows.length) return reply.status(404).send({ error: 'Article not found' });
+      const [result] = await pool.query(
+        'INSERT INTO wiki_admin_notes (article_id, author_id, content) VALUES (?,?,?)',
+        [artRows[0].id, req.user.id, content]
+      );
+      return reply.send({ success: true, id: result.insertId });
+    } catch (e) {
+      log.err('Failed to save admin note', e);
+      return reply.status(500).send({ error: 'Database error' });
+    }
+  });
+
+  fastify.delete('/api/wiki/admin-notes/:id', { preHandler: [authRequired] }, async (req, reply) => {
+    if (req.user.role !== 'admin') return reply.status(403).send({ error: 'Admin only' });
+    try {
+      await pool.query('DELETE FROM wiki_admin_notes WHERE id=?', [req.params.id]);
+      return reply.send({ success: true });
+    } catch (e) {
+      log.err('Failed to delete admin note', e);
+      return reply.status(500).send({ error: 'Database error' });
+    }
+  });
 
 };
