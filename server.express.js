@@ -1487,7 +1487,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     const hash = await bcrypt.hash(password, 12);
     const [r] = await pool.query('INSERT INTO users (email, display_name, password_hash) VALUES (?,?,?)', [email, display_name, hash]);
     log.auth('User registered', { id: r.insertId, email });
-    broadcastNtfyAlert(`**${display_name}** has just joined the platform.\nEmail: \`${email}\``, { title: 'New Registration', tags: 'bust_in_silhouette', priority: 'default' });
+    broadcastNtfyAlert(`**${display_name} (${r.insertId})** has just joined the platform.\nEmail: \`${email}\``, { title: 'New Registration', tags: 'bust_in_silhouette', priority: 'default' });
     const [rows] = await pool.query('SELECT id, email, display_name, role FROM users WHERE id=?', [r.insertId]);
     res.json({ token: issueToken(rows[0]) });
   } catch (e) {
@@ -1938,7 +1938,7 @@ app.post('/api/characters', authRequired, moderateLimiter, async (req, res) => {
     const ch = rows[0];
     if (ch && ch.sheet && typeof ch.sheet === 'string') { try { ch.sheet = JSON.parse(ch.sheet); } catch { } }
     log.char('Character created', { id: r.insertId, user_id: req.user.id, name, clan, xp: ch?.xp });
-    broadcastNtfyAlert(`**${name}** (Clan: **${clan}**) was created by User #${req.user.id}.`, { title: 'New Character', tags: 'vampire', priority: 'default' });
+    broadcastNtfyAlert(`**${name}** (Clan: **${clan}**) was created by ${req.user.display_name} (${req.user.id}).`, { title: 'New Character', tags: 'vampire', priority: 'default' });
     res.json({ character: ch });
   } catch (e) {
     log.err('Failed to create character', e);
@@ -4030,7 +4030,7 @@ app.post('/api/downtimes', authRequired, async (req, res) => {
   );
   const [rows] = await pool.query('SELECT * FROM downtimes WHERE id=?', [r.insertId]);
   log.dt('Downtime created', { user_id: req.user.id, downtime_id: r.insertId, feeding_type: defaultFeed || feeding_type || null });
-  broadcastNtfyAlert(`**Character #${ch.id}** submitted a new downtime action:\n\n> *${title}*`, { title: 'Downtime Submitted', tags: 'hourglass_flowing_sand', priority: 'default' });
+  broadcastNtfyAlert(`**${ch.name} (${ch.id})** submitted a new downtime action:\n\n> *${title}*`, { title: 'Downtime Submitted', tags: 'hourglass_flowing_sand', priority: 'default' });
   res.json({ downtime: rows[0] });
 });
 

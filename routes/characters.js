@@ -142,7 +142,7 @@ module.exports = async function (fastify, opts) {
       const ch = rows[0];
       if (ch && ch.sheet && typeof ch.sheet === 'string') { try { ch.sheet = JSON.parse(ch.sheet); } catch { } }
       log.char('Character created', { id: r.insertId, user_id: req.user.id, name, clan, xp: ch?.xp });
-      broadcastNtfyAlert(`**${name}** (Clan: **${clan}**) was created by User #${req.user.id}.`, { title: 'New Character', tags: 'vampire', priority: 'default' });
+      broadcastNtfyAlert(`**${name}** (Clan: **${clan}**) was created by ${req.user.display_name} (${req.user.id}).`, { title: 'New Character', tags: 'vampire', priority: 'default' });
       reply.send({ character: ch });
     } catch (e) {
       log.err('Failed to create character', e);

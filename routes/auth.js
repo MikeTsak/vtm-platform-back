@@ -50,7 +50,7 @@ module.exports = async function (fastify, opts) {
     const [r] = await fastify.db.query('INSERT INTO users (email, display_name, password_hash) VALUES (?,?,?)', [email, display_name, hash]);
     log.auth('User registered', { id: r.insertId, email });
     if (typeof broadcastNtfyAlert === 'function') {
-      broadcastNtfyAlert(`**${display_name}** has just joined the platform.\nEmail: \`${email}\``, { title: 'New Registration', tags: 'bust_in_silhouette', priority: 'default' });
+      broadcastNtfyAlert(`**${display_name} (${r.insertId})** has just joined the platform.\nEmail: \`${email}\``, { title: 'New Registration', tags: 'bust_in_silhouette', priority: 'default' });
     }
     const [rows] = await fastify.db.query('SELECT id, email, display_name, role FROM users WHERE id=?', [r.insertId]);
     reply.send({ token: issueToken(rows[0]) });

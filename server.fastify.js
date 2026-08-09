@@ -3025,7 +3025,7 @@ fastify.post('/api/downtimes', { preHandler: [authRequired] }, async (req, reply
   );
   const [rows] = await pool.query('SELECT * FROM downtimes WHERE id=?', [r.insertId]);
   log.dt('Downtime created', { user_id: req.user.id, downtime_id: r.insertId, feeding_type: defaultFeed || feeding_type || null });
-  broadcastNtfyAlert(`**Character #${ch.id}** submitted a new downtime action:\n\n> *${title}*`, { title: 'Downtime Submitted', tags: 'hourglass_flowing_sand', priority: 'default' });
+  broadcastNtfyAlert(`**${ch.name} (${ch.id})** submitted a new downtime action:\n\n> *${title}*`, { title: 'Downtime Submitted', tags: 'hourglass_flowing_sand', priority: 'default' });
   reply.send({ downtime: rows[0] });
 });
 
