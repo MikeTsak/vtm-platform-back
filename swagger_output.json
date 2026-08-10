@@ -3460,6 +3460,12 @@
                   },
                   "downtime_active_phase": {
                     "example": "any"
+                  },
+                  "downtime_mass_release_mode": {
+                    "example": "any"
+                  },
+                  "downtime_mass_release_date": {
+                    "example": "any"
                   }
                 }
               }
@@ -5176,6 +5182,42 @@
           },
           "500": {
             "description": "Internal Server Error"
+          }
+        }
+      }
+    },
+    "/api/admin/blood-web/update": {
+      "post": {
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "example": "any"
+                  },
+                  "hunger": {
+                    "example": "any"
+                  },
+                  "bloodPotency": {
+                    "example": "any"
+                  }
+                }
+              }
+            }
           }
         }
       }

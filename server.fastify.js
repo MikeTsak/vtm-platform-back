@@ -7060,7 +7060,7 @@ fastify.get('/api/admin/timeline/:charId', { preHandler: [authRequired, requireA
 
 fastify.get('/api/admin/domains-advanced', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   try {
-    const [domains] = await pool.query('SELECT * FROM domains ORDER BY created_at DESC');
+    const [domains] = await pool.query('SELECT division as id, owner_name as name, color, safety_rating FROM domain_claims ORDER BY division ASC');
     const [problems] = await pool.query('SELECT * FROM domain_problems ORDER BY created_at DESC');
     reply.send({ domains, problems });
   } catch (e) {
@@ -7070,17 +7070,57 @@ fastify.get('/api/admin/domains-advanced', { preHandler: [authRequired, requireA
 
 fastify.post('/api/admin/domains/draw-problems', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   try {
-    const [domains] = await pool.query('SELECT id FROM domains');
+    const [domains] = await pool.query('SELECT division as id FROM domain_claims');
     if (domains.length === 0) return reply.status(400).json({ error: 'No domains exist' });
 
     const shuffled = domains.sort(() => 0.5 - Math.random());
     const selected = shuffled.slice(0, 3);
-    const problemList = ['SI Surveillance Activity', 'Lupine Pack Sighted', 'Masquerade Breach Video Leaked', 'Anarch Agitators', 'Blood Shortage'];
+    const problemList = [
+      // Human / General Problems (-1)
+      { text: 'MAT (Riot Police) clash with violent protestors in the streets', penalty: 1 },
+      { text: 'Public transport strike causes gridlock and increased police presence', penalty: 1 },
+      { text: 'Massive tourist influx floods the night streets, disrupting feeding', penalty: 1 },
+      { text: 'New cartel moving highly dangerous synthetic drugs in local clubs', penalty: 1 },
+      { text: 'Severe summer heatwave forces mortals to stay out late into the night', penalty: 1 },
+      { text: 'Unexpected blackout leaves entire blocks in darkness and panic', penalty: 1 },
+      { text: 'Sudden police sweep and checkpoints set up in the area', penalty: 1 },
+      { text: 'Major traffic accident blocks key escape routes', penalty: 1 },
+      { text: 'Far-right extremist group marching in the streets at night', penalty: 1 },
+      { text: 'Organized crime turf war results in public shootings', penalty: 1 },
+      { text: 'Large illegal rave draws noise complaints and heavy police attention', penalty: 1 },
+      { text: 'Health inspectors cracking down heavily on local night establishments', penalty: 1 },
+      { text: 'Sudden influx of homeless camps drawing unwanted municipal sweeps', penalty: 1 },
+      { text: 'Flash floods from sudden storm paralyze local infrastructure', penalty: 1 },
+      { text: 'Internet/Cellular blackout in the area causes localized panic', penalty: 1 },
+      
+      // Occult / Vampire / Supernatural Problems (-2 to -4)
+      { text: 'Second Inquisition (Entity) surveillance van spotted monitoring the area', penalty: 3 },
+      { text: 'Lupine pack hunting aggressively in the area', penalty: 3 },
+      { text: 'Masquerade Breach: Blurry cellphone footage circulating on Greek TikTok', penalty: 3 },
+      { text: 'Sabbat infiltrators rumored to be testing the area defenses', penalty: 2 },
+      { text: 'Severe Blood Shortage: Local blood banks heavily guarded and mortals staying indoors', penalty: 2 },
+      { text: 'Unsanctioned Embrace discovered running wild and terrified', penalty: 2 },
+      { text: 'Rogue Ghoul causing a violent scene in a public venue', penalty: 1 },
+      { text: 'Hecata necromancers performing highly visible rituals', penalty: 2 },
+      { text: 'SI Strike Team heavily armed and raiding a suspected Haven', penalty: 4 },
+      { text: 'Tainted Blood: A local mortal drug is making feeding extremely dangerous', penalty: 2 },
+      { text: 'Thin-Blood alchemists causing chemical explosions and drawing police', penalty: 2 },
+      { text: 'Strange occult graffiti appearing, causing mortal hysteria', penalty: 1 },
+      { text: 'A rogue Wraith poltergeist is terrifying locals and making the evening news', penalty: 2 },
+      { text: 'Unexplained mortal disappearances attract persistent investigative journalists', penalty: 2 },
+      { text: 'Someone is distributing pamphlets exposing local Kindred identities', penalty: 3 },
+      { text: 'Feral Gargoyle sighted roosting on a local church', penalty: 2 },
+      { text: 'Blood cult of mortals discovered worshipping a mysterious master', penalty: 2 }
+    ];
 
     for (const dom of selected) {
       const prob = problemList[Math.floor(Math.random() * problemList.length)];
-      await pool.query('INSERT INTO domain_problems (domain_id, problem_text) VALUES (?, ?)', [dom.id, prob]);
-      await pool.query('UPDATE domains SET safety_rating = GREATEST(safety_rating - 2, 0) WHERE id=?', [dom.id]);
+      
+      const [[{ unresolvedCount }]] = await pool.query('SELECT COUNT(*) as unresolvedCount FROM domain_problems WHERE domain_id=? AND resolved=0', [dom.id]);
+      const totalPenalty = prob.penalty + Number(unresolvedCount);
+      
+      await pool.query('INSERT INTO domain_problems (domain_id, problem_text) VALUES (?, ?)', [dom.id, prob.text]);
+      await pool.query('UPDATE domain_claims SET safety_rating = GREATEST(safety_rating - ?, 0) WHERE division=?', [totalPenalty, dom.id]);
     }
 
     await pool.query('INSERT INTO admin_audit_logs (admin_id, action, details) VALUES (?, ?, ?)', [req.user.id, 'DRAW_DOMAIN_PROBLEMS', `Drew monthly problems for ${selected.length} domains.`]);
@@ -7093,8 +7133,11 @@ fastify.post('/api/admin/domains/draw-problems', { preHandler: [authRequired, re
 fastify.post('/api/admin/domains/custom-problem', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   try {
     const { domain_id, problem_text } = req.body;
+    const [[{ unresolvedCount }]] = await pool.query('SELECT COUNT(*) as unresolvedCount FROM domain_problems WHERE domain_id=? AND resolved=0', [domain_id]);
+    const penalty = 2 + Number(unresolvedCount);
+
     await pool.query('INSERT INTO domain_problems (domain_id, problem_text, is_custom) VALUES (?, ?, 1)', [domain_id, problem_text]);
-    await pool.query('UPDATE domains SET safety_rating = GREATEST(safety_rating - 2, 0) WHERE id=?', [domain_id]);
+    await pool.query('UPDATE domain_claims SET safety_rating = GREATEST(safety_rating - ?, 0) WHERE division=?', [penalty, domain_id]);
     reply.send({ ok: true });
   } catch (e) {
     reply.status(500).json({ error: 'Failed to add custom problem' });
@@ -7115,12 +7158,28 @@ fastify.get('/api/admin/blood-web', { preHandler: [authRequired, requireAdmin] }
     const [chars] = await pool.query('SELECT c.id, c.name, c.sheet, u.display_name FROM characters c JOIN users u ON c.user_id = u.id WHERE c.is_ex = 0 AND c.is_deceased = 0');
     const web = chars.map(c => {
       let sheet = {};
-      try { sheet = JSON.parse(c.sheet) || {}; } catch (e) { }
+      try { sheet = typeof c.sheet === 'string' ? JSON.parse(c.sheet) : (c.sheet || {}); } catch (e) { }
       return { id: c.id, name: c.name, player: c.display_name, hunger: Number(sheet.hunger) || 0, bloodPotency: Number(sheet.bloodPotency) || 0 };
     });
     reply.send({ web });
   } catch (e) {
     reply.status(500).json({ error: 'Failed to fetch blood web' });
+  }
+});
+
+fastify.post('/api/admin/blood-web/update', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  try {
+    const { id, hunger, bloodPotency } = req.body;
+    const [[char]] = await pool.query('SELECT sheet FROM characters WHERE id = ?', [id]);
+    if (!char) return reply.status(404).json({ error: 'Character not found' });
+    let sheet = {};
+    try { sheet = typeof char.sheet === 'string' ? JSON.parse(char.sheet) : (char.sheet || {}); } catch(e){}
+    if (hunger !== undefined) sheet.hunger = Math.max(0, Math.min(5, Number(hunger)));
+    if (bloodPotency !== undefined) sheet.bloodPotency = Math.max(0, Math.min(10, Number(bloodPotency)));
+    await pool.query('UPDATE characters SET sheet = ? WHERE id = ?', [JSON.stringify(sheet), id]);
+    reply.send({ ok: true });
+  } catch (e) {
+    reply.status(500).json({ error: 'Failed to update character' });
   }
 });
 
