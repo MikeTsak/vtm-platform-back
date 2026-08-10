@@ -1089,7 +1089,13 @@ app.post('/api/admin/ntfy/test', authRequired, requireAdmin, async (req, res) =>
     if (!rows.length || !rows[0].ntfy_topic) return res.status(400).json({ error: 'No Ntfy topic configured' });
 
     await axios.post(`https://ntfy.sh/${rows[0].ntfy_topic}`, 'This is a test notification from Erebus Portal backend.', {
-      headers: { 'Title': '🦇 Ntfy Test', 'Tags': 'bell' }
+      headers: { 
+        'Title': '🦇 Ntfy Test', 
+        'Tags': 'bell',
+        'Markdown': 'yes',
+        'Priority': 'default',
+        'Icon': 'https://portal.attlarp.gr/img/ATT-logo(1).png'
+      }
     });
 
     res.json({ ok: true });

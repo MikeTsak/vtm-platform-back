@@ -480,6 +480,45 @@ cron.schedule('0 12 * * *', async () => {
   }
 });
 
+// ============================================================================
+// AUTOMATED LOGISTICS - MASS RELEASE PINGS
+// ============================================================================
+// This cron job runs every minute to check if Mass Release just fired
+cron.schedule('* * * * *', async () => {
+  try {
+    const { getSetting, setSetting } = require('./utils/settings');
+    const { broadcastNtfyAlert } = require('./utils/ntfy');
+    
+    const isMassReleaseActive = await getSetting('downtime_mass_release_mode', 'false');
+    if (isMassReleaseActive !== 'true') return;
+
+    const massReleaseDateStr = await getSetting('downtime_mass_release_date', null);
+    if (!massReleaseDateStr) return;
+
+    const targetDate = new Date(massReleaseDateStr);
+    const now = new Date();
+
+    if (now >= targetDate) {
+      // Check if we already notified
+      const hasNotified = await getSetting('downtime_mass_release_notified', 'false');
+      if (hasNotified !== 'true') {
+        // We reached the date and haven't notified yet. Fire the ping!
+        log.info('Mass Release timer expired! Broadcasting ntfy alert...');
+        await broadcastNtfyAlert('The countdown is over. Downtime Resolutions have just been released to all players!', {
+          title: '🦇 Downtimes Released',
+          tags: ['loudspeaker', 'vampire'],
+          priority: 'high'
+        });
+        
+        // Mark as notified so we don't spam every minute
+        await setSetting('downtime_mass_release_notified', 'true');
+      }
+    }
+  } catch (error) {
+    log.err('Cron Job Mass Release Ping Error', { error: error.message });
+  }
+});
+
 /* -------------------- The Hunt (Admin & DB Init) -------------------- */
 
 // 1. Ensure the Hunt Tables exist on boot
@@ -1138,7 +1177,7 @@ fastify.post('/api/admin/ntfy/generate', { preHandler: [authRequired, requireAdm
     log.adm('Ntfy key generated', { admin_id: req.user.id, topic: newTopic });
     reply.send({ topic: newTopic });
   } catch (e) {
-    reply.status(500).json({ error: 'Failed to generate Ntfy topic' });
+    reply.status(500).send({ error: 'Failed to generate Ntfy topic' });
   }
 });
 
@@ -1158,15 +1197,21 @@ fastify.post('/api/admin/ntfy/prefs', { preHandler: [authRequired, requireAdmin]
 fastify.post('/api/admin/ntfy/test', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   try {
     const [rows] = await pool.query('SELECT ntfy_topic FROM users WHERE id = ?', [req.user.id]);
-    if (!rows.length || !rows[0].ntfy_topic) return reply.status(400).json({ error: 'No Ntfy topic configured' });
+    if (!rows.length || !rows[0].ntfy_topic) return reply.status(400).send({ error: 'No Ntfy topic configured' });
 
     await axios.post(`https://ntfy.sh/${rows[0].ntfy_topic}`, 'This is a test notification from Erebus Portal backend.', {
-      headers: { 'Title': '🦇 Ntfy Test', 'Tags': 'bell' }
+      headers: { 
+        'Title': '🦇 Ntfy Test', 
+        'Tags': 'bell',
+        'Markdown': 'yes',
+        'Priority': 'default',
+        'Icon': 'https://portal.attlarp.gr/img/ATT-logo(1).png'
+      }
     });
 
     reply.send({ ok: true });
   } catch (e) {
-    reply.status(500).json({ error: 'Failed to send test notification' });
+    reply.status(500).send({ error: 'Failed to send test notification' });
   }
 });
 
@@ -2980,6 +3025,25 @@ fastify.get('/api/downtimes/mine', { preHandler: [authRequired] }, async (req, r
     'SELECT * FROM downtimes WHERE character_id=? ORDER BY created_at DESC',
     [char[0].id]
   );
+
+  const massReleaseMode = await getSetting('downtime_mass_release_mode', 'false');
+  const massReleaseDate = await getSetting('downtime_mass_release_date', null);
+  
+  let hideResolutions = false;
+  if (massReleaseMode === 'true' && massReleaseDate) {
+    const releaseTime = new Date(massReleaseDate).getTime();
+    if (!isNaN(releaseTime) && Date.now() < releaseTime) {
+      hideResolutions = true;
+    }
+  }
+
+  if (hideResolutions) {
+    rows.forEach(r => {
+      r.gm_resolution = null;
+      r.gm_notes = null;
+    });
+  }
+
   log.dt('List mine', { user_id: req.user.id, count: rows.length });
   reply.send({ downtimes: rows });
 });
@@ -2990,6 +3054,15 @@ fastify.post('/api/downtimes', { preHandler: [authRequired] }, async (req, reply
   if (!title || !body) {
     log.warn('Downtime create missing fields', { user_id: req.user.id });
     return reply.status(400).json({ error: 'Title and body required' });
+  }
+
+  const isProjectSubmission = title.startsWith('[PROJECT]');
+  const activePhase = await getSetting('downtime_active_phase', 'standard');
+  
+  if (activePhase === 'project' && !isProjectSubmission) {
+    return reply.status(400).json({ error: 'Monthly Action submissions are currently closed. Only Long-Term Projects are being accepted.' });
+  } else if (activePhase === 'standard' && isProjectSubmission) {
+    return reply.status(400).json({ error: 'Long-Term Project submissions are currently closed. Only Monthly Actions are being accepted.' });
   }
 
   const [chars] = await pool.query('SELECT * FROM characters WHERE user_id=?', [req.user.id]);
@@ -4935,12 +5008,16 @@ fastify.get('/api/downtimes/config', { preHandler: [authRequired] }, async (req,
     const opening = await getSetting('downtime_opening', null);
     const projectDeadline = await getSetting('project_deadline', null);
     const activePhase = await getSetting('downtime_active_phase', 'standard'); // <-- NEW
+    const massReleaseMode = await getSetting('downtime_mass_release_mode', 'false');
+    const massReleaseDate = await getSetting('downtime_mass_release_date', null);
 
     reply.send({
       downtime_deadline: deadline || null,
       downtime_opening: opening || null,
       project_deadline: projectDeadline || null,
       downtime_active_phase: activePhase, // <-- NEW
+      downtime_mass_release_mode: massReleaseMode,
+      downtime_mass_release_date: massReleaseDate || null,
     });
   } catch (e) {
     log.err('Fetch downtime config failed', { message: e.message });
@@ -4951,7 +5028,7 @@ fastify.get('/api/downtimes/config', { preHandler: [authRequired] }, async (req,
 // WRITE (admins): save the dates
 fastify.post('/api/admin/downtimes/config', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   try {
-    const { downtime_deadline, downtime_opening, project_deadline, downtime_active_phase } = req.body || {};
+    const { downtime_deadline, downtime_opening, project_deadline, downtime_active_phase, downtime_mass_release_mode, downtime_mass_release_date } = req.body || {};
 
     if (downtime_deadline && isNaN(new Date(downtime_deadline).getTime())) {
       return reply.status(400).json({ error: 'Invalid downtime_deadline date' });
@@ -4962,23 +5039,35 @@ fastify.post('/api/admin/downtimes/config', { preHandler: [authRequired, require
     if (project_deadline && isNaN(new Date(project_deadline).getTime())) {
       return reply.status(400).json({ error: 'Invalid project_deadline date' });
     }
+    if (downtime_mass_release_date && isNaN(new Date(downtime_mass_release_date).getTime())) {
+      return reply.status(400).json({ error: 'Invalid downtime_mass_release_date date' });
+    }
 
     if (typeof downtime_deadline !== 'undefined') await setSetting('downtime_deadline', downtime_deadline || '');
     if (typeof downtime_opening !== 'undefined') await setSetting('downtime_opening', downtime_opening || '');
     if (typeof project_deadline !== 'undefined') await setSetting('project_deadline', project_deadline || '');
     if (typeof downtime_active_phase !== 'undefined') await setSetting('downtime_active_phase', downtime_active_phase || 'standard'); // <-- NEW
+    if (typeof downtime_mass_release_mode !== 'undefined') await setSetting('downtime_mass_release_mode', downtime_mass_release_mode ? 'true' : 'false');
+    if (typeof downtime_mass_release_date !== 'undefined') {
+      await setSetting('downtime_mass_release_date', downtime_mass_release_date || '');
+      await setSetting('downtime_mass_release_notified', 'false');
+    }
 
     const deadline = await getSetting('downtime_deadline', null);
     const opening = await getSetting('downtime_opening', null);
     const projDeadline = await getSetting('project_deadline', null);
     const phase = await getSetting('downtime_active_phase', 'standard'); // <-- NEW
+    const massReleaseMode = await getSetting('downtime_mass_release_mode', 'false');
+    const massReleaseDate = await getSetting('downtime_mass_release_date', null);
 
     reply.send({
       ok: true,
       downtime_deadline: deadline || null,
       downtime_opening: opening || null,
       project_deadline: projDeadline || null,
-      downtime_active_phase: phase // <-- NEW
+      downtime_active_phase: phase, // <-- NEW
+      downtime_mass_release_mode: massReleaseMode,
+      downtime_mass_release_date: massReleaseDate || null
     });
   } catch (e) {
     log.err('Update downtime config failed', { message: e.message });
