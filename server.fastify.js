@@ -2032,14 +2032,30 @@ fastify.get('/api/comms/status', { preHandler: [authRequired] }, async (req, rep
       try {
         const schedule = JSON.parse(scheduleStr);
         const today = new Date();
-        const y = today.getFullYear();
-        const m = String(today.getMonth() + 1).padStart(2, '0');
-        const d = String(today.getDate()).padStart(2, '0');
-        const localDate = `${y}-${m}-${d}`;
+        const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+        
+        const toDateStr = (d) => {
+          const y = d.getFullYear();
+          const m = String(d.getMonth() + 1).padStart(2, '0');
+          const dd = String(d.getDate()).padStart(2, '0');
+          return `${y}-${m}-${dd}`;
+        };
+        
+        const todayStr = toDateStr(today);
+        const yesterdayStr = toDateStr(yesterday);
+        
+        let activeState = schedule[todayStr];
+        const currentHour = today.getHours();
+        
+        if (schedule[yesterdayStr] === '17:00' && currentHour < 17) {
+            activeState = true; 
+        } else if (schedule[todayStr] === '17:00') {
+            activeState = currentHour >= 17 ? true : false;
+        }
 
-        if (schedule[localDate] === false) {
+        if (activeState === false) {
           isCommsEnabled = false;
-        } else if (schedule[localDate] === true) {
+        } else if (activeState === true) {
           isCommsEnabled = true;
         }
       } catch (err) { }
