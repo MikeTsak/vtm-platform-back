@@ -4050,6 +4050,12 @@ fastify.get('/api/admin/discord/config', { preHandler: [authRequired, requireAdm
     const notify_prems = await getSetting('discord_notify_prems', 'true') === 'true';
     const ai_enabled = await getSetting('giannakis_ai_enabled', 'true') === 'true';
 
+    clearSettingCache('discord_bot_last_heartbeat');
+    clearSettingCache('discord_bot_name');
+    const lastHeartbeat = await getSetting('discord_bot_last_heartbeat', '0');
+    const isOnline = (Date.now() - Number(lastHeartbeat)) < 60000;
+    const botName = await getSetting('discord_bot_name', 'N/A');
+
     reply.send({
       discord_channel_id: channelId,
       discord_schedule_time: scheduleTime,
@@ -4058,8 +4064,8 @@ fastify.get('/api/admin/discord/config', { preHandler: [authRequired, requireAdm
       notify_news,
       notify_prems,
       ai_enabled,
-      bot_status: discordClient?.isReady() ? 'Online' : 'Offline',
-      bot_name: discordClient?.user?.tag || 'N/A'
+      bot_status: isOnline ? 'Online' : 'Offline',
+      bot_name: botName
     });
   } catch (e) {
     log.err('Get discord config failed', { message: e.message });
@@ -5997,9 +6003,12 @@ fastify.get('/api/news/recent', { preHandler: [authRequired] }, async (req, repl
 // POST /api/news/upload (Admin/Court) - Upload media
 fastify.post('/api/news/upload', { preHandler: [authRequired] }, async (req, reply) => {
   try {
-    // Check permissions: Admin or Court
+    // Check permissions: Admin or Court or has any news permission
     if (req.user.role !== 'admin' && req.user.role !== 'courtuser') {
-      return reply.status(403).send({ error: 'Forbidden' });
+      const [perms] = await pool.query('SELECT id FROM user_news_permissions WHERE user_id=? LIMIT 1', [req.user.id]);
+      if (perms.length === 0) {
+        return reply.status(403).send({ error: 'Forbidden' });
+      }
     }
 
     const fileData = await req.file();
@@ -6079,6 +6088,66 @@ fastify.get('/api/news/media/:id', async (req, reply) => {
   }
 });
 
+// --- NEWS PERMISSIONS ---
+
+// User fetching their allowed themes
+fastify.get('/api/news/my-themes', { preHandler: [authRequired] }, async (req, reply) => {
+  try {
+    if (req.user.role === 'admin') {
+      return reply.send({ all: true });
+    }
+    const [rows] = await pool.query(`
+      SELECT theme 
+      FROM user_news_permissions 
+      WHERE user_id = ?
+    `, [req.user.id]);
+    return reply.send(rows.map(r => r.theme));
+  } catch (e) {
+    log.err('Error fetching user themes', e);
+    return reply.status(500).send({ error: 'Server error' });
+  }
+});
+
+// Admin: Get permissions
+fastify.get('/api/admin/news-permissions', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT p.id, p.user_id, p.theme, u.display_name as username
+      FROM user_news_permissions p
+      JOIN users u ON p.user_id = u.id
+      ORDER BY p.created_at DESC
+    `);
+    return reply.send(rows);
+  } catch (e) {
+    return reply.status(500).send({ error: 'Server error' });
+  }
+});
+
+// Admin: Grant permission
+fastify.post('/api/admin/news-permissions', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  try {
+    const { user_id, theme } = req.body;
+    await pool.query(
+      'INSERT IGNORE INTO user_news_permissions (user_id, theme) VALUES (?, ?)',
+      [user_id, theme]
+    );
+    return reply.send({ success: true });
+  } catch (e) {
+    return reply.status(500).send({ error: 'Server error' });
+  }
+});
+
+// Admin: Revoke permission
+fastify.delete('/api/admin/news-permissions/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  try {
+    await pool.query('DELETE FROM user_news_permissions WHERE id=?', [req.params.id]);
+    return reply.send({ success: true });
+  } catch (e) {
+    return reply.status(500).send({ error: 'Server error' });
+  }
+});
+
+
 // POST /api/news - Create Entry
 fastify.post('/api/news', { preHandler: [authRequired] }, async (req, reply) => {
   try {
@@ -6087,17 +6156,21 @@ fastify.post('/api/news', { preHandler: [authRequired] }, async (req, reply) => 
     // --- PERMISSION CHECK ---
     if (type === 'news') {
       if (req.user.role !== 'admin') {
-        return reply.status(403).json({ error: 'Only Admins can post official News' });
+        // Check if user has permission for the requested theme
+        const [perms] = await pool.query('SELECT id FROM user_news_permissions WHERE user_id=? AND theme=?', [req.user.id, theme]);
+        if (perms.length === 0) {
+          return reply.status(403).send({ error: 'You do not have permission to post under this theme' });
+        }
       }
     } else if (type === 'announcement') {
       if (req.user.role !== 'admin' && req.user.role !== 'courtuser') {
-        return reply.status(403).json({ error: 'Only Court/Admin can post Announcements' });
+        return reply.status(403).send({ error: 'Only Court/Admin can post Announcements' });
       }
     } else {
-      return reply.status(400).json({ error: 'Invalid type' });
+      return reply.status(400).send({ error: 'Invalid type' });
     }
 
-    if (!title || !body) return reply.status(400).json({ error: 'Title and Body are required' });
+    if (!title || !body) return reply.status(400).send({ error: 'Title and Body are required' });
 
     const [insertResult] = await pool.query(
       `INSERT INTO news_entries 

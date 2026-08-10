@@ -6975,6 +6975,67 @@ app.get('/api/news/media/:id', async (req, res) => {
     res.status(404).end();
   }
 });
+// --- NEWS TEMPLATES & PERMISSIONS ---
+
+// User fetching their allowed themes
+app.get('/api/news/my-themes', authRequired, async (req, res) => {
+  try {
+    if (req.user.role === 'admin') {
+      return res.json({ all: true });
+    }
+    const [rows] = await pool.query(`
+      SELECT theme 
+      FROM user_news_permissions 
+      WHERE user_id = ?
+    `, [req.user.id]);
+    res.json(rows.map(r => r.theme));
+  } catch (e) {
+    log.err('Error fetching user themes', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Admin: Get permissions
+app.get('/api/admin/news-permissions', authRequired, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  try {
+    const [rows] = await pool.query(`
+      SELECT p.id, p.user_id, p.theme, u.username
+      FROM user_news_permissions p
+      JOIN users u ON p.user_id = u.id
+      ORDER BY p.created_at DESC
+    `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Admin: Grant permission
+app.post('/api/admin/news-permissions', authRequired, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  try {
+    const { user_id, theme } = req.body;
+    const [result] = await pool.query(
+      'INSERT IGNORE INTO user_news_permissions (user_id, theme) VALUES (?, ?)',
+      [user_id, theme]
+    );
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Admin: Revoke permission
+app.delete('/api/admin/news-permissions/:id', authRequired, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  try {
+    await pool.query('DELETE FROM user_news_permissions WHERE id=?', [req.params.id]);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 
 // POST /api/news - Create Entry
 app.post('/api/news', authRequired, async (req, res) => {
@@ -6984,7 +7045,11 @@ app.post('/api/news', authRequired, async (req, res) => {
     // --- PERMISSION CHECK ---
     if (type === 'news') {
       if (req.user.role !== 'admin') {
-        return res.status(403).json({ error: 'Only Admins can post official News' });
+        // Check if user has permission for the requested theme
+        const [perms] = await pool.query('SELECT id FROM user_news_permissions WHERE user_id=? AND theme=?', [req.user.id, theme]);
+        if (perms.length === 0) {
+          return res.status(403).json({ error: 'You do not have permission to post under this theme' });
+        }
       }
     } else if (type === 'announcement') {
       if (req.user.role !== 'admin' && req.user.role !== 'courtuser') {

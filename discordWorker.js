@@ -2,7 +2,7 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require('discord.js');
 const { log } = require('./logger');
 const pool = require('./db');
-const { getSetting } = require('./utils/settings');
+const { getSetting, setSetting } = require('./utils/settings');
 // AI disabled for memory optimization
 const axios = require('axios');
 const sharp = require('sharp');
@@ -42,6 +42,12 @@ if (process.env.DISCORD_BOT_TOKEN) {
   discordClient.once('ready', async () => {
     discordLoginError = null;
     log.start(`Discord Bot logged in as ${discordClient.user.tag}`);
+
+    // Heartbeat for the admin panel
+    setInterval(async () => {
+      await setSetting('discord_bot_last_heartbeat', Date.now().toString());
+      await setSetting('discord_bot_name', discordClient.user.tag);
+    }, 15000);
 
     // --- Send "System Online" Message ---
     try {

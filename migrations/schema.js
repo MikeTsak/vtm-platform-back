@@ -1152,14 +1152,14 @@ async function _ensureDiceTable() {
   }
 }
 
-async function _ensureNewsTables() {
-  if (newsTableCreated) return;
+async function _ensurePremonitionsTables() {
+  if (premonitionsTableCreated) return;
   try {
     // Main entries table
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS news_entries (
+      CREATE TABLE IF NOT EXISTS premonitions (
         id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-        author_id INT NOT NULL,
+        sender_id INT NOT NULL,
         content_type ENUM('text','image','video') NOT NULL,
         content_text TEXT,
         content_url VARCHAR(2048),
@@ -1389,6 +1389,17 @@ async function _ensureNewsTables() {
         body TEXT NOT NULL,
         media_url VARCHAR(2048),
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // User permissions for news themes
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS user_news_permissions (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        theme VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_user_theme (user_id, theme)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
