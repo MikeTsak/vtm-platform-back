@@ -14,9 +14,11 @@ const { log } = require('../logger');
 async function broadcastNtfyAlert(message, options = {}) {
   try {
     // 1. Get all admins who have an ntfy_topic
-    const [admins] = await pool.query(
-      "SELECT ntfy_topic FROM users WHERE role = 'admin' AND ntfy_topic IS NOT NULL AND ntfy_topic != ''"
-    );
+    let query = "SELECT ntfy_topic FROM users WHERE role = 'admin' AND ntfy_topic IS NOT NULL AND ntfy_topic != ''";
+    if (options.requiresSubscription === 'errors') {
+      query += " AND ntfy_subscribe_errors = 1";
+    }
+    const [admins] = await pool.query(query);
 
     if (admins.length === 0) return;
 

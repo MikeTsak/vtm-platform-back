@@ -286,7 +286,7 @@ async function reportErrorToDiscord(source, error) {
   const errString = (error.stack || error.message || String(error)).slice(0, 1000);
 
   // Also send to Ntfy (independent of environment/Discord connection)
-  await broadcastNtfyAlert(errString, { title: `🚨 Error: ${source}`, tags: ['rotating_light', 'error'], priority: 'high' }).catch(() => { });
+  await broadcastNtfyAlert(errString, { title: `🚨 Error: ${source}`, tags: ['rotating_light', 'error'], priority: 'high', requiresSubscription: 'errors' }).catch(() => { });
 
   // 1. Check if bot is connected
   if (!discordClient?.isReady()) return;
@@ -1152,11 +1152,11 @@ fastify.post('/api/admin/system/banner', { preHandler: [authRequired, requireAdm
 // Admin: Get current Ntfy Topic
 fastify.get('/api/admin/ntfy', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   try {
-    const [rows] = await pool.query('SELECT ntfy_topic, ntfy_subscribed_npcs FROM users WHERE id = ?', [req.user.id]);
-    if (!rows.length) return reply.status(404).json({ error: 'User not found' });
+    const [rows] = await pool.query('SELECT ntfy_topic, ntfy_subscribed_npcs, ntfy_subscribe_errors FROM users WHERE id = ?', [req.user.id]);
+    if (!rows.length) return reply.send({ topic: '', subscribed_npcs: [], subscribe_errors: false });
     let npcPrefs = [];
     try { if (rows[0].ntfy_subscribed_npcs) npcPrefs = typeof rows[0].ntfy_subscribed_npcs === 'string' ? JSON.parse(rows[0].ntfy_subscribed_npcs) : rows[0].ntfy_subscribed_npcs; } catch (e) { }
-    reply.send({ topic: rows[0].ntfy_topic, subscribed_npcs: npcPrefs });
+    reply.send({ topic: rows[0].ntfy_topic, subscribed_npcs: npcPrefs, subscribe_errors: !!rows[0].ntfy_subscribe_errors });
   } catch (e) {
     reply.status(500).json({ error: 'Failed to fetch Ntfy topic' });
   }
@@ -1184,10 +1184,20 @@ fastify.post('/api/admin/ntfy/generate', { preHandler: [authRequired, requireAdm
 // Admin: Save Ntfy NPC Preferences
 fastify.post('/api/admin/ntfy/prefs', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   try {
-    const { npc_ids } = req.body;
+    const { npc_ids, subscribe_errors } = req.body;
     const cleanIds = Array.isArray(npc_ids) ? npc_ids.map(Number).filter(n => !isNaN(n)) : [];
-    await pool.query('UPDATE users SET ntfy_subscribed_npcs = ? WHERE id = ?', [JSON.stringify(cleanIds), req.user.id]);
-    reply.send({ success: true, subscribed_npcs: cleanIds });
+    
+    const [oldRows] = await pool.query('SELECT ntfy_topic, ntfy_subscribe_errors FROM users WHERE id = ?', [req.user.id]);
+    await pool.query('UPDATE users SET ntfy_subscribed_npcs = ?, ntfy_subscribe_errors = ? WHERE id = ?', [JSON.stringify(cleanIds), subscribe_errors ? 1 : 0, req.user.id]);
+    
+    if (subscribe_errors && oldRows.length > 0 && !oldRows[0].ntfy_subscribe_errors && oldRows[0].ntfy_topic) {
+      const axios = require('axios');
+      axios.post(`https://ntfy.sh/${oldRows[0].ntfy_topic}`, `You are now subscribed to receive system errors.`, {
+        headers: { 'Title': '🦇 System Errors Subscribed', 'Tags': 'vampire,white_check_mark' }
+      }).catch(() => { });
+    }
+    
+    reply.send({ success: true, subscribed_npcs: cleanIds, subscribe_errors: !!subscribe_errors });
   } catch (e) {
     reply.status(500).json({ error: 'Failed to save Ntfy preferences' });
   }
@@ -7137,7 +7147,10 @@ fastify.get('/api/admin/domains-advanced', { preHandler: [authRequired, requireA
     const [problems] = await pool.query('SELECT * FROM domain_problems ORDER BY created_at DESC');
     reply.send({ domains, problems });
   } catch (e) {
-    reply.status(500).json({ error: 'Failed to fetch advanced domains' });
+    console.error('Error fetching advanced domains:', e);
+    const { broadcastNtfyAlert } = require('./utils/ntfy');
+    broadcastNtfyAlert(`API Crash in /api/admin/domains-advanced:\n\n${e.message}`, { title: '🚨 API Error', tags: 'rotating_light,x', priority: 'high', requiresSubscription: 'errors' }).catch(()=>{});
+    reply.status(500).send({ error: 'Failed to fetch advanced domains', details: e.message, stack: e.stack });
   }
 });
 

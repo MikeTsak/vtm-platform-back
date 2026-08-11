@@ -10,6 +10,13 @@ async function initDatabase() {
       // Ignore if column already exists
     }
     
+    try {
+      await pool.query('ALTER TABLE users ADD COLUMN ntfy_subscribe_errors BOOLEAN DEFAULT 0');
+      log.info('Added ntfy_subscribe_errors to users');
+    } catch (e) {
+      // Ignore if column already exists
+    }
+
     log.info('Disabling foreign key checks...');
     await pool.query('SET FOREIGN_KEY_CHECKS=0;');
 
@@ -816,6 +823,7 @@ CREATE TABLE IF NOT EXISTS \`users\` (
   \`push_settings\` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL CHECK (json_valid(\`push_settings\`)),
   \`ntfy_topic\` varchar(255) DEFAULT NULL,
   \`ntfy_subscribed_npcs\` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL CHECK (json_valid(\`ntfy_subscribed_npcs\`)),
+  \`ntfy_subscribe_errors\` boolean DEFAULT 0,
   \`ui_sounds_enabled\` tinyint(1) DEFAULT 1,
   \`avatar\` longblob DEFAULT NULL,
   \`avatar_url\` varchar(2048) DEFAULT NULL,
