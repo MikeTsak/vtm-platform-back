@@ -7965,7 +7965,7 @@ app.get('/api/admin/domains-advanced', authRequired, requireAdmin, async (req, r
     res.json({ domains, problems });
   } catch (e) {
     console.error('Error fetching advanced domains:', e);
-    res.status(500).json({ error: 'Failed to fetch advanced domains' });
+    res.status(500).json({ error: 'Failed to fetch advanced domains', details: e.message, stack: e.stack });
   }
 });
 
