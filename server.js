@@ -8021,6 +8021,7 @@ app.get('/api/admin/domains-advanced', authRequired, requireAdmin, async (req, r
     const [problems] = await pool.query('SELECT * FROM domain_problems ORDER BY created_at DESC');
     res.json({ domains, problems });
   } catch (e) {
+    console.error('Error fetching advanced domains:', e);
     res.status(500).json({ error: 'Failed to fetch advanced domains' });
   }
 });

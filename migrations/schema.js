@@ -3,6 +3,13 @@ const { log } = require('../logger');
 
 async function initDatabase() {
   try {
+    try {
+      await pool.query('ALTER TABLE domain_claims ADD COLUMN safety_rating INT DEFAULT 10');
+      log.info('Added safety_rating to domain_claims');
+    } catch (e) {
+      // Ignore if column already exists
+    }
+    
     log.info('Disabling foreign key checks...');
     await pool.query('SET FOREIGN_KEY_CHECKS=0;');
 
