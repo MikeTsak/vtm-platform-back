@@ -6544,10 +6544,10 @@ app.post('/api/live-session/:id/rolls', authRequired, async (req, res) => {
 
     if (outcome.messy_crit && characterId) {
       try {
-        const [doms] = await pool.query('SELECT domain_id FROM domain_members WHERE character_id=?', [characterId]);
+        const [doms] = await pool.query('SELECT division FROM domain_claims WHERE owner_character_id=?', [characterId]);
         if (doms.length > 0) {
-          const domId = doms[0].domain_id;
-          await pool.query('UPDATE domains SET safety_rating = GREATEST(safety_rating - 1, 0) WHERE id=?', [domId]);
+          const domId = doms[0].division;
+          await pool.query('UPDATE domain_claims SET safety_rating = GREATEST(safety_rating - 1, 0) WHERE division=?', [domId]);
           await pool.query('INSERT INTO admin_audit_logs (admin_id, action, details) VALUES (?, ?, ?)', [0, 'SYSTEM_MESSY_CRIT', `Character ${characterId} rolled a Messy Critical. Domain ${domId} safety reduced.`]);
         }
       } catch (e) { log.err('Messy crit safety reduction failed', { error: e.message }); }

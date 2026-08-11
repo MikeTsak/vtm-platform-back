@@ -6536,10 +6536,10 @@ app.post('/api/live-session/:id/rolls', authRequired, async (req, res) => {
 
     if (outcome.messy_crit && characterId) {
       try {
-        const [doms] = await pool.query('SELECT domain_id FROM domain_members WHERE character_id=?', [characterId]);
+        const [doms] = await pool.query('SELECT division FROM domain_claims WHERE owner_character_id=?', [characterId]);
         if (doms.length > 0) {
-          const domId = doms[0].domain_id;
-          await pool.query('UPDATE domains SET safety_rating = GREATEST(safety_rating - 1, 0) WHERE id=?', [domId]);
+          const domId = doms[0].division;
+          await pool.query('UPDATE domain_claims SET safety_rating = GREATEST(safety_rating - 1, 0) WHERE division=?', [domId]);
           await pool.query('INSERT INTO admin_audit_logs (admin_id, action, details) VALUES (?, ?, ?)', [0, 'SYSTEM_MESSY_CRIT', `Character ${characterId} rolled a Messy Critical. Domain ${domId} safety reduced.`]);
         }
       } catch (e) { log.err('Messy crit safety reduction failed', { error: e.message }); }
@@ -8027,7 +8027,7 @@ app.get('/api/admin/domains-advanced', authRequired, requireAdmin, async (req, r
 
 app.post('/api/admin/domains/draw-problems', authRequired, requireAdmin, async (req, res) => {
   try {
-    const [domains] = await pool.query('SELECT id FROM domains');
+    const [domains] = await pool.query('SELECT division as id FROM domain_claims');
     if (domains.length === 0) return res.status(400).json({ error: 'No domains exist' });
 
     const shuffled = domains.sort(() => 0.5 - Math.random());
@@ -8037,7 +8037,7 @@ app.post('/api/admin/domains/draw-problems', authRequired, requireAdmin, async (
     for (const dom of selected) {
       const prob = problemList[Math.floor(Math.random() * problemList.length)];
       await pool.query('INSERT INTO domain_problems (domain_id, problem_text) VALUES (?, ?)', [dom.id, prob]);
-      await pool.query('UPDATE domains SET safety_rating = GREATEST(safety_rating - 2, 0) WHERE id=?', [dom.id]);
+      await pool.query('UPDATE domain_claims SET safety_rating = GREATEST(safety_rating - 2, 0) WHERE division=?', [dom.id]);
     }
 
     await pool.query('INSERT INTO admin_audit_logs (admin_id, action, details) VALUES (?, ?, ?)', [req.user.id, 'DRAW_DOMAIN_PROBLEMS', `Drew monthly problems for ${selected.length} domains.`]);
@@ -8051,7 +8051,7 @@ app.post('/api/admin/domains/custom-problem', authRequired, requireAdmin, async 
   try {
     const { domain_id, problem_text } = req.body;
     await pool.query('INSERT INTO domain_problems (domain_id, problem_text, is_custom) VALUES (?, ?, 1)', [domain_id, problem_text]);
-    await pool.query('UPDATE domains SET safety_rating = GREATEST(safety_rating - 2, 0) WHERE id=?', [domain_id]);
+    await pool.query('UPDATE domain_claims SET safety_rating = GREATEST(safety_rating - 2, 0) WHERE division=?', [domain_id]);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: 'Failed to add custom problem' });
