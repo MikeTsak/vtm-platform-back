@@ -19,27 +19,16 @@ module.exports = async function (fastify, opts) {
     schema: {
       body: {
         type: 'object',
-        required: ['email', 'display_name', 'password', 'recaptchaToken'],
+        required: ['email', 'display_name', 'password'],
         properties: {
           email: { type: 'string', format: 'email' },
           display_name: { type: 'string', minLength: 2, maxLength: 190 },
-          password: { type: 'string', minLength: 8 },
-          recaptchaToken: { type: 'string' }
+          password: { type: 'string', minLength: 8 }
         }
       }
     }
   }, async (req, reply) => {
-    const { email, display_name, password, recaptchaToken } = req.body;
-
-    // Verify reCAPTCHA
-    const secretKey = process.env.RECAPTCHA_SITE_SECRET;
-    if (secretKey) {
-      const verifyRes = await axios.post(`https://www.google.com/recaptcha/api/siteverify?secret=${secretKey}&response=${recaptchaToken}`);
-      if (!verifyRes.data.success) {
-        log.warn('Register invalid captcha', { email });
-        return reply.status(400).send({ error: 'Captcha validation failed. Are you a bot?' });
-      }
-    }
+    const { email, display_name, password } = req.body;
 
     const [exists] = await fastify.db.query('SELECT id FROM users WHERE email=?', [email]);
     if (exists.length) {
