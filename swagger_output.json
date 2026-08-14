@@ -108,9 +108,6 @@
           "200": {
             "description": "OK"
           },
-          "404": {
-            "description": "Not Found"
-          },
           "500": {
             "description": "Internal Server Error"
           }
@@ -148,6 +145,9 @@
                 "type": "object",
                 "properties": {
                   "npc_ids": {
+                    "example": "any"
+                  },
+                  "subscribe_errors": {
                     "example": "any"
                   }
                 }
@@ -5506,9 +5506,6 @@
           "200": {
             "description": "OK"
           },
-          "400": {
-            "description": "Bad Request"
-          },
           "409": {
             "description": "Conflict"
           }
@@ -5526,9 +5523,6 @@
                     "example": "any"
                   },
                   "password": {
-                    "example": "any"
-                  },
-                  "recaptchaToken": {
                     "example": "any"
                   }
                 }
