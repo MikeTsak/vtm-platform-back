@@ -1,3 +1,13 @@
+const { getSetting } = require('../utils/settings');
+const { DEFAULT_DISABLED_CLANS } = require('../utils/clans');
+
+async function isClanDisabled(clan) {
+  const raw = await getSetting('disabled_clans', JSON.stringify(DEFAULT_DISABLED_CLANS));
+  let disabledClans;
+  try { disabledClans = JSON.parse(raw); } catch { disabledClans = DEFAULT_DISABLED_CLANS; }
+  return disabledClans.includes(clan);
+}
+
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, moderateLimiter, requireAdmin, validateRetainerSheet, getMimeType, sharp, imageClient, broadcastNtfyAlert } = opts;
   /* -------------------- Characters -------------------- */
@@ -124,6 +134,11 @@ module.exports = async function (fastify, opts) {
     if (!name || !clan) {
       log.warn('Create character missing fields', { user_id: req.user.id });
       return reply.status(400).json({ error: 'Name and clan are required' });
+    }
+
+    if (await isClanDisabled(clan)) {
+      log.warn('Create character disabled clan', { user_id: req.user.id, clan });
+      return reply.status(400).json({ error: `${clan} is not currently available for character creation` });
     }
 
     try {
@@ -764,6 +779,11 @@ module.exports = async function (fastify, opts) {
     if (!name || !clan) {
       log.warn('Rebuild character missing fields', { user_id: req.user.id });
       return reply.status(400).json({ error: 'Name and clan are required' });
+    }
+
+    if (await isClanDisabled(clan)) {
+      log.warn('Rebuild character disabled clan', { user_id: req.user.id, clan });
+      return reply.status(400).json({ error: `${clan} is not currently available for character creation` });
     }
 
     try {

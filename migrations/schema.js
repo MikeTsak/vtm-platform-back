@@ -9,7 +9,7 @@ async function initDatabase() {
     } catch (e) {
       // Ignore if column already exists
     }
-    
+
     try {
       await pool.query('ALTER TABLE users ADD COLUMN ntfy_subscribe_errors BOOLEAN DEFAULT 0');
       log.info('Added ntfy_subscribe_errors to users');
