@@ -370,11 +370,10 @@ async function _respectEmailJsRateLimit() {
 cron.schedule('0 12 * * *', async () => {
   try {
     // 1. Retrieve the downtime configuration to check the deadline
-    const [configRows] = await pool.query('SELECT downtime_deadline FROM system_config LIMIT 1');
+    const deadlineStr = await getSetting('downtime_deadline', null);
+    if (!deadlineStr) return;
 
-    if (configRows.length === 0 || !configRows[0].downtime_deadline) return;
-
-    const deadline = new Date(configRows[0].downtime_deadline);
+    const deadline = new Date(deadlineStr);
     const now = new Date();
 
     // Calculate the difference in hours
@@ -386,16 +385,15 @@ cron.schedule('0 12 * * *', async () => {
       log.info('Downtime deadline is in 48h. Checking for missing actions.');
 
       // 2. Identify users with Discord IDs and linked characters who haven't submitted
-      // Note: Adjust the SQL query if your table structure differs.
       const [lazyUsers] = await pool.query(`
-        SELECT discord_id, char_name 
-        FROM users 
-        WHERE discord_id IS NOT NULL 
-          AND character_id IS NOT NULL 
-          AND role = 'user'
-          AND id NOT IN (
-            SELECT user_id 
-            FROM downtimes 
+        SELECT u.discord_id, c.name AS char_name
+        FROM users u
+        JOIN characters c ON c.user_id = u.id
+        WHERE u.discord_id IS NOT NULL
+          AND u.role = 'user'
+          AND c.id NOT IN (
+            SELECT character_id
+            FROM downtimes
             WHERE status != 'rejected' AND created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)
           )
       `);
