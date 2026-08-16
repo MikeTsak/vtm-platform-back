@@ -825,12 +825,12 @@ module.exports = { sendResetEmailWithEmailJS };
 
 /* -------------------- Helpers -------------------- */
 // *** NEW MIDDLEWARE ***
-const requireCourt = (req, res, next) => {
+const requireCourt = (req, reply, next) => {
   if (req.user && (req.user.role === 'admin' || req.user.role === 'courtuser')) {
     return next();
   }
   log.warn('Court access denied', { user_id: req.user?.id, role: req.user?.role });
-  return reply.status(403).json({ error: 'Forbidden: Court access required' });
+  return reply.status(403).send({ error: 'Forbidden: Court access required' });
 };
 
 const issueToken = (user) =>
@@ -5733,7 +5733,7 @@ fastify.patch('/api/live-session/:id/metadata', { preHandler: [authRequired, req
     const internalId = await getSessionInternalId(req.params.id);
     const { metadata } = req.body;
     await pool.query('UPDATE live_sessions SET metadata = ? WHERE id = ?', [JSON.stringify(metadata || {}), internalId]);
-    if (req.fastify.get('io')) {
+    if (req.server.io) {
       req.server.io.to(`session_${req.params.id}`).emit('refresh_session');
     }
     reply.send({ ok: true });
@@ -5749,7 +5749,7 @@ fastify.post('/api/live-session/:id/broadcast', { preHandler: [authRequired, req
   await pool.query('INSERT INTO live_session_broadcasts (session_id, message, target_character_id) VALUES (?, ?, ?)',
     [internalId, req.body.message, req.body.target_character_id || null]);
 
-  if (req.fastify.get('io')) {
+  if (req.server.io) {
     req.server.io.to(`session_${req.params.id}`).emit('refresh_session');
   }
 
@@ -5760,8 +5760,19 @@ fastify.get('/api/live-session/:id/broadcast', { preHandler: [authRequired] }, a
   try {
     const internalId = await getSessionInternalId(req.params.id);
     const [rows] = await pool.query(
-      'SELECT * FROM live_session_broadcasts WHERE session_id=? ORDER BY created_at DESC LIMIT 20',
-      [internalId]
+      `SELECT b.*
+       FROM live_session_broadcasts b
+       LEFT JOIN characters c ON b.target_character_id = c.id
+       LEFT JOIN live_sessions ls ON b.session_id = ls.id
+       WHERE b.session_id=?
+         AND (
+           b.target_character_id IS NULL
+           OR c.user_id = ?
+           OR ls.admin_id = ?
+           OR ? = 'admin'
+         )
+       ORDER BY b.created_at DESC LIMIT 20`,
+      [internalId, req.user.id, req.user.id, req.user.role]
     );
     reply.send({ broadcasts: rows });
   } catch (e) {
@@ -5826,6 +5837,11 @@ fastify.patch('/api/live-session/:id/players/:charId', { preHandler: [authRequir
     }
 
     await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), charId]);
+
+    if (req.server.io) {
+      req.server.io.to(`session_${req.params.id}`).emit('refresh_session');
+    }
+
     reply.send({ ok: true });
   } catch (e) {
     reply.status(500).json({ error: 'Failed to update player' });
@@ -7518,9 +7534,42 @@ const io = new Server(server, {
   cors: { origin: '*' }
 });
 
+// Reject socket connections without a valid session JWT (mirrors authRequired for HTTP routes)
+io.use((socket, next) => {
+  try {
+    const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+    if (!token) return next(new Error('Authentication required'));
+    socket.user = jwt.verify(token, process.env.JWT_SECRET);
+    next();
+  } catch (e) {
+    next(new Error('Authentication failed'));
+  }
+});
+
 io.on('connection', (socket) => {
-  socket.on('join_session', (sessionId) => {
-    socket.join(`session_${sessionId}`);
+  socket.on('join_session', async (sessionId) => {
+    try {
+      if (!sessionId) return;
+
+      // STs (admin/courtuser) may join any session; everyone else must be a registered participant
+      if (socket.user.role === 'admin' || socket.user.role === 'courtuser') {
+        socket.join(`session_${sessionId}`);
+        return;
+      }
+
+      const internalId = await getSessionInternalId(sessionId);
+      if (!internalId) return;
+
+      const [rows] = await pool.query(
+        'SELECT 1 FROM live_session_participants WHERE session_id = ? AND user_id = ? LIMIT 1',
+        [internalId, socket.user.id]
+      );
+      if (rows.length > 0) {
+        socket.join(`session_${sessionId}`);
+      }
+    } catch (e) {
+      log.err('Socket join_session failed', { error: e.message });
+    }
   });
 
   socket.on('chat_message', (payload) => {
