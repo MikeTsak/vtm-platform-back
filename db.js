@@ -21,11 +21,11 @@ const pool = mysql.createPool({
 pool.on('connection', (connection) => {
   // Log connection acquire/release for debugging
   connection.on('acquire', () => {
-    log.db('Connection acquired from pool');
+    log.debug('Connection acquired from pool');
   });
 
   connection.on('release', () => {
-    log.db('Connection released to pool');
+    log.debug('Connection released to pool');
   });
 
   // Check for errors on individual connections
@@ -40,11 +40,11 @@ pool.on('connection', (connection) => {
 
 // Log pool events
 pool.on('acquire', (connection) => {
-  log.db('Pool connection acquired');
+  log.debug('Pool connection acquired');
 });
 
 pool.on('release', (connection) => {
-  log.db('Pool connection released');
+  log.debug('Pool connection released');
 });
 
 module.exports = pool;

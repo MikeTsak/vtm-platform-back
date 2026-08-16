@@ -2789,7 +2789,13 @@ fastify.put('/api/npcs/:id/avatar', { preHandler: [authRequired, requireAdmin] }
       log.warn('CDN upload failed for NPC avatar, using DB buffer fallback', { error: imgErr.message });
     }
 
-    await pool.query('UPDATE npcs SET avatar_url = ?, avatar = ? WHERE id = ?', [avatarUrl, buffer, req.params.id]);
+    // Only keep the binary fallback in the DB when the CDN upload failed —
+    // avoids duplicating every avatar image into MySQL on the common path.
+    if (avatarUrl) {
+      await pool.query('UPDATE npcs SET avatar_url = ?, avatar = NULL WHERE id = ?', [avatarUrl, req.params.id]);
+    } else {
+      await pool.query('UPDATE npcs SET avatar_url = NULL, avatar = ? WHERE id = ?', [buffer, req.params.id]);
+    }
     reply.send({ success: true, message: 'NPC Avatar updated successfully.', url: avatarUrl });
   } catch (e) {
     log.err('NPC Avatar PUT error', { message: e.message });
@@ -2835,7 +2841,13 @@ fastify.put('/api/retainers/:id/avatar', { preHandler: [authRequired] }, async (
       log.warn('CDN upload failed for retainer, using DB buffer fallback', { error: imgErr.message });
     }
 
-    await pool.query('UPDATE retainers SET avatar_url = ?, avatar = ? WHERE id = ?', [avatarUrl, processedBuffer, req.params.id]);
+    // Only keep the binary fallback in the DB when the CDN upload failed —
+    // avoids duplicating every avatar image into MySQL on the common path.
+    if (avatarUrl) {
+      await pool.query('UPDATE retainers SET avatar_url = ?, avatar = NULL WHERE id = ?', [avatarUrl, req.params.id]);
+    } else {
+      await pool.query('UPDATE retainers SET avatar_url = NULL, avatar = ? WHERE id = ?', [processedBuffer, req.params.id]);
+    }
     reply.send({ success: true, url: avatarUrl });
   } catch (e) {
     log.err('Failed to update retainer avatar', { error: e.message });
@@ -3255,7 +3267,10 @@ fastify.put('/api/identities/:id/avatar', { preHandler: [authRequired, requireAd
 
     if (!result.success) throw new Error(result.error);
 
-    await pool.query('UPDATE email_identities SET avatar_url = ?, avatar = ? WHERE id = ?', [result.url, buffer, req.params.id]);
+    // No CDN-failure fallback path exists above (a failed upload throws
+    // before this line), so the CDN URL is always available here — no need
+    // to duplicate the image bytes into MySQL as well.
+    await pool.query('UPDATE email_identities SET avatar_url = ?, avatar = NULL WHERE id = ?', [result.url, req.params.id]);
     log.adm('Identity avatar updated', { identity_id: req.params.id, admin_id: req.user.id });
     reply.send({ ok: true, message: 'Identity avatar updated successfully', url: result.url });
   } catch (err) {
@@ -5296,9 +5311,11 @@ fastify.post('/api/admin/premonitions/upload', { preHandler: [authRequired, requ
       log.warn('CDN upload failed for premonition media, using DB buffer fallback', { error: imgErr.message });
     }
 
+    // Only keep the binary fallback in the DB when the CDN upload failed —
+    // avoids duplicating every media file into MySQL on the common path.
     const [ins] = await pool.query(
       'INSERT INTO premonition_media (filename, mime, size, data_url, data) VALUES (?,?,?,?,?)',
-      [originalname, mimetype, size, resultUrl, buffer]
+      [originalname, mimetype, size, resultUrl, resultUrl ? null : buffer]
     );
     const media_id = ins.insertId;
 
@@ -6071,9 +6088,11 @@ fastify.post('/api/news/upload', { preHandler: [authRequired] }, async (req, rep
       log.warn('CDN upload failed for news media, using DB buffer fallback', { error: imgErr.message });
     }
 
+    // Only keep the binary fallback in the DB when the CDN upload failed —
+    // avoids duplicating every media file into MySQL on the common path.
     const [ins] = await pool.query(
       'INSERT INTO news_media (filename, mime, size, data_url, data) VALUES (?,?,?,?,?)',
-      [originalname, mimetype, size, resultUrl, buffer]
+      [originalname, mimetype, size, resultUrl, resultUrl ? null : buffer]
     );
 
     reply.send({ url: resultUrl || `/api/news/media/${ins.insertId}` });
@@ -7076,7 +7095,13 @@ fastify.put('/api/users/:id/avatar', { preHandler: [authRequired] }, async (req,
       log.warn('CDN upload failed, using DB buffer fallback', { error: imgErr.message });
     }
 
-    await pool.query('UPDATE users SET avatar_url = ?, avatar = ? WHERE id = ?', [avatarUrl, buffer, req.params.id]);
+    // Only keep the binary fallback in the DB when the CDN upload failed —
+    // avoids duplicating every avatar image into MySQL on the common path.
+    if (avatarUrl) {
+      await pool.query('UPDATE users SET avatar_url = ?, avatar = NULL WHERE id = ?', [avatarUrl, req.params.id]);
+    } else {
+      await pool.query('UPDATE users SET avatar_url = NULL, avatar = ? WHERE id = ?', [buffer, req.params.id]);
+    }
     reply.send({ success: true, message: 'Avatar updated successfully.', url: avatarUrl });
   } catch (e) {
     log.err('Avatar PUT error', { message: e.message, stack: e.stack });
