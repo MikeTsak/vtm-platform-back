@@ -6379,6 +6379,37 @@ fastify.get('/api/news/public/:id', async (req, reply) => {
   }
 });
 
+// GET /api/sitemap-news.xml - Dynamic sitemap of published public news articles (No auth required)
+const xmlEscape = (str) => String(str).replace(/[&<>'"]/g, (c) => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&apos;', '"': '&quot;',
+}[c]));
+
+fastify.get('/api/sitemap-news.xml', async (req, reply) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT id, created_at
+      FROM news_entries
+      WHERE type = 'news' AND theme != 'RUMOR'
+      ORDER BY created_at DESC
+      LIMIT 5000
+    `);
+
+    const urls = rows.map((row) => {
+      const loc = `https://portal.attlarp.gr/news/${row.id}`;
+      const lastmod = new Date(row.created_at).toISOString().slice(0, 10);
+      return `  <url>\n    <loc>${xmlEscape(loc)}</loc>\n    <lastmod>${lastmod}</lastmod>\n    <changefreq>monthly</changefreq>\n    <priority>0.6</priority>\n  </url>`;
+    }).join('\n');
+
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`;
+
+    reply.header('Content-Type', 'application/xml; charset=utf-8');
+    reply.send(xml);
+  } catch (e) {
+    log.err('Failed to generate news sitemap', { message: e.message });
+    reply.status(500).send('Failed to generate sitemap');
+  }
+});
+
 // GET /api/news (Public/Auth) - Fetch all items
 fastify.get('/api/news', { preHandler: [authRequired] }, async (req, reply) => {
   try {
