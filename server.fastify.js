@@ -6651,21 +6651,31 @@ fastify.post('/api/news', { preHandler: [authRequired] }, async (req, reply) => 
         const channelId = await getSetting('discord_channel_id', null);
         if (channelId) {
           const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
-          const articleLink = `${appBase}/news/${insertResult.insertId}`;
+          const isAnnouncement = type === 'announcement';
+          const articleLink = isAnnouncement
+            ? `${appBase}/court/announcements`
+            : `${appBase}/news/${insertResult.insertId}`;
 
-          const prefix = req.body.discord_prefix || `🔥 **Hot news from the mortal world!** 🔥`;
+          const defaultPrefix = isAnnouncement
+            ? `📜 **New Court Announcement!** 📜`
+            : `🔥 **Hot news from the mortal world!** 🔥`;
+
+          const prefix = req.body?.discord_prefix || defaultPrefix;
           let broadcast = `# ${prefix}\n\n**${title}**\n`;
           if (subtitle) broadcast += `*${subtitle}*\n`;
 
-          const outletNames = {
-            'ERT': 'ERT News', 'SKAI': 'SKAI.gr', 'ALPHA': 'Alpha News',
-            'MEGA': 'Mega Gegonota', 'KATHIMERINI': 'Kathimerini',
-            'GOSSIP': 'Gossip-tv', 'OPENTV': 'Open TV'
-          };
-          const sourceName = outletNames[theme] || theme || 'Unknown';
-
-          broadcast += `\n**Source:** ${sourceName}`;
-          broadcast += `\n**Read the full article:**\n${articleLink}`;
+          if (!isAnnouncement) {
+            const outletNames = {
+              'ERT': 'ERT News', 'SKAI': 'SKAI.gr', 'ALPHA': 'Alpha News',
+              'MEGA': 'Mega Gegonota', 'KATHIMERINI': 'Kathimerini',
+              'GOSSIP': 'Gossip-tv', 'OPENTV': 'Open TV'
+            };
+            const sourceName = outletNames[theme] || theme || 'Unknown';
+            broadcast += `\n**Source:** ${sourceName}`;
+            broadcast += `\n**Read the full article:**\n${articleLink}`;
+          } else {
+            broadcast += `\n**Read the full announcement here:**\n${articleLink}`;
+          }
 
           await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, {
             content: broadcast
@@ -6687,6 +6697,71 @@ fastify.post('/api/news', { preHandler: [authRequired] }, async (req, reply) => 
   } catch (e) {
     log.err('Create news failed', { message: e.message });
     reply.status(500).json({ error: 'Failed to post' });
+  }
+});
+
+// POST /api/news/:id/broadcast (Admin Only)
+fastify.post('/api/news/:id/broadcast', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  try {
+    const [rows] = await pool.query('SELECT * FROM news_entries WHERE id = ?', [req.params.id]);
+    if (rows.length === 0) return reply.status(404).send({ error: 'Entry not found' });
+    
+    const entry = rows[0];
+    const { type, title, subtitle, theme } = entry;
+
+    const discordEnabled = await getSetting('discord_enabled', 'true') === 'true';
+    const tokenPresent = !!process.env.DISCORD_BOT_TOKEN;
+
+    if (!discordEnabled || !tokenPresent) {
+      return reply.status(400).send({ error: 'Discord broadcasting is disabled or bot token is missing.' });
+    }
+
+    const channelId = await getSetting('discord_channel_id', null);
+    if (!channelId) {
+      return reply.status(400).send({ error: 'Discord channel not configured.' });
+    }
+
+    const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
+    const isAnnouncement = type === 'announcement';
+    const articleLink = isAnnouncement
+      ? `${appBase}/court/announcements`
+      : `${appBase}/news/${entry.id}`;
+
+    const defaultPrefix = isAnnouncement
+      ? `📜 **New Court Announcement!** 📜`
+      : `🔥 **Hot news from the mortal world!** 🔥`;
+
+    const prefix = req.body?.discord_prefix || defaultPrefix;
+    let broadcast = `# ${prefix}\n\n**${title}**\n`;
+    if (subtitle) broadcast += `*${subtitle}*\n`;
+
+    if (!isAnnouncement) {
+      const outletNames = {
+        'ERT': 'ERT News', 'SKAI': 'SKAI.gr', 'ALPHA': 'Alpha News',
+        'MEGA': 'Mega Gegonota', 'KATHIMERINI': 'Kathimerini',
+        'GOSSIP': 'Gossip-tv', 'OPENTV': 'Open TV'
+      };
+      const sourceName = outletNames[theme] || theme || 'Unknown';
+      broadcast += `\n**Source:** ${sourceName}`;
+      broadcast += `\n**Read the full article:**\n${articleLink}`;
+    } else {
+      broadcast += `\n**Read the full announcement here:**\n${articleLink}`;
+    }
+
+    await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+      content: broadcast
+    }, {
+      headers: {
+        'Authorization': `Bot ${process.env.DISCORD_BOT_TOKEN}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    log.ok('News/Announcement rebroadcast triggered', { user_id: req.user.id, entry_id: req.params.id });
+    reply.send({ success: true });
+  } catch (e) {
+    log.err('Rebroadcast failed', { error: e.response?.data || e.message });
+    reply.status(500).send({ error: 'Failed to rebroadcast' });
   }
 });
 
@@ -6800,6 +6875,56 @@ fastify.post('/api/rumors', { preHandler: [authRequired] }, async (req, reply) =
   } catch (e) {
     log.err('Create rumor failed', { message: e.message });
     reply.status(500).json({ error: 'Failed to post' });
+  }
+});
+
+// POST /api/rumors/:id/broadcast (Admin Only)
+fastify.post('/api/rumors/:id/broadcast', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  try {
+    const [rows] = await pool.query('SELECT * FROM rumors WHERE id = ?', [req.params.id]);
+    if (rows.length === 0) return reply.status(404).send({ error: 'Rumor not found' });
+    
+    const rumor = rows[0];
+    const { title, body } = rumor;
+
+    const discordEnabled = await getSetting('discord_enabled', 'true') === 'true';
+    const tokenPresent = !!process.env.DISCORD_BOT_TOKEN;
+
+    if (!discordEnabled || !tokenPresent) {
+      return reply.status(400).send({ error: 'Discord broadcasting is disabled or bot token is missing.' });
+    }
+
+    const channelId = await getSetting('discord_channel_id', null);
+    if (!channelId) {
+      return reply.status(400).send({ error: 'Discord channel not configured.' });
+    }
+
+    const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
+    const rumorLink = `${appBase}/rumors`;
+
+    const prefix = req.body?.discord_prefix || "🤫 A new whisper echoes in the night...";
+
+    let plainBody = body.replace(/<[^>]*>?/gm, '').trim();
+    if (plainBody.length > 1500) {
+      plainBody = plainBody.substring(0, 1500) + '...';
+    }
+
+    const broadcast = `# ${prefix}\n\n**${title}**\n\n_${plainBody}_\n\n**Investigate the Rumors:**\n${rumorLink}`;
+
+    await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+      content: broadcast
+    }, {
+      headers: {
+        'Authorization': `Bot ${process.env.DISCORD_BOT_TOKEN}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    log.ok('Rumor rebroadcast triggered', { user_id: req.user.id, rumor_id: req.params.id });
+    reply.send({ success: true });
+  } catch (e) {
+    log.err('Rebroadcast failed', { error: e.response?.data || e.message });
+    reply.status(500).send({ error: 'Failed to rebroadcast rumor' });
   }
 });
 
