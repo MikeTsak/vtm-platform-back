@@ -6599,6 +6599,42 @@ fastify.delete('/api/admin/news-permissions/:id', { preHandler: [authRequired, r
 });
 
 
+async function getAuthorSignature(authorId, pool) {
+  try {
+    const [[user]] = await pool.query(`
+      SELECT u.display_name as author_real_name,
+             c.name as char_name, c.camarilla_titles as char_titles
+      FROM users u
+      LEFT JOIN characters c ON c.user_id = u.id
+      WHERE u.id = ?
+    `, [authorId]);
+    
+    if (!user) return '— Issued by Court Authority';
+    
+    let authorName = user.char_name || user.author_real_name || 'Court Authority';
+    let authorRole = 'Court Member';
+    if (user.char_titles) {
+      try {
+        const titles = JSON.parse(user.char_titles);
+        const TITLES = ["Prince", "Seneschal", "Primogen", "Sheriff", "Scourge", "Keeper", "Harpy", "Assistant Harpy", "Hound", "Shadow", "Whip"];
+        if (Array.isArray(titles) && titles.length > 0) {
+          const sorted = [...titles].sort((a, b) => {
+            let aIdx = TITLES.indexOf(a);
+            let bIdx = TITLES.indexOf(b);
+            if(aIdx === -1) aIdx = 99;
+            if(bIdx === -1) bIdx = 99;
+            return aIdx - bIdx;
+          });
+          authorRole = sorted[0];
+        }
+      } catch(e) {}
+    }
+    return `— Issued by ${authorName}, ${authorRole}`;
+  } catch (e) {
+    return '— Issued by Court Authority';
+  }
+}
+
 // POST /api/news - Create Entry
 fastify.post('/api/news', { preHandler: [authRequired] }, async (req, reply) => {
   try {
@@ -6674,7 +6710,9 @@ fastify.post('/api/news', { preHandler: [authRequired] }, async (req, reply) => 
             broadcast += `\n**Source:** ${sourceName}`;
             broadcast += `\n**Read the full article:**\n${articleLink}`;
           } else {
-            broadcast += `\n**Read the full announcement here:**\n${articleLink}`;
+            const sig = await getAuthorSignature(req.user.id, pool);
+            broadcast += `\n*${sig}*`;
+            broadcast += `\n\n**Read the full announcement here:**\n${articleLink}`;
           }
 
           await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, {
@@ -6745,7 +6783,9 @@ fastify.post('/api/news/:id/broadcast', { preHandler: [authRequired, requireAdmi
       broadcast += `\n**Source:** ${sourceName}`;
       broadcast += `\n**Read the full article:**\n${articleLink}`;
     } else {
-      broadcast += `\n**Read the full announcement here:**\n${articleLink}`;
+      const sig = await getAuthorSignature(entry.author_id, pool);
+      broadcast += `\n*${sig}*`;
+      broadcast += `\n\n**Read the full announcement here:**\n${articleLink}`;
     }
 
     await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, {
