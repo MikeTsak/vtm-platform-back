@@ -6366,7 +6366,7 @@ fastify.get('/api/news/public/:id', async (req, reply) => {
       FROM news_entries n
       LEFT JOIN users u ON n.author_id = u.id
       LEFT JOIN characters c ON c.user_id = u.id
-      WHERE n.id = ? AND n.type = 'news' AND n.theme != 'RUMOR'
+      WHERE n.id = ? AND n.type IN ('news', 'announcement') AND n.theme != 'RUMOR'
     `, [req.params.id]);
 
     if (rows.length === 0) {
@@ -6652,8 +6652,8 @@ fastify.post('/api/news', { preHandler: [authRequired] }, async (req, reply) => 
         if (channelId) {
           const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
           const isAnnouncement = type === 'announcement';
-          const articleLink = isAnnouncement
-            ? `${appBase}/court/announcements`
+          const articleLink = isAnnouncement 
+            ? `${appBase}/court/announcements/${insertResult.insertId}`
             : `${appBase}/news/${insertResult.insertId}`;
 
           const defaultPrefix = isAnnouncement
@@ -6724,7 +6724,7 @@ fastify.post('/api/news/:id/broadcast', { preHandler: [authRequired, requireAdmi
     const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
     const isAnnouncement = type === 'announcement';
     const articleLink = isAnnouncement
-      ? `${appBase}/court/announcements`
+      ? `${appBase}/court/announcements/${entry.id}`
       : `${appBase}/news/${entry.id}`;
 
     const defaultPrefix = isAnnouncement
