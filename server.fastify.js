@@ -6346,7 +6346,7 @@ fastify.get('/api/news/public', async (req, reply) => {
       FROM news_entries n
       LEFT JOIN users u ON n.author_id = u.id
       LEFT JOIN characters c ON c.user_id = u.id
-      WHERE n.type = 'news' AND n.theme != 'RUMOR'
+      WHERE n.type = 'news' AND n.theme != 'RUMOR' AND n.is_private = 0
       ORDER BY n.created_at DESC
       LIMIT 100
     `);
@@ -6389,7 +6389,7 @@ fastify.get('/api/sitemap-news.xml', async (req, reply) => {
     const [rows] = await pool.query(`
       SELECT id, created_at
       FROM news_entries
-      WHERE type = 'news' AND theme != 'RUMOR'
+      WHERE type = 'news' AND theme != 'RUMOR' AND is_private = 0
       ORDER BY created_at DESC
       LIMIT 5000
     `);
@@ -6420,6 +6420,7 @@ fastify.get('/api/news', { preHandler: [authRequired] }, async (req, reply) => {
       FROM news_entries n
       LEFT JOIN users u ON n.author_id = u.id
       LEFT JOIN characters c ON c.user_id = u.id
+      WHERE n.is_private = 0
       ORDER BY n.created_at DESC
       LIMIT 100
     `);
@@ -6438,6 +6439,7 @@ fastify.get('/api/news/recent', { preHandler: [authRequired] }, async (req, repl
     const [rows] = await pool.query(`
       SELECT id, type, title, theme, created_at
       FROM news_entries
+      WHERE is_private = 0
       ORDER BY created_at DESC
       LIMIT ?
     `, [limit]);
@@ -6638,7 +6640,7 @@ async function getAuthorSignature(authorId, pool) {
 // POST /api/news - Create Entry
 fastify.post('/api/news', { preHandler: [authRequired] }, async (req, reply) => {
   try {
-    const { type, title, subtitle, body, theme, journalist_name, media_url } = req.body;
+    const { type, title, subtitle, body, theme, journalist_name, media_url, is_private } = req.body;
 
     // --- PERMISSION CHECK ---
     if (type === 'news') {
@@ -6661,8 +6663,8 @@ fastify.post('/api/news', { preHandler: [authRequired] }, async (req, reply) => 
 
     const [insertResult] = await pool.query(
       `INSERT INTO news_entries 
-      (author_id, type, title, subtitle, body, theme, journalist_name, media_url)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      (author_id, type, title, subtitle, body, theme, journalist_name, media_url, is_private)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         req.user.id,
         type,
@@ -6671,7 +6673,8 @@ fastify.post('/api/news', { preHandler: [authRequired] }, async (req, reply) => 
         body, // Stored as HTML
         theme || 'Neutral',
         journalist_name || null,
-        media_url || null
+        media_url || null,
+        is_private ? 1 : 0
       ]
     );
 
@@ -6682,7 +6685,7 @@ fastify.post('/api/news', { preHandler: [authRequired] }, async (req, reply) => 
 
     log.info('Discord News Broadcast Check', { discordEnabled, notifyPrems, tokenPresent });
 
-    if (discordEnabled && notifyPrems && tokenPresent) {
+    if (discordEnabled && notifyPrems && tokenPresent && !is_private) {
       try {
         const channelId = await getSetting('discord_channel_id', null);
         if (channelId) {
@@ -6802,6 +6805,60 @@ fastify.post('/api/news/:id/broadcast', { preHandler: [authRequired, requireAdmi
   } catch (e) {
     log.err('Rebroadcast failed', { error: e.response?.data || e.message });
     reply.status(500).send({ error: 'Failed to rebroadcast' });
+  }
+});
+
+// PATCH /api/news/:id/publish - Publish a private news entry (Admin only)
+fastify.patch('/api/news/:id/publish', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  try {
+    const [rows] = await pool.query('SELECT * FROM news_entries WHERE id = ?', [req.params.id]);
+    if (rows.length === 0) return reply.status(404).send({ error: 'Not found' });
+    
+    const entry = rows[0];
+    if (entry.is_private === 0) {
+      return reply.send({ success: true, message: 'Already published' });
+    }
+
+    await pool.query('UPDATE news_entries SET is_private = 0 WHERE id = ?', [req.params.id]);
+    
+    // We can reuse the same broadcast logic as the POST /api/news/:id/broadcast or just trigger it via fetch.
+    // Or we can just let the admin click the "Broadcast" button from the UI after publishing.
+    // Wait, the user said "i sould be able to push it to public form there to ap;piar in official new s and the discord bot."
+    // Let's trigger the broadcast endpoint internally.
+    try {
+      await axios.post(`http://127.0.0.1:${process.env.PORT || 3001}/api/news/${req.params.id}/broadcast`, {}, {
+        headers: {
+          'Cookie': req.headers.cookie, // Pass the cookie for auth
+        }
+      });
+    } catch (err) {
+      log.err('Failed to auto-broadcast published news', { error: err.message });
+    }
+
+    reply.send({ success: true, message: 'Published successfully' });
+  } catch (e) {
+    log.err('Publish news failed', { message: e.message });
+    reply.status(500).json({ error: 'Failed to publish news' });
+  }
+});
+
+// GET /api/admin/news - Fetch all news including private (Admin only)
+fastify.get('/api/admin/news', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT n.*, u.display_name as author_real_name,
+             c.name as char_name, c.camarilla_titles as char_titles, c.image_url as char_image
+      FROM news_entries n
+      LEFT JOIN users u ON n.author_id = u.id
+      LEFT JOIN characters c ON c.user_id = u.id
+      WHERE n.type = 'news' OR n.type = 'announcement'
+      ORDER BY n.created_at DESC
+      LIMIT 200
+    `);
+    reply.send({ items: rows });
+  } catch (e) {
+    log.err('Fetch admin news failed', { message: e.message });
+    reply.status(500).json({ error: 'Failed to load admin news' });
   }
 });
 

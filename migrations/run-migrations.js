@@ -143,6 +143,14 @@ async function runMigrations() {
     `);
     log.info("Push subscriptions table verified.");
 
+    // 9. News Entries - is_private
+    try {
+      await pool.query(`ALTER TABLE news_entries ADD COLUMN is_private TINYINT(1) DEFAULT 0`);
+      log.info("Added is_private to news_entries");
+    } catch (e) {
+      if (!e.message.includes('Duplicate column')) log.err("Error adding is_private:", { message: e.message });
+    }
+
     log.ok('All migrations completed successfully.');
   } catch (err) {
     log.err('Migration failed:', { error: err.message });
