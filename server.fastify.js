@@ -6490,7 +6490,7 @@ fastify.post('/api/news/upload', { preHandler: [authRequired] }, async (req, rep
     reply.send({ url: resultUrl || `/api/news/media/${ins.insertId}` });
   } catch (e) {
     log.err('News upload failed', { message: e.message });
-    reply.status(500).send({ error: 'Upload failed' });
+    reply.status(500).send({ error: `Upload failed: ${e.message}` });
   }
 });
 
