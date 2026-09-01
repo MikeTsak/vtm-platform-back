@@ -5080,7 +5080,19 @@ fastify.get('/api/push/vapidPublicKey', (req, reply) => {
 fastify.get('/api/push/settings', { preHandler: [authRequired] }, async (req, reply) => {
   try {
     const [rows] = await pool.query('SELECT push_settings FROM users WHERE id=?', [req.user.id]);
-    reply.send(rows[0].push_settings || { chat: false, system: false });
+    let settings = { chat: false, system: false };
+    if (rows[0] && rows[0].push_settings) {
+      try {
+        settings = typeof rows[0].push_settings === 'string' 
+          ? JSON.parse(rows[0].push_settings) 
+          : rows[0].push_settings;
+        // Clean up corrupted numeric keys
+        for (const key of Object.keys(settings)) {
+          if (!isNaN(key)) delete settings[key];
+        }
+      } catch (e) {}
+    }
+    reply.send(settings);
   } catch (e) {
     reply.status(500).json({ error: 'Failed to fetch settings' });
   }
