@@ -4902,6 +4902,95 @@ fastify.delete('/api/domain-claims/codex/:id', { preHandler: [authRequired] }, a
   }
 });
 
+// ── Domains-map restricted overlays: per-user access ──────────────────────
+// Free for everyone: the base map + transit. Locked otherwise: 'catacombs',
+// 'necropolis_old', 'necropolis_new'. Admins get all; a Nosferatu character
+// gets both necropoleis automatically; anything else needs an explicit grant.
+const DOMAIN_OVERLAY_KEYS = ['catacombs', 'necropolis_old', 'necropolis_new'];
+
+async function resolveOverlayAccess(userId, role) {
+  if (role === 'admin') return { overlays: [...DOMAIN_OVERLAY_KEYS], admin: true };
+  const set = new Set();
+  const [grants] = await pool.query('SELECT overlay_key FROM domain_overlay_grants WHERE user_id=?', [userId]);
+  for (const g of grants) if (DOMAIN_OVERLAY_KEYS.includes(g.overlay_key)) set.add(g.overlay_key);
+  const [nosf] = await pool.query(
+    "SELECT 1 FROM characters WHERE user_id=? AND clan='Nosferatu' AND COALESCE(is_deceased,0)=0 AND COALESCE(is_left,0)=0 LIMIT 1",
+    [userId],
+  );
+  if (nosf.length) { set.add('necropolis_old'); set.add('necropolis_new'); }
+  return { overlays: [...set], admin: false };
+}
+
+fastify.get('/api/domain-overlays/me', { preHandler: [authRequired] }, async (req, reply) => {
+  try {
+    reply.send(await resolveOverlayAccess(req.user.id, req.user.role));
+  } catch (err) {
+    log.err('GET /api/domain-overlays/me failed', { error: err.message });
+    reply.status(500).send({ error: 'Database error resolving overlay access' });
+  }
+});
+
+fastify.get('/api/admin/domain-overlays/grants', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT u.id, u.email, u.display_name, u.role,
+             (SELECT ch.clan FROM characters ch
+                WHERE ch.user_id = u.id AND COALESCE(ch.is_deceased,0)=0 AND COALESCE(ch.is_left,0)=0
+                ORDER BY ch.id LIMIT 1) AS clan,
+             (SELECT GROUP_CONCAT(g.overlay_key) FROM domain_overlay_grants g WHERE g.user_id = u.id) AS granted
+      FROM users u
+      ORDER BY (u.display_name IS NULL), u.display_name, u.email
+    `);
+    const users = rows.map(r => ({
+      id: r.id,
+      name: r.display_name || r.email,
+      email: r.email,
+      role: r.role,
+      clan: r.clan || null,
+      granted: r.granted ? r.granted.split(',').filter(k => DOMAIN_OVERLAY_KEYS.includes(k)) : [],
+    }));
+    reply.send({ users, keys: DOMAIN_OVERLAY_KEYS });
+  } catch (err) {
+    log.err('GET /api/admin/domain-overlays/grants failed', { error: err.message });
+    reply.status(500).send({ error: 'Database error listing overlay grants' });
+  }
+});
+
+fastify.post('/api/admin/domain-overlays/grants', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  const userId = Number(req.body?.user_id);
+  const overlayKey = String(req.body?.overlay_key || '');
+  if (!Number.isInteger(userId) || !DOMAIN_OVERLAY_KEYS.includes(overlayKey)) {
+    return reply.status(400).send({ error: 'user_id (int) and a valid overlay_key are required' });
+  }
+  try {
+    await pool.query(
+      'INSERT IGNORE INTO domain_overlay_grants (user_id, overlay_key, granted_by) VALUES (?,?,?)',
+      [userId, overlayKey, req.user.id],
+    );
+    log.dom('Domain overlay granted', { user_id: userId, overlay_key: overlayKey, by: req.user.id });
+    reply.send({ ok: true });
+  } catch (err) {
+    log.err('POST /api/admin/domain-overlays/grants failed', { error: err.message });
+    reply.status(500).send({ error: 'Database error granting overlay' });
+  }
+});
+
+fastify.delete('/api/admin/domain-overlays/grants/:userId/:overlayKey', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  const userId = Number(req.params.userId);
+  const overlayKey = String(req.params.overlayKey || '');
+  if (!Number.isInteger(userId) || !DOMAIN_OVERLAY_KEYS.includes(overlayKey)) {
+    return reply.status(400).send({ error: 'bad parameters' });
+  }
+  try {
+    await pool.query('DELETE FROM domain_overlay_grants WHERE user_id=? AND overlay_key=?', [userId, overlayKey]);
+    log.dom('Domain overlay revoked', { user_id: userId, overlay_key: overlayKey, by: req.user.id });
+    reply.send({ ok: true });
+  } catch (err) {
+    log.err('DELETE /api/admin/domain-overlays/grants failed', { error: err.message });
+    reply.status(500).send({ error: 'Database error revoking overlay' });
+  }
+});
+
 const readline = require('readline');
 
 // helper to tail last N lines of a file fairly efficiently (works for large files)
