@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>{{APP_NAME}} Status</title>
-  <style>
+  <style nonce="{{STYLE_NONCE}}">
     body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f1f5f9; padding: 2rem; margin: 0; line-height: 1.5; }
     h1 { color: #38bdf8; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0.2rem; }
     .subtitle { color: #94a3b8; font-size: 0.9rem; margin-bottom: 2rem; }
@@ -22,6 +22,8 @@
     .error-list { color: #fca5a5; margin: 0; padding-left: 1.5rem; }
     a { color: #38bdf8; text-decoration: none; }
     a:hover { text-decoration: underline; }
+    .status-footer { text-align: center; color: #64748b; font-size: 0.85rem; margin-top: 3rem; padding-bottom: 1rem; }
+    .status-footer a { color: #94a3b8; text-decoration: none; border-bottom: 1px dotted #94a3b8; }
   </style>
 </head>
 <body>
@@ -71,8 +73,8 @@
       <div class="row"><div class="k">CORS Policy</div><div class="v">{{CORS_STATUS}}</div></div>
     </div>
   </div>
-  <footer style="text-align: center; color: #64748b; font-size: 0.85rem; margin-top: 3rem; padding-bottom: 1rem;">
-    Made by <a href="https://miketsak.gr" target="_blank" style="color: #94a3b8; text-decoration: none; border-bottom: 1px dotted #94a3b8;">miketsak.gr</a>
+  <footer class="status-footer">
+    Made by <a href="https://miketsak.gr" target="_blank" rel="noopener noreferrer">miketsak.gr</a>
   </footer>
 </body>
 </html>

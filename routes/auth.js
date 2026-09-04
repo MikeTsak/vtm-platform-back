@@ -2,13 +2,15 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
+const { setAuthCookie, clearAuthCookie } = require('../utils/authCookie');
+const { bumpTokenVersion } = require('../utils/tokenVersion');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, maskEmail, authRequired, authLimiter, broadcastNtfyAlert, sendResetEmailWithEmailJS } = opts;
 
   const issueToken = (user) =>
     jwt.sign(
-      { id: user.id, email: user.email, role: user.role, display_name: user.display_name },
+      { id: user.id, email: user.email, role: user.role, display_name: user.display_name, tv: user.token_version || 0 },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     );
@@ -41,8 +43,9 @@ module.exports = async function (fastify, opts) {
     if (typeof broadcastNtfyAlert === 'function') {
       broadcastNtfyAlert(`**${display_name} (${r.insertId})** has just joined the platform.\nEmail: \`${email}\``, { title: 'New Registration', tags: 'bust_in_silhouette', priority: 'default' });
     }
-    const [rows] = await fastify.db.query('SELECT id, email, display_name, role FROM users WHERE id=?', [r.insertId]);
-    reply.send({ token: issueToken(rows[0]) });
+    const [rows] = await fastify.db.query('SELECT id, email, display_name, role, token_version FROM users WHERE id=?', [r.insertId]);
+    setAuthCookie(req, reply, issueToken(rows[0]));
+    reply.send({ ok: true });
   });
 
   // POST /api/auth/login
@@ -89,7 +92,8 @@ module.exports = async function (fastify, opts) {
       log.err('Failed to increment daily_logins', { message: e.message });
     }
 
-    reply.send({ token: issueToken(user) });
+    setAuthCookie(req, reply, issueToken(user));
+    reply.send({ ok: true });
   });
 
   // GET /api/auth/me
@@ -183,6 +187,9 @@ module.exports = async function (fastify, opts) {
     await fastify.db.query('UPDATE users SET password_hash=? WHERE id=?', [hash, row.user_id]);
     await fastify.db.query('UPDATE password_resets SET used_at=NOW() WHERE id=?', [row.id]);
     await fastify.db.query('UPDATE password_resets SET used_at=NOW() WHERE user_id=? AND used_at IS NULL', [row.user_id]);
+    // A password reset invalidates every session that existed before it — if
+    // the password was compromised, this logs out whoever stole it too.
+    await bumpTokenVersion(row.user_id);
     log.auth('Password reset complete', { user_id: row.user_id });
     return reply.send({ ok: true });
   });
@@ -194,5 +201,23 @@ module.exports = async function (fastify, opts) {
 
     await fastify.db.query('UPDATE users SET theme = ? WHERE id = ?', [theme, req.user.id]);
     reply.send({ success: true, theme });
+  });
+
+  // POST /api/auth/logout — clears the session cookie. Deliberately has no
+  // authRequired preHandler: even a stale/expired/already-invalid cookie
+  // still needs to be cleared from the browser, so this must always succeed.
+  fastify.post('/logout', async (req, reply) => {
+    clearAuthCookie(reply);
+    reply.send({ ok: true });
+  });
+
+  // POST /api/auth/logout-all — revokes every token ever issued to this user
+  // (all devices/browsers, including this one). Requires a currently-valid
+  // session since it needs to know whose sessions to revoke.
+  fastify.post('/logout-all', { preHandler: [authRequired] }, async (req, reply) => {
+    await bumpTokenVersion(req.user.id);
+    clearAuthCookie(reply);
+    log.auth('User logged out of all sessions', { user_id: req.user.id });
+    reply.send({ ok: true });
   });
 };

@@ -256,8 +256,9 @@ module.exports = async function (fastify, opts) {
     reply.send({ character: ch });
   });
 
-  // GET a specific character by ID (For STs/Admins or public charview)
-  fastify.get('/api/characters/user/:id', { preHandler: [authRequired] }, async (req, reply) => {
+  // GET a specific character by ID (Admin only — mirrors the PUT below; a
+  // player's own sheet is served by /api/characters/me instead)
+  fastify.get('/api/characters/user/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const [rows] = await pool.query('SELECT * FROM characters WHERE id=?', [req.params.id]);
       const ch = rows[0] || null;
@@ -308,15 +309,21 @@ module.exports = async function (fastify, opts) {
   // INVENTORY ROUTES
   // ==========================================
 
-  // GET: Fetch a character's inventory
+  // GET: Fetch a character's inventory (owner or admin — mirrors POST/PUT/DELETE below)
   fastify.get('/api/characters/:id/inventory', { preHandler: [authRequired] }, async (req, reply) => {
     // Prevent ghost caching of items
     reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, private');
 
     try {
+      const charId = Number(req.params.id);
+      if (req.user.role !== 'admin') {
+        const [charRows] = await pool.query('SELECT id FROM characters WHERE id = ? AND user_id = ?', [charId, req.user.id]);
+        if (!charRows.length) return reply.status(403).json({ error: 'Unauthorized' });
+      }
+
       const [items] = await pool.query(
         'SELECT * FROM inventory_items WHERE character_id = ? ORDER BY item_type, name',
-        [req.params.id]
+        [charId]
       );
       reply.send({ items });
     } catch (e) {
@@ -580,11 +587,16 @@ module.exports = async function (fastify, opts) {
   // DUP: });
 
   // ================== Retainers ==================
+  // GET a character's retainers (owner or admin)
   fastify.get('/api/characters/:id/retainers', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      console.log('GET /api/characters/:id/retainers called with id:', req.params.id);
-      const [rows] = await pool.query('SELECT id, character_id, name, tier, sheet, xp, created_at, is_favorite FROM retainers WHERE character_id=?', [req.params.id]);
-      console.log('Retainers found:', rows.length);
+      const charId = Number(req.params.id);
+      if (req.user.role !== 'admin') {
+        const [charRows] = await pool.query('SELECT id FROM characters WHERE id = ? AND user_id = ?', [charId, req.user.id]);
+        if (!charRows.length) return reply.status(403).json({ error: 'Unauthorized' });
+      }
+
+      const [rows] = await pool.query('SELECT id, character_id, name, tier, sheet, xp, created_at, is_favorite FROM retainers WHERE character_id=?', [charId]);
       const results = [];
       for (const row of rows) {
         if (row.sheet && typeof row.sheet === 'string') {
@@ -603,10 +615,17 @@ module.exports = async function (fastify, opts) {
     }
   });
   
+  // Create a retainer on a character (owner or admin)
   fastify.post('/api/characters/:id/retainers', { preHandler: [authRequired] }, async (req, reply) => {
     try {
+      const charId = Number(req.params.id);
+      if (req.user.role !== 'admin') {
+        const [charRows] = await pool.query('SELECT id FROM characters WHERE id = ? AND user_id = ?', [charId, req.user.id]);
+        if (!charRows.length) return reply.status(403).json({ error: 'Unauthorized' });
+      }
+
       const { name, tier, sheet, xp } = req.body;
-      
+
       const isGhoul = sheet?.isGhoul === true;
       const validationError = validateRetainerSheet(Number(tier || 1), sheet, isGhoul);
       if (validationError) {
@@ -615,9 +634,9 @@ module.exports = async function (fastify, opts) {
 
       const [result] = await pool.query(
         'INSERT INTO retainers (character_id, name, tier, sheet, xp) VALUES (?, ?, ?, ?, ?)',
-        [req.params.id, name, tier || 1, JSON.stringify(sheet || {}), xp || 0]
+        [charId, name, tier || 1, JSON.stringify(sheet || {}), xp || 0]
       );
-      reply.send({ id: result.insertId, character_id: Number(req.params.id), name, tier, sheet, xp });
+      reply.send({ id: result.insertId, character_id: charId, name, tier, sheet, xp });
     } catch (e) {
       log.err('Failed to create retainer', { message: e.message, character_id: req.params.id });
       reply.status(500).json({ error: 'Failed to create retainer' });

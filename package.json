@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "node swagger-autogen.js && nodemon server.fastify.js",
     "start": "node swagger-autogen.js && node server.fastify.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "migrate": "node migrations/run-migrations.js",
     "migrate-avatars": "node migrate-avatars.js",
     "migrate-npc-avatars": "node migrate-npc-avatars.js",
@@ -13,6 +15,7 @@
   },
   "dependencies": {
     "@fastify/compress": "^9.1.0",
+    "@fastify/cookie": "^11.1.2",
     "@fastify/cors": "^11.3.0",
     "@fastify/express": "^4.0.7",
     "@fastify/helmet": "^13.1.0",
@@ -26,6 +29,7 @@
     "cheerio": "^1.2.0",
     "colors": "^1.4.0",
     "compression": "^1.8.1",
+    "cookie": "^0.7.2",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "debug": "~2.6.9",
@@ -44,6 +48,7 @@
     "pino": "^10.3.1",
     "pino-pretty": "^13.1.3",
     "puppeteer": "^25.5.0",
+    "sanitize-html": "^2.17.7",
     "sharp": "^0.34.5",
     "socket.io": "^4.8.3",
     "swagger-autogen": "^2.23.7",
@@ -62,7 +67,8 @@
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-node": "^11.1.0",
     "nodemon": "^3.1.14",
-    "prettier": "^3.9.5"
+    "prettier": "^3.9.5",
+    "vitest": "^5.0.0"
   },
   "keywords": [],
   "description": ""

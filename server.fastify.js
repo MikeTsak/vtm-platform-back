@@ -15,6 +15,10 @@ const crypto = require('crypto');
 const pool = require('./db'); // export pool.promise() from db.js
 const { initDatabase } = require('./migrations/schema');
 const { validateRetainerSheet } = require('./utils/retainerValidation');
+const { sanitizeRichText } = require('./utils/sanitize');
+const { xpCost } = require('./utils/xpCost');
+const { setAuthCookie, clearAuthCookie, COOKIE_NAME } = require('./utils/authCookie');
+const { getTokenVersion, bumpTokenVersion } = require('./utils/tokenVersion');
 const { getSetting, setSetting, clearSettingCache } = require('./utils/settings');
 const { DEFAULT_DISABLED_CLANS, isValidClanName } = require('./utils/clans');
 const { authRequired, requireAdmin } = require('./authMiddleware.fastify');
@@ -39,10 +43,12 @@ const webpush = require('web-push');
 const discordClient = null;
 
 
-// Configure Web Push
-const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BI7rfJ8M56Md66_JfP7gTbPyNEhnhsPzXK63hAD-NSP2eXzgeHmcj412N0urchrrW7mOTwLvyeKUUfJQ0e0fxxA';
-const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'za0fUJF4koF5n25WMZtlrSKtHbKbqVJ77M5ojqKUSls';
-webpush.setVapidDetails('mailto:admin@attlarp.gr', VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+// Configure Web Push — keys come from the environment only (validated at boot
+// by utils/envValidator.js). Never hardcode a VAPID private key in source.
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@attlarp.gr';
+webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 // Voice and AI disabled for memory optimization
 // For meme generation
 const sharp = require('sharp');
@@ -192,10 +198,15 @@ fastify.setErrorHandler(async (error, request, reply) => {
 const multipart = require('@fastify/multipart');
 fastify.register(multipart, { limits: { fileSize: 50 * 1024 * 1024 } }); fastify.after(() => console.log("Finished loading plugin 1"));
 
-// CORS: In production, set CORS_ORIGIN env var to your frontend URL
+// CORS: In production, set CORS_ORIGIN env var to your frontend URL (comma-separated
+// for more than one). Auth now travels as an httpOnly cookie (credentials: true
+// below), so — unlike a Bearer-token API — reflecting *any* calling origin here
+// would let an arbitrary website ride a logged-in visitor's session cookie. Never
+// fall back to "allow all"; fall back to the known app origins instead.
+const DEFAULT_CORS_ORIGINS = ['https://portal.attlarp.gr', 'http://localhost:3002', 'http://127.0.0.1:3002'];
 const corsOrigin = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
-  : true; // Development: allow all origins
+  : DEFAULT_CORS_ORIGINS;
 
 function getMimeType(buffer) {
   if (!buffer || buffer.length < 4) return 'image/webp';
@@ -206,9 +217,28 @@ function getMimeType(buffer) {
 }
 
 const helmet = require('@fastify/helmet');
+// This API only serves two HTML surfaces itself: the "/" status page and Swagger UI
+// (/api-docs, which sets its own CSP for its static assets via `staticCSP` below).
+// The React SPA is a separately-hosted static build (see front/public/.htaccess for
+// its CSP) — this header has no effect on it.
 fastify.register(helmet, {
   crossOriginResourcePolicy: { policy: "cross-origin" },
-  contentSecurityPolicy: false
+  crossOriginEmbedderPolicy: false, // would break Swagger UI's cross-origin assets for no benefit here
+  enableCSPNonces: true, // exposes reply.cspNonce.{script,style} for server-rendered HTML
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"], // nonce auto-appended per request; no inline/eval anywhere
+      styleSrc: ["'self'"],  // nonce auto-appended per request (see views/status.html)
+      imgSrc: ["'self'", 'data:'],
+      fontSrc: ["'self'", 'data:'],
+      connectSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      frameAncestors: ["'self'"],
+      upgradeInsecureRequests: [],
+    },
+  },
 }); fastify.after(() => console.log("Finished loading plugin 2"));
 fastify.register(cors, {
   origin: corsOrigin,
@@ -216,6 +246,9 @@ fastify.register(cors, {
   methods: ['GET', 'PUT', 'POST', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'Pragma', 'Expires', 'Idempotency-Key', 'X-Requested-With', 'Accept']
 }); fastify.after(() => console.log("Finished loading plugin 3"));
+// Session JWT lives in an httpOnly cookie (see utils/authCookie.js) — this
+// decorates req.cookies / reply.setCookie / reply.clearCookie.
+fastify.register(require('@fastify/cookie')); fastify.after(() => console.log("Finished loading plugin cookie"));
 
 fastify.register(require('@fastify/static'), {
   root: path.join(__dirname, 'public'),
@@ -246,6 +279,7 @@ fastify.register(fastifySwaggerUi, {
     docExpansion: 'list',
     deepLinking: true
   },
+  staticCSP: true, // Swagger UI sets its own CSP for its bundled assets, independent of the strict global policy above
   exposeRoute: true
 }); fastify.after(() => console.log("Finished loading plugin 8"));
 
@@ -835,7 +869,7 @@ const requireCourt = (req, reply, next) => {
 
 const issueToken = (user) =>
   jwt.sign(
-    { id: user.id, email: user.email, role: user.role, display_name: user.display_name },
+    { id: user.id, email: user.email, role: user.role, display_name: user.display_name, tv: user.token_version || 0 },
     process.env.JWT_SECRET,
     { expiresIn: '7d' }
   );
@@ -858,28 +892,6 @@ function endOfMonth(d = new Date()) { return new Date(d.getFullYear(), d.getMont
 function feedingFromPredator(pred) {
   const map = { Alleycat: 'Violent Hunt', Sandman: 'Sleeping Prey', Siren: 'Seduction', Osiris: 'Cult Feeding', Farmer: 'Animal/Bagged', Bagger: 'Bagged Blood', 'Scene Queen': 'Scene Influence', Consensualist: 'Consent Feeding', Extortionist: 'Blackmail Feeding', 'Blood Leech': 'Vitae Theft' };
   return map[pred] || 'Standard Feeding';
-}
-function xpCost({ type, newLevel, ritualLevel, formulaLevel, dots = 1, disciplineKind }) {
-  if (type === 'attribute') return Number(newLevel) * 5;
-  if (type === 'skill') return Number(newLevel) * 3;
-  if (type === 'specialty') return 3;
-  if (type === 'discipline') {
-    if (disciplineKind === 'clan') return Number(newLevel) * 5;
-    if (disciplineKind === 'caitiff') return Number(newLevel) * 6;
-    return Number(newLevel) * 7;
-  }
-  if (type === 'ritual' || type === 'ceremony') {
-    const lvl = Number(ritualLevel ?? newLevel ?? 1);
-    return lvl * 3;
-  }
-  if (type === 'thin_blood_formula') {
-    const lvl = Number(formulaLevel ?? newLevel ?? 1);
-    return lvl * 3;
-  }
-  if (type === 'advantage') return 3 * Number(dots || 1);
-  if (type === 'flaw') return 0; // <--- ΑΥΤΗ Η ΓΡΑΜΜΗ ΠΡΟΣΤΕΘΗΚΕ!
-  if (type === 'blood_potency') return Number(newLevel) * 10;
-  throw new Error('Unknown XP type: ' + type);
 }
 // --- Simple status/health ---
 
@@ -1134,7 +1146,7 @@ fastify.post('/api/admin/system/banner', { preHandler: [authRequired, requireAdm
     const { banner_enabled, banner_message, banner_countdown } = req.body;
 
     await setSetting('banner_enabled', String(banner_enabled));
-    await setSetting('banner_message', banner_message || '');
+    await setSetting('banner_message', sanitizeRichText(banner_message || ''));
     await setSetting('banner_countdown', banner_countdown || '');
 
     log.adm('Global banner updated', { admin_id: req.user.id });
@@ -1484,7 +1496,7 @@ fastify.get('/', async (req, reply) => {
   const ntfyStatus = process.env.NTFY_TOPIC ? `CONFIGURED (${process.env.NTFY_TOPIC})` : 'NOT SET';
   const ntfyClass = process.env.NTFY_TOPIC ? 'ok' : 'bad';
 
-  const corsStatus = process.env.CORS_ORIGIN || 'Allow All (*)';
+  const corsStatus = process.env.CORS_ORIGIN || `${DEFAULT_CORS_ORIGINS.join(', ')} (default)`;
 
   const apiDocsLink = enhancedInfo.app && enhancedInfo.app.version ? `<div class="k">API Docs</div><div class="v"><a href="/api-docs">/api-docs</a></div>` : '';
 
@@ -1519,6 +1531,7 @@ fastify.get('/', async (req, reply) => {
   }
 
   html = html
+    .replace('{{STYLE_NONCE}}', reply.cspNonce?.style || '')
     .replace('{{SYSTEM_CLASS}}', systemClass)
     .replace('{{SYSTEM_STATUS}}', systemStatus)
     .replaceAll('{{APP_NAME}}', 'Erebus API')
@@ -1581,80 +1594,10 @@ fastify.register(require('./routes/users'), {
 
 fastify.register(require('./routes/characters'), { pool, log, authRequired, moderateLimiter, requireAdmin, validateRetainerSheet, getMimeType, sharp, imageClient, broadcastNtfyAlert }); fastify.after(() => console.log("Finished loading plugin 12"));
 fastify.register(require('./routes/wiki'), { pool, log, authRequired, requireAdmin, imageClient }); fastify.after(() => console.log("Finished loading plugin wiki"));
-/* -------------------- XP Spend -------------------- */
-fastify.post('/api/characters/xp/spend', { preHandler: [authRequired] }, async (req, reply) => {
-  const {
-    type, target, currentLevel, newLevel,
-    ritualLevel, formulaLevel, dots,
-    disciplineKind, patchSheet
-  } = req.body;
-
-  const [rows] = await pool.query('SELECT * FROM characters WHERE user_id=?', [req.user.id]);
-  const ch = rows[0];
-  if (!ch) {
-    log.warn('XP spend without character', { user_id: req.user.id });
-    return reply.status(400).json({ error: 'Create a character first' });
-  }
-
-  // Determine cost (special-case free power assignment)
-  let cost = 0;
-  try {
-    if (
-      type === 'discipline' &&
-      (
-        disciplineKind === 'select' ||                           // explicit "assignment only"
-        Number(newLevel) === Number(currentLevel)                // or no level change
-      )
-    ) {
-      cost = 0; // assigning a specific power for an existing dot is free
-    } else {
-      cost = xpCost({ type, newLevel, ritualLevel, formulaLevel, dots, disciplineKind });
-    }
-  } catch (e) {
-    log.warn('XP spend bad type', { type });
-    return reply.status(400).json({ error: e.message });
-  }
-
-  // If this is a paid action, verify balance and deduct XP
-  if (cost > 0) {
-    if ((ch.xp || 0) < cost) {
-      log.warn('XP spend insufficient', { user_id: req.user.id, have: ch.xp, need: cost });
-      return reply.status(400).json({ error: `Not enough XP (need ${cost}, have ${ch.xp})` });
-    }
-    log.xp('XP spend request', { user_id: req.user.id, type, target, currentLevel, newLevel, cost });
-    await pool.query('UPDATE characters SET xp = xp - ? WHERE id=?', [cost, ch.id]);
-  } else {
-    log.xp('Discipline power assignment (free)', { user_id: req.user.id, target, level: newLevel });
-  }
-
-  // Apply optional sheet patch for both paid and free actions
-  if (patchSheet !== undefined) {
-    await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(patchSheet), ch.id]);
-    log.xp('Sheet patched after action', { user_id: req.user.id, character_id: ch.id });
-  }
-
-  // XP log (store 0-cost entries too)
-  try {
-    await pool.query(
-      'INSERT INTO xp_log (character_id, action, target, from_level, to_level, cost, payload) VALUES (?,?,?,?,?,?,?)',
-      [ch.id, type, target || null, currentLevel || null, newLevel || null, cost,
-      JSON.stringify({ disciplineKind, ritualLevel, formulaLevel, dots })]
-    );
-    log.xp('XP logged', { character_id: ch.id, cost });
-  } catch (_) { /* ignore if xp_log missing */ }
-
-  const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [ch.id]);
-  const outCh = out[0];
-  if (outCh && outCh.sheet && typeof outCh.sheet === 'string') { try { outCh.sheet = JSON.parse(outCh.sheet); } catch { } }
-
-  if (cost > 0) {
-    log.ok('XP spend complete', { user_id: req.user.id, remaining_xp: outCh?.xp });
-  } else {
-    log.ok('Power assignment saved (no XP charged)', { user_id: req.user.id });
-  }
-
-  reply.send({ character: outCh, spent: cost });
-});
+/* -------------------- XP Spend (self-serve) -------------------- */
+// Extracted to routes/characterXp.js so it can be mounted in isolation for
+// integration tests — see tests/xpSpend.test.js.
+fastify.register(require('./routes/characterXp'), { pool, log, authRequired }); fastify.after(() => console.log("Finished loading plugin xp"));
 
 fastify.post('/api/admin/characters/:id/xp/spend', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   const {
@@ -2262,30 +2205,10 @@ fastify.post('/api/chat/upload', { preHandler: [authRequired, uploadLimiter] }, 
 
 // Replace the existing GET /api/chat/media/:id route with this:
 
-fastify.get('/api/chat/media/:id', async (req, reply) => {
-  // 1. Manually handle Authentication
-  let token = null;
-
-  // Check Header (Standard API calls)
-  if (req.headers.authorization && req.headers.authorization.split(' ')[0] === 'Bearer') {
-    token = req.headers.authorization.split(' ')[1];
-  }
-  // Check Query Param (<img> tags)
-  else if (req.query.token) {
-    token = req.query.token;
-  }
-
-  if (!token) return reply.status(401).send('Unauthorized');
-
-  try {
-    // Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded;
-  } catch (err) {
-    return reply.status(401).send('Invalid Token');
-  }
-
-  // 2. Fetch and Serve Image
+fastify.get('/api/chat/media/:id', { preHandler: [authRequired] }, async (req, reply) => {
+  // Auth is handled by authRequired (Authorization header or the httpOnly
+  // session cookie — <img> tags send the cookie automatically for same-origin
+  // requests, so there's no need for a token in the URL).
   try {
     const id = Number(req.params.id);
     const [rows] = await pool.query('SELECT mime, size, data FROM chat_media WHERE id=?', [id]);
@@ -4359,7 +4282,7 @@ fastify.patch('/api/admin/users/:id', { preHandler: [authRequired, requireAdmin]
 
     // Return updated row (Include discord_id in select)
     const [[row]] = await pool.query(
-      `SELECT u.id, u.email, u.display_name, u.role, u.discord_id,
+      `SELECT u.id, u.email, u.display_name, u.role, u.discord_id, u.token_version,
               c.id AS character_id, c.name AS char_name, c.clan, c.xp
        FROM users u
        LEFT JOIN characters c ON c.user_id = u.id
@@ -4369,7 +4292,8 @@ fastify.patch('/api/admin/users/:id', { preHandler: [authRequired, requireAdmin]
 
     if (!row) return reply.status(404).json({ error: 'User not found after update' });
 
-    // Refresh token if self-edit
+    // Refresh token if self-edit — the admin's existing cookie still carries
+    // the OLD role/name/email claims, so re-mint it with the new ones.
     const selfEdit = id === req.user.id;
     if (selfEdit && (roleChanged || nameChanged || emailChanged)) {
       const freshToken = issueToken({
@@ -4377,8 +4301,10 @@ fastify.patch('/api/admin/users/:id', { preHandler: [authRequired, requireAdmin]
         email: row.email,
         display_name: row.display_name,
         role: row.role,
+        token_version: row.token_version,
       });
-      return reply.send({ user: row, token: freshToken });
+      setAuthCookie(req, reply, freshToken);
+      return reply.send({ user: row });
     }
 
     log.adm('Admin updated user', { admin_id: req.user.id, user_id: id, fields });
@@ -4394,12 +4320,13 @@ fastify.patch('/api/admin/users/:id', { preHandler: [authRequired, requireAdmin]
 fastify.post('/api/auth/refresh', { preHandler: [authRequired] }, async (req, reply) => {
   try {
     const [[u]] = await pool.query(
-      'SELECT id, email, display_name, role FROM users WHERE id=?',
+      'SELECT id, email, display_name, role, token_version FROM users WHERE id=?',
       [req.user.id]
     );
     if (!u) return reply.status(404).json({ error: 'User not found' });
     const token = issueToken(u);
-    reply.send({ token, user: u });
+    setAuthCookie(req, reply, token);
+    reply.send({ user: u });
   } catch (e) {
     reply.status(500).json({ error: 'Failed to refresh token' });
   }
@@ -5562,6 +5489,33 @@ fastify.get('/api/downtimes/config', { preHandler: [authRequired] }, async (req,
   } catch (e) {
     log.err('Fetch downtime config failed', { message: e.message });
     reply.status(500).json({ error: 'Failed to fetch downtime config' });
+  }
+});
+
+// WRITE (admins): Release downtimes instantly
+fastify.post('/api/admin/downtimes/release-now', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  try {
+    const { setSetting } = require('./utils/settings');
+    const { broadcastNtfyAlert } = require('./utils/ntfy');
+
+    // Turn off mass release mode (so they are visible instantly)
+    await setSetting('downtime_mass_release_mode', 'false');
+
+    // Broadcast the release alert
+    await broadcastNtfyAlert('The countdown is over. Downtime Resolutions have just been released to all players!', {
+      title: '🦇 Downtimes Released',
+      tags: ['loudspeaker', 'vampire'],
+      priority: 'high'
+    });
+
+    // Ensure cron job knows we notified
+    await setSetting('downtime_mass_release_notified', 'true');
+
+    log.adm('Manual Mass Release triggered by admin', { adminId: req.user.id });
+    return reply.send({ success: true, message: 'Downtimes released instantly.' });
+  } catch (e) {
+    log.err('Release now failed', { message: e.message });
+    return reply.status(500).json({ error: 'Failed to release downtimes' });
   }
 });
 
@@ -6795,8 +6749,10 @@ fastify.post('/api/news', { preHandler: [authRequired] }, async (req, reply) => 
 
     if (!title || !body) return reply.status(400).send({ error: 'Title and Body are required' });
 
+    const safeBody = sanitizeRichText(body); // strip active markup before persisting (XSS)
+
     const [insertResult] = await pool.query(
-      `INSERT INTO news_entries 
+      `INSERT INTO news_entries
       (author_id, type, title, subtitle, body, theme, journalist_name, media_url, is_private)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
@@ -6804,7 +6760,7 @@ fastify.post('/api/news', { preHandler: [authRequired] }, async (req, reply) => 
         type,
         title,
         subtitle || null,
-        body, // Stored as HTML
+        safeBody, // Stored as sanitised HTML
         theme || 'Neutral',
         journalist_name || null,
         media_url || null,
@@ -7061,9 +7017,11 @@ fastify.post('/api/rumors', { preHandler: [authRequired] }, async (req, reply) =
 
     if (!title || !body) return reply.status(400).json({ error: 'Title and Body are required' });
 
+    const safeBody = sanitizeRichText(body); // strip active markup before persisting (XSS)
+
     const [insertResult] = await pool.query(
       `INSERT INTO rumors (author_id, title, body, media_url) VALUES (?, ?, ?, ?)`,
-      [req.user.id, title, body, media_url || null]
+      [req.user.id, title, safeBody, media_url || null]
     );
 
     broadcastNtfyAlert(`A new rumor has hit the streets:\n\n> *${title}*`, { title: 'New Rumor', tags: 'shushing_face', priority: 'default' });
@@ -7079,7 +7037,7 @@ fastify.post('/api/rumors', { preHandler: [authRequired] }, async (req, reply) =
 
           const prefix = discord_prefix || "🤫 A new whisper echoes in the night...";
 
-          let plainBody = body.replace(/<[^>]*>?/gm, '').trim();
+          let plainBody = safeBody.replace(/<[^>]*>?/gm, '').trim();
           if (plainBody.length > 1500) {
             plainBody = plainBody.substring(0, 1500) + '...';
           }
@@ -8260,16 +8218,31 @@ const PORT = Number(process.env.PORT) || 3001;
 
 const server = fastify.server;
 const { Server } = require('socket.io');
+const { parse: parseCookieHeader } = require('cookie');
 const io = new Server(server, {
-  cors: { origin: '*' }
+  // Matches the HTTP CORS policy: an explicit origin allowlist + credentials,
+  // never '*' — the handshake now carries the httpOnly session cookie.
+  cors: { origin: corsOrigin, credentials: true }
 });
 
-// Reject socket connections without a valid session JWT (mirrors authRequired for HTTP routes)
-io.use((socket, next) => {
+// Reject socket connections without a valid, non-revoked session (mirrors authRequired for HTTP routes).
+// The client no longer hands us a token explicitly (it's httpOnly, so page JS
+// can't read it) — we read it straight off the handshake's Cookie header,
+// exactly like a normal HTTP request would. `auth.token` is kept as a fallback
+// for non-browser clients that authenticate via Bearer token instead of cookies.
+io.use(async (socket, next) => {
   try {
-    const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+    const cookies = parseCookieHeader(socket.handshake.headers?.cookie || '');
+    const token = cookies[COOKIE_NAME] || socket.handshake.auth?.token;
     if (!token) return next(new Error('Authentication required'));
-    socket.user = jwt.verify(token, process.env.JWT_SECRET);
+
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    const currentVersion = await getTokenVersion(payload.id);
+    if (currentVersion === null || (payload.tv ?? 0) !== currentVersion) {
+      return next(new Error('Session revoked'));
+    }
+
+    socket.user = payload;
     next();
   } catch (e) {
     next(new Error('Authentication failed'));

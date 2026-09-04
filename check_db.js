@@ -1,6 +1,6 @@
-const mysql = require('mysql2/promise');
+require('dotenv').config();
+const pool = require('./db'); // uses DB_* credentials from the environment
 async function run() {
-  const pool = mysql.createPool({ host: '127.0.0.1', user: 'root', password: '', database: 'vtm' });
   try {
     const [tables] = await pool.query('SHOW TABLES LIKE "%wiki%"');
     console.log('TABLES:', tables);

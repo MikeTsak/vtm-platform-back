@@ -17,9 +17,10 @@ const envSchema = z.object({
   JWT_SECRET: z.string(),
   JWT_REFRESH_SECRET: z.string().optional(),
 
-  // VAPID keys
+  // VAPID keys (Web Push) — required; never hardcode these in source.
   VAPID_PUBLIC_KEY: z.string(),
   VAPID_PRIVATE_KEY: z.string(),
+  VAPID_SUBJECT: z.string().optional(), // e.g. 'mailto:admin@attlarp.gr'
 
   // Add more keys here as you refactor and find them.
   // We can make some optional if they aren't strictly required for boot.

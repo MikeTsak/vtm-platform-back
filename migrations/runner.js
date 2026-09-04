@@ -1,11 +1,11 @@
 const fs = require('fs');
 const path = require('path');
-const pool = require('../db');
+const defaultPool = require('../db');
 const { log } = require('../logger');
 
 const LIST_DIR = path.join(__dirname, 'list');
 
-async function ensureMigrationsTable() {
+async function ensureMigrationsTable(pool) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS \`schema_migrations\` (
       \`id\` int(11) NOT NULL AUTO_INCREMENT,
@@ -29,8 +29,12 @@ function loadMigrations() {
 // Applies every migration in migrations/list that isn't already recorded in
 // schema_migrations, in filename order. Each migration only ever runs once —
 // if it throws, it is NOT recorded as applied, so the next boot retries it.
-async function runMigrations() {
-  await ensureMigrationsTable();
+//
+// Accepts an optional pool so the test suite can build a schema-identical,
+// fully isolated test database by running the exact same migrations against
+// a different pool/database — see back/tests/setup/testDb.js.
+async function runMigrations(pool = defaultPool) {
+  await ensureMigrationsTable(pool);
 
   const [appliedRows] = await pool.query('SELECT name FROM schema_migrations');
   const applied = new Set(appliedRows.map((r) => r.name));

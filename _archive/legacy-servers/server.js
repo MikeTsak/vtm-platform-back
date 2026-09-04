@@ -39,8 +39,8 @@ const discordClient = null;
 
 
 // Configure Web Push
-const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BI7rfJ8M56Md66_JfP7gTbPyNEhnhsPzXK63hAD-NSP2eXzgeHmcj412N0urchrrW7mOTwLvyeKUUfJQ0e0fxxA';
-const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'za0fUJF4koF5n25WMZtlrSKtHbKbqVJ77M5ojqKUSls';
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
 webpush.setVapidDetails('mailto:admin@attlarp.gr', VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 // Voice and AI disabled for memory optimization
 // For meme generation

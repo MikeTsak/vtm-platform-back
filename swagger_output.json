@@ -239,57 +239,6 @@
         }
       }
     },
-    "/api/characters/xp/spend": {
-      "post": {
-        "description": "",
-        "responses": {
-          "200": {
-            "description": "OK"
-          },
-          "400": {
-            "description": "Bad Request"
-          }
-        },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "type": {
-                    "example": "any"
-                  },
-                  "target": {
-                    "example": "any"
-                  },
-                  "currentLevel": {
-                    "example": "any"
-                  },
-                  "newLevel": {
-                    "example": "any"
-                  },
-                  "ritualLevel": {
-                    "example": "any"
-                  },
-                  "formulaLevel": {
-                    "example": "any"
-                  },
-                  "dots": {
-                    "example": "any"
-                  },
-                  "disciplineKind": {
-                    "example": "any"
-                  },
-                  "patchSheet": {
-                    "example": "any"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/admin/characters/{id}/xp/spend": {
       "post": {
         "description": "",
@@ -910,28 +859,11 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "token",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
           "200": {
             "description": "OK"
-          },
-          "401": {
-            "description": "Unauthorized"
           },
           "404": {
             "description": "Not Found"
@@ -3835,6 +3767,19 @@
         }
       }
     },
+    "/api/admin/downtimes/release-now": {
+      "post": {
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        }
+      }
+    },
     "/api/admin/downtimes/config": {
       "post": {
         "description": "",
@@ -6239,6 +6184,26 @@
         }
       }
     },
+    "/logout": {
+      "post": {
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/logout-all": {
+      "post": {
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/api/characters/me": {
       "get": {
         "description": "",
@@ -6440,6 +6405,9 @@
           "200": {
             "description": "OK"
           },
+          "403": {
+            "description": "Forbidden"
+          },
           "500": {
             "description": "Internal Server Error"
           }
@@ -6620,6 +6588,9 @@
           }
         ],
         "responses": {
+          "403": {
+            "description": "Forbidden"
+          },
           "500": {
             "description": "Internal Server Error"
           }
@@ -6643,6 +6614,9 @@
           },
           "400": {
             "description": "Bad Request"
+          },
+          "403": {
+            "description": "Forbidden"
           },
           "500": {
             "description": "Internal Server Error"
