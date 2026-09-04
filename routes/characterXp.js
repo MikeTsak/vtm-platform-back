@@ -1,4 +1,5 @@
 const { xpCost } = require('../utils/xpCost');
+const { idempotencyCheck, idempotencySave } = require('../utils/idempotency');
 
 // Self-serve XP spend: always operates on the caller's OWN character
 // (`WHERE user_id = req.user.id`), so there's no :id param and no IDOR
@@ -8,7 +9,10 @@ const { xpCost } = require('../utils/xpCost');
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired } = opts;
 
-  fastify.post('/api/characters/xp/spend', { preHandler: [authRequired] }, async (req, reply) => {
+  fastify.post('/api/characters/xp/spend', {
+    preHandler: [authRequired, idempotencyCheck],
+    onSend: [idempotencySave],
+  }, async (req, reply) => {
     const {
       type, target, currentLevel, newLevel,
       ritualLevel, formulaLevel, dots,

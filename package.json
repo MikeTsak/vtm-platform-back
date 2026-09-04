@@ -17,6 +17,7 @@
     "@fastify/compress": "^9.1.0",
     "@fastify/cookie": "^11.1.2",
     "@fastify/cors": "^11.3.0",
+    "@fastify/etag": "^6.2.0",
     "@fastify/express": "^4.0.7",
     "@fastify/helmet": "^13.1.0",
     "@fastify/multipart": "^10.1.0",
