@@ -23,7 +23,7 @@ const { DEFAULT_DISABLED_CLANS, isValidClanName } = require('./utils/clans');
 const { authRequired, requireAdmin } = require('./authMiddleware.fastify');
 const axios = require('axios');
 const { broadcastNtfyAlert } = require('./utils/ntfy');
-const idempotencyPlugin = require('./idempotencyMiddleware.fastify');
+
 const compression = require('@fastify/compress');
 
 const path = require('path');
@@ -263,7 +263,7 @@ fastify.register(compression); fastify.after(() => console.log("Finished loading
 /* Global limiter skipped */
 
 // Add Idempotency Middleware for all routes
-fastify.register(idempotencyPlugin); fastify.after(() => console.log("Finished loading plugin 6"));
+// fastify.register(idempotencyPlugin); fastify.after(() => console.log("Finished loading plugin 6"));
 
 // --- Swagger Setup ---
 fastify.register(fastifySwagger, {
@@ -3093,10 +3093,10 @@ fastify.patch('/api/downtimes/:id/read', { preHandler: [authRequired] }, async (
 
     // Verify ownership
     const [rows] = await pool.query(
-      \`SELECT dt.*, c.name as char_name 
+      `SELECT dt.*, c.name as char_name 
        FROM downtimes dt 
        JOIN characters c ON dt.character_id = c.id 
-       WHERE dt.id = ? AND c.user_id = ?\`,
+       WHERE dt.id = ? AND c.user_id = ?`,
       [id, req.user.id]
     );
 
@@ -3113,7 +3113,7 @@ fastify.patch('/api/downtimes/:id/read', { preHandler: [authRequired] }, async (
 
     const { broadcastNtfyAlert } = require('./utils/ntfy');
     const displayTitle = dt.title.replace('[PROJECT] ', '');
-    broadcastNtfyAlert(\`**${dt.char_name}** has read their downtime resolution for:\n\n> *${displayTitle}*\`, {
+    broadcastNtfyAlert(`**${dt.char_name}** has read their downtime resolution for:\n\n> *${displayTitle}*`, {
       title: 'Downtime Read',
       tags: 'eyes,vampire',
       priority: 'default',
