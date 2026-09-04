@@ -16,7 +16,6 @@ const pool = require('./db'); // export pool.promise() from db.js
 const { initDatabase } = require('./migrations/schema');
 const { validateRetainerSheet } = require('./utils/retainerValidation');
 const { sanitizeRichText } = require('./utils/sanitize');
-const { xpCost } = require('./utils/xpCost');
 const { setAuthCookie, clearAuthCookie, COOKIE_NAME } = require('./utils/authCookie');
 const { getTokenVersion, bumpTokenVersion } = require('./utils/tokenVersion');
 const { getSetting, setSetting, clearSettingCache } = require('./utils/settings');
@@ -24,7 +23,7 @@ const { DEFAULT_DISABLED_CLANS, isValidClanName } = require('./utils/clans');
 const { authRequired, requireAdmin } = require('./authMiddleware.fastify');
 const axios = require('axios');
 const { broadcastNtfyAlert } = require('./utils/ntfy');
-const { idempotencyCheck, idempotencySave, purgeOldIdempotencyKeys } = require('./utils/idempotency');
+const idempotencyPlugin = require('./idempotencyMiddleware.fastify');
 const compression = require('@fastify/compress');
 
 const path = require('path');
@@ -263,11 +262,8 @@ fastify.register(compression); fastify.after(() => console.log("Finished loading
 // Rate limiting
 /* Global limiter skipped */
 
-// Idempotency is NOT a global hook anymore — see utils/idempotency.js. It's
-// wired directly into the specific mutating routes where a duplicate would
-// cause real harm (XP spend), scoped to the verified request.user set by
-// authRequired, rather than applying (and writing a DB row) to every
-// mutation in the app regardless of whether it sent a key at all.
+// Add Idempotency Middleware for all routes
+fastify.register(idempotencyPlugin); fastify.after(() => console.log("Finished loading plugin 6"));
 
 // --- Swagger Setup ---
 fastify.register(fastifySwagger, {
@@ -288,28 +284,6 @@ fastify.register(fastifySwaggerUi, {
 
 // Disable caching for all admin API routes to prevent 304 errors
 fastify.addHook('preHandler', async (request, reply) => { if (request.url.startsWith('/api/admin')) { reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, private'); } });
-
-// Auto-generates an ETag (a hash of the response body) on every response and
-// answers a matching If-None-Match with an empty 304 instead of resending
-// the body. On its own this changes nothing — a browser only ever sends
-// If-None-Match for a URL it was told is cacheable in the first place — it's
-// what makes the Cache-Control: no-cache opt-ins below actually save
-// bandwidth instead of just adding a header.
-fastify.register(require('@fastify/etag'));
-
-// Default: NEVER let a browser or shared cache serve a stale API response,
-// unless a route has explicitly opted into caching by setting its own
-// Cache-Control (see /api/clans/config and /api/camarilla/roster below).
-// This is what makes it safe to enable real caching on specific low-churn
-// endpoints without having to audit every other GET route in this file —
-// everything defaults to the same "always hit the server" behavior it has
-// today, opt-in only.
-fastify.addHook('onSend', async (request, reply, payload) => {
-  if (request.url.startsWith('/api/') && !reply.getHeader('cache-control')) {
-    reply.header('Cache-Control', 'no-store');
-  }
-  return payload;
-});
 
 
 
@@ -546,7 +520,7 @@ cron.schedule('* * * * *', async () => {
   try {
     const { getSetting, setSetting } = require('./utils/settings');
     const { broadcastNtfyAlert } = require('./utils/ntfy');
-    
+
     const isMassReleaseActive = await getSetting('downtime_mass_release_mode', 'false');
     if (isMassReleaseActive !== 'true') return;
 
@@ -567,7 +541,7 @@ cron.schedule('* * * * *', async () => {
           tags: ['loudspeaker', 'vampire'],
           priority: 'high'
         });
-        
+
         // Mark as notified so we don't spam every minute
         await setSetting('downtime_mass_release_notified', 'true');
       }
@@ -892,36 +866,6 @@ const requireCourt = (req, reply, next) => {
   return reply.status(403).send({ error: 'Forbidden: Court access required' });
 };
 
-// Mirrors the client-side MalkavianOrAdminOnly gate in front/src/core/App.jsx
-// (admin, or a Malkavian character) — that gate is UX only; the premonitions
-// endpoints must enforce the same rule themselves, since anyone with a valid
-// session could otherwise call them directly regardless of what the UI hides.
-const requireMalkavianOrAdmin = async (req, reply) => {
-  if (req.user?.role === 'admin') return;
-  const [rows] = await pool.query(
-    "SELECT 1 FROM characters WHERE user_id = ? AND LOWER(TRIM(clan)) = 'malkavian' LIMIT 1",
-    [req.user.id]
-  );
-  if (rows.length > 0) return;
-  log.warn('Premonitions access denied: not admin or Malkavian', { user_id: req.user?.id });
-  return reply.status(403).send({ error: 'Forbidden' });
-};
-
-// Tells the given user(s) (or a named room, e.g. 'role_admin') "something
-// changed in chat, refetch when convenient" — deliberately no message
-// payload. The client re-runs its own existing, already-correct fetch
-// functions on receipt (see ChatSystem.jsx); this is purely a wake-up signal,
-// same pattern as the existing 'refresh_session' socket event.
-function notifyChatRefresh(io, target) {
-  if (!io) return; // socket.io isn't wired up in this context (e.g. tests) — safe no-op
-  const targets = Array.isArray(target) ? target : [target];
-  for (const t of targets) {
-    if (t === undefined || t === null) continue;
-    const room = typeof t === 'string' && t.startsWith('role_') ? t : `user_${t}`;
-    io.to(room).emit('chat:refresh');
-  }
-}
-
 const issueToken = (user) =>
   jwt.sign(
     { id: user.id, email: user.email, role: user.role, display_name: user.display_name, tv: user.token_version || 0 },
@@ -947,6 +891,28 @@ function endOfMonth(d = new Date()) { return new Date(d.getFullYear(), d.getMont
 function feedingFromPredator(pred) {
   const map = { Alleycat: 'Violent Hunt', Sandman: 'Sleeping Prey', Siren: 'Seduction', Osiris: 'Cult Feeding', Farmer: 'Animal/Bagged', Bagger: 'Bagged Blood', 'Scene Queen': 'Scene Influence', Consensualist: 'Consent Feeding', Extortionist: 'Blackmail Feeding', 'Blood Leech': 'Vitae Theft' };
   return map[pred] || 'Standard Feeding';
+}
+function xpCost({ type, newLevel, ritualLevel, formulaLevel, dots = 1, disciplineKind }) {
+  if (type === 'attribute') return Number(newLevel) * 5;
+  if (type === 'skill') return Number(newLevel) * 3;
+  if (type === 'specialty') return 3;
+  if (type === 'discipline') {
+    if (disciplineKind === 'clan') return Number(newLevel) * 5;
+    if (disciplineKind === 'caitiff') return Number(newLevel) * 6;
+    return Number(newLevel) * 7;
+  }
+  if (type === 'ritual' || type === 'ceremony') {
+    const lvl = Number(ritualLevel ?? newLevel ?? 1);
+    return lvl * 3;
+  }
+  if (type === 'thin_blood_formula') {
+    const lvl = Number(formulaLevel ?? newLevel ?? 1);
+    return lvl * 3;
+  }
+  if (type === 'advantage') return 3 * Number(dots || 1);
+  if (type === 'flaw') return 0; // <--- ΑΥΤΗ Η ΓΡΑΜΜΗ ΠΡΟΣΤΕΘΗΚΕ!
+  if (type === 'blood_potency') return Number(newLevel) * 10;
+  throw new Error('Unknown XP type: ' + type);
 }
 // --- Simple status/health ---
 
@@ -1225,11 +1191,6 @@ fastify.get('/api/clans/config', { preHandler: [authRequired] }, async (req, rep
     const raw = await getSetting('disabled_clans', JSON.stringify(DEFAULT_DISABLED_CLANS));
     let disabledClans;
     try { disabledClans = JSON.parse(raw); } catch { disabledClans = DEFAULT_DISABLED_CLANS; }
-    // Changes only when an admin edits it (rare) — safe to cache, as long as
-    // every request still revalidates with the server (no-cache, NOT
-    // max-age): @fastify/etag above lets that revalidation come back as a
-    // tiny 304 instead of the full payload when nothing's changed.
-    reply.header('Cache-Control', 'private, no-cache');
     reply.send({ disabledClans });
   } catch (e) {
     reply.status(500).json({ error: 'Failed to fetch clan config' });
@@ -1290,17 +1251,17 @@ fastify.post('/api/admin/ntfy/prefs', { preHandler: [authRequired, requireAdmin]
   try {
     const { npc_ids, subscribe_errors } = req.body;
     const cleanIds = Array.isArray(npc_ids) ? npc_ids.map(Number).filter(n => !isNaN(n)) : [];
-    
+
     const [oldRows] = await pool.query('SELECT ntfy_topic, ntfy_subscribe_errors FROM users WHERE id = ?', [req.user.id]);
     await pool.query('UPDATE users SET ntfy_subscribed_npcs = ?, ntfy_subscribe_errors = ? WHERE id = ?', [JSON.stringify(cleanIds), subscribe_errors ? 1 : 0, req.user.id]);
-    
+
     if (subscribe_errors && oldRows.length > 0 && !oldRows[0].ntfy_subscribe_errors && oldRows[0].ntfy_topic) {
       const axios = require('axios');
       axios.post(`https://ntfy.sh/${oldRows[0].ntfy_topic}`, `You are now subscribed to receive system errors.`, {
         headers: { 'Title': '🦇 System Errors Subscribed', 'Tags': 'vampire,white_check_mark' }
       }).catch(() => { });
     }
-    
+
     reply.send({ success: true, subscribed_npcs: cleanIds, subscribe_errors: !!subscribe_errors });
   } catch (e) {
     reply.status(500).json({ error: 'Failed to save Ntfy preferences' });
@@ -1314,8 +1275,8 @@ fastify.post('/api/admin/ntfy/test', { preHandler: [authRequired, requireAdmin] 
     if (!rows.length || !rows[0].ntfy_topic) return reply.status(400).send({ error: 'No Ntfy topic configured' });
 
     await axios.post(`https://ntfy.sh/${rows[0].ntfy_topic}`, 'This is a test notification from Erebus Portal backend.', {
-      headers: { 
-        'Title': '🦇 Ntfy Test', 
+      headers: {
+        'Title': '🦇 Ntfy Test',
         'Tags': 'bell',
         'Markdown': 'yes',
         'Priority': 'default',
@@ -1654,20 +1615,82 @@ fastify.register(require('./routes/users'), {
 
 fastify.register(require('./routes/characters'), { pool, log, authRequired, moderateLimiter, requireAdmin, validateRetainerSheet, getMimeType, sharp, imageClient, broadcastNtfyAlert }); fastify.after(() => console.log("Finished loading plugin 12"));
 fastify.register(require('./routes/wiki'), { pool, log, authRequired, requireAdmin, imageClient }); fastify.after(() => console.log("Finished loading plugin wiki"));
-/* -------------------- XP Spend (self-serve) -------------------- */
-// Extracted to routes/characterXp.js so it can be mounted in isolation for
-// integration tests — see tests/xpSpend.test.js.
-fastify.register(require('./routes/characterXp'), { pool, log, authRequired }); fastify.after(() => console.log("Finished loading plugin xp"));
+/* -------------------- XP Spend -------------------- */
+fastify.post('/api/characters/xp/spend', { preHandler: [authRequired] }, async (req, reply) => {
+  const {
+    type, target, currentLevel, newLevel,
+    ritualLevel, formulaLevel, dots,
+    disciplineKind, patchSheet
+  } = req.body;
 
-// Coteries: CRUD, membership and the coterie XP economy. Validation lives in
-// utils/coterieRules.js so the V5 point rules are enforced server-side rather
-// than trusted from the builder UI.
-fastify.register(require('./routes/coteries'), { pool, log, authRequired, requireAdmin, broadcastNtfyAlert }); fastify.after(() => console.log("Finished loading plugin coteries"));
+  const [rows] = await pool.query('SELECT * FROM characters WHERE user_id=?', [req.user.id]);
+  const ch = rows[0];
+  if (!ch) {
+    log.warn('XP spend without character', { user_id: req.user.id });
+    return reply.status(400).json({ error: 'Create a character first' });
+  }
 
-fastify.post('/api/admin/characters/:id/xp/spend', {
-  preHandler: [authRequired, requireAdmin, idempotencyCheck],
-  onSend: [idempotencySave],
-}, async (req, reply) => {
+  // Determine cost (special-case free power assignment)
+  let cost = 0;
+  try {
+    if (
+      type === 'discipline' &&
+      (
+        disciplineKind === 'select' ||                           // explicit "assignment only"
+        Number(newLevel) === Number(currentLevel)                // or no level change
+      )
+    ) {
+      cost = 0; // assigning a specific power for an existing dot is free
+    } else {
+      cost = xpCost({ type, newLevel, ritualLevel, formulaLevel, dots, disciplineKind });
+    }
+  } catch (e) {
+    log.warn('XP spend bad type', { type });
+    return reply.status(400).json({ error: e.message });
+  }
+
+  // If this is a paid action, verify balance and deduct XP
+  if (cost > 0) {
+    if ((ch.xp || 0) < cost) {
+      log.warn('XP spend insufficient', { user_id: req.user.id, have: ch.xp, need: cost });
+      return reply.status(400).json({ error: `Not enough XP (need ${cost}, have ${ch.xp})` });
+    }
+    log.xp('XP spend request', { user_id: req.user.id, type, target, currentLevel, newLevel, cost });
+    await pool.query('UPDATE characters SET xp = xp - ? WHERE id=?', [cost, ch.id]);
+  } else {
+    log.xp('Discipline power assignment (free)', { user_id: req.user.id, target, level: newLevel });
+  }
+
+  // Apply optional sheet patch for both paid and free actions
+  if (patchSheet !== undefined) {
+    await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(patchSheet), ch.id]);
+    log.xp('Sheet patched after action', { user_id: req.user.id, character_id: ch.id });
+  }
+
+  // XP log (store 0-cost entries too)
+  try {
+    await pool.query(
+      'INSERT INTO xp_log (character_id, action, target, from_level, to_level, cost, payload) VALUES (?,?,?,?,?,?,?)',
+      [ch.id, type, target || null, currentLevel || null, newLevel || null, cost,
+      JSON.stringify({ disciplineKind, ritualLevel, formulaLevel, dots })]
+    );
+    log.xp('XP logged', { character_id: ch.id, cost });
+  } catch (_) { /* ignore if xp_log missing */ }
+
+  const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [ch.id]);
+  const outCh = out[0];
+  if (outCh && outCh.sheet && typeof outCh.sheet === 'string') { try { outCh.sheet = JSON.parse(outCh.sheet); } catch { } }
+
+  if (cost > 0) {
+    log.ok('XP spend complete', { user_id: req.user.id, remaining_xp: outCh?.xp });
+  } else {
+    log.ok('Power assignment saved (no XP charged)', { user_id: req.user.id });
+  }
+
+  reply.send({ character: outCh, spent: cost });
+});
+
+fastify.post('/api/admin/characters/:id/xp/spend', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   const {
     type, target, currentLevel, newLevel,
     ritualLevel, formulaLevel, dots,
@@ -1998,10 +2021,7 @@ fastify.post('/api/admin/npcs/:id/disable', { preHandler: [authRequired, require
 });
 
 // Spend XP (NPC)
-fastify.post('/api/admin/npcs/:id/xp/spend', {
-  preHandler: [authRequired, requireAdmin, idempotencyCheck],
-  onSend: [idempotencySave],
-}, async (req, reply) => {
+fastify.post('/api/admin/npcs/:id/xp/spend', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   const { type, target, currentLevel, newLevel, ritualLevel, formulaLevel, dots, disciplineKind, patchSheet } = req.body;
 
   const [rows] = await pool.query('SELECT id, name, clan, sheet, xp, created_at, updated_at, camarilla_titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, is_disabled FROM npcs WHERE id=?', [req.params.id]);
@@ -2134,24 +2154,24 @@ fastify.get('/api/comms/status', { preHandler: [authRequired] }, async (req, rep
         const schedule = JSON.parse(scheduleStr);
         const today = new Date();
         const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
-        
+
         const toDateStr = (d) => {
           const y = d.getFullYear();
           const m = String(d.getMonth() + 1).padStart(2, '0');
           const dd = String(d.getDate()).padStart(2, '0');
           return `${y}-${m}-${dd}`;
         };
-        
+
         const todayStr = toDateStr(today);
         const yesterdayStr = toDateStr(yesterday);
-        
+
         let activeState = schedule[todayStr];
         const currentHour = today.getHours();
-        
+
         if (schedule[yesterdayStr] === '17:00' && currentHour < 17) {
-            activeState = true; 
+          activeState = true;
         } else if (schedule[todayStr] === '17:00') {
-            activeState = currentHour >= 17 ? true : false;
+          activeState = currentHour >= 17 ? true : false;
         }
 
         if (activeState === false) {
@@ -2513,12 +2533,6 @@ fastify.post('/api/admin/comms/status', { preHandler: [authRequired, requireAdmi
     const { comms_enabled } = req.body;
     await setSetting('comms_enabled', String(comms_enabled));
     log.adm(`Master comms switched to ${comms_enabled ? 'ONLINE' : 'OFFLINE'}`, { admin_id: req.user.id });
-    // Small, non-sensitive boolean everyone connected needs — a plain
-    // broadcast is simplest and safest here (unlike chat, there's no
-    // per-user targeting to get right). The schedule can ALSO flip this
-    // value with no admin action at all, which a broadcast can't catch —
-    // that case still relies on the client's slow safety-net poll.
-    if (req.server.io) req.server.io.emit('comms:status', { comms_enabled: !!comms_enabled });
     reply.send({ ok: true, comms_enabled });
   } catch (e) {
     reply.status(500).json({ error: 'Failed to update comms status' });
@@ -2641,7 +2655,6 @@ fastify.post('/api/chat/npc/messages', { preHandler: [authRequired] }, async (re
       log.err('Failed to notify admins of NPC message', { error: pushErr.message });
     }
     // ----------------------------------------------
-    notifyChatRefresh(req.server.io, 'role_admin');
 
     reply.status(201).json({ message });
   } catch (e) {
@@ -2708,7 +2721,6 @@ fastify.post('/api/admin/chat/npc/messages', { preHandler: [authRequired, requir
 
       // Send push directly to the player
       await sendPushNotification(user_id, npcName, notifBody).catch(() => { });
-      notifyChatRefresh(req.server.io, user_id);
     } catch (pushErr) {
       log.err('Failed to notify player of NPC reply', { error: pushErr.message });
     }
@@ -2883,11 +2895,6 @@ fastify.get('/api/camarilla/roster', { preHandler: [authRequired] }, async (req,
     const combined = [...format(players), ...format(npcs)];
     combined.sort((a, b) => (b.status || 0) - (a.status || 0));
 
-    // Court hierarchy only changes when someone edits a title/status/etc —
-    // cache it, but always revalidate (no-cache, not max-age) so a change
-    // is visible on the very next request, not after some TTL expires.
-    // @fastify/etag turns that revalidation into a 304 when unchanged.
-    reply.header('Cache-Control', 'private, no-cache');
     reply.send({ roster: combined });
   } catch (e) {
     log.err('Public roster fetch failed', { message: e.message });
@@ -3089,7 +3096,7 @@ fastify.get('/api/downtimes/mine', { preHandler: [authRequired] }, async (req, r
 
   const massReleaseMode = await getSetting('downtime_mass_release_mode', 'false');
   const massReleaseDate = await getSetting('downtime_mass_release_date', null);
-  
+
   let hideResolutions = false;
   if (massReleaseMode === 'true' && massReleaseDate) {
     const releaseTime = new Date(massReleaseDate).getTime();
@@ -3119,7 +3126,7 @@ fastify.post('/api/downtimes', { preHandler: [authRequired] }, async (req, reply
 
   const isProjectSubmission = title.startsWith('[PROJECT]');
   const activePhase = await getSetting('downtime_active_phase', 'standard');
-  
+
   if (activePhase === 'project' && !isProjectSubmission) {
     return reply.status(400).json({ error: 'Monthly Action submissions are currently closed. Only Long-Term Projects are being accepted.' });
   } else if (activePhase === 'standard' && isProjectSubmission) {
@@ -3650,7 +3657,6 @@ fastify.post('/api/chat/groups/:id/messages', { preHandler: [authRequired] }, as
       for (const member of members) {
         await sendPushNotification(member.user_id, notifTitle, notifBody, { url: '/schrecknet' }, 'chat').catch(() => { });
       }
-      notifyChatRefresh(req.server.io, members.map(m => m.user_id));
     } catch (pushErr) {
       log.err('Failed to notify group members', { error: pushErr.message });
     }
@@ -3872,7 +3878,6 @@ fastify.post('/api/chat/messages', { preHandler: [authRequired] }, async (req, r
       message.sender_name,
       message.attachment_id ? '📷 Image Attachment' : message.body
     )
-    notifyChatRefresh(req.server.io, recipient_id);
 
     reply.status(201).send({ message });
   } catch (e) {
@@ -4051,146 +4056,6 @@ fastify.delete('/api/chat/messages/:id', { preHandler: [authRequired] }, async (
 
   } catch (e) {
     reply.status(500).json({ error: 'Failed to delete message.' });
-  }
-});
-
-/* --- Message Reactions (double-tap-to-like + emoji react) ---
- * Additive on top of the existing chat tables — chat_message_reactions is a
- * new table, nothing about how messages are sent/fetched/edited/deleted
- * changes. The frontend always knows which table a message came from (it's
- * rendering a specific thread type), so — unlike edit/delete above — these
- * routes take an explicit `table`, whitelisted against SQL injection, rather
- * than guessing by searching all three tables for a matching id. */
-const REACTION_TABLES = ['chat_messages', 'chat_group_messages', 'npc_messages'];
-
-// Toggle: adds the reaction if the caller hasn't used this exact emoji on
-// this message yet, removes it if they have (matches double-tap-to-unlike-
-// by-tapping-again and click-a-reaction-pill-to-toggle patterns).
-fastify.post('/api/chat/messages/:id/reactions', { preHandler: [authRequired] }, async (req, reply) => {
-  try {
-    const msgId = Number(req.params.id);
-    const { table, emoji } = req.body || {};
-    const userId = req.user.id;
-    const isAdmin = req.user.role === 'admin';
-
-    if (!REACTION_TABLES.includes(table)) return reply.status(400).json({ error: 'Invalid table' });
-    if (typeof emoji !== 'string' || !emoji.trim() || emoji.length > 32) {
-      return reply.status(400).json({ error: 'Invalid emoji' });
-    }
-    const safeEmoji = emoji.trim();
-
-    // Verify the message exists and the requester actually participates in
-    // that conversation — anyone in the thread can react, not just the
-    // original sender — and work out who else should be told to refresh.
-    let notifyTargets = [];
-    if (table === 'chat_messages') {
-      const [[msg]] = await pool.query('SELECT sender_id, recipient_id FROM chat_messages WHERE id=?', [msgId]);
-      if (!msg) return reply.status(404).json({ error: 'Message not found' });
-      if (!isAdmin && msg.sender_id !== userId && msg.recipient_id !== userId) {
-        return reply.status(403).json({ error: 'Forbidden' });
-      }
-      notifyTargets = [msg.sender_id, msg.recipient_id].filter((id) => id !== userId);
-    } else if (table === 'chat_group_messages') {
-      const [[msg]] = await pool.query('SELECT group_id FROM chat_group_messages WHERE id=?', [msgId]);
-      if (!msg) return reply.status(404).json({ error: 'Message not found' });
-      const [membership] = await pool.query('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?', [msg.group_id, userId]);
-      if (!isAdmin && !membership.length) return reply.status(403).json({ error: 'Forbidden' });
-      const [members] = await pool.query('SELECT user_id FROM chat_group_members WHERE group_id=?', [msg.group_id]);
-      notifyTargets = members.map((m) => m.user_id).filter((id) => id !== userId);
-    } else {
-      const [[msg]] = await pool.query('SELECT user_id FROM npc_messages WHERE id=?', [msgId]);
-      if (!msg) return reply.status(404).json({ error: 'Message not found' });
-      if (!isAdmin && msg.user_id !== userId) return reply.status(403).json({ error: 'Forbidden' });
-      notifyTargets = [msg.user_id, 'role_admin'].filter((id) => id !== userId);
-    }
-
-    const [existing] = await pool.query(
-      'SELECT id FROM chat_message_reactions WHERE message_table=? AND message_id=? AND user_id=? AND emoji=?',
-      [table, msgId, userId, safeEmoji]
-    );
-    if (existing.length) {
-      await pool.query('DELETE FROM chat_message_reactions WHERE id=?', [existing[0].id]);
-    } else {
-      await pool.query(
-        'INSERT INTO chat_message_reactions (message_table, message_id, user_id, emoji) VALUES (?,?,?,?)',
-        [table, msgId, userId, safeEmoji]
-      );
-    }
-
-    const [summary] = await pool.query(
-      `SELECT emoji, COUNT(*) as count, MAX(user_id = ?) as reacted_by_me
-       FROM chat_message_reactions WHERE message_table=? AND message_id=? GROUP BY emoji`,
-      [userId, table, msgId]
-    );
-
-    notifyChatRefresh(req.server.io, notifyTargets);
-
-    reply.send({ reactions: summary.map((r) => ({ emoji: r.emoji, count: r.count, reacted_by_me: !!r.reacted_by_me })) });
-  } catch (e) {
-    log.err('Failed to toggle reaction', { message: e.message });
-    reply.status(500).json({ error: 'Failed to react to message' });
-  }
-});
-
-// Batch-fetch reaction summaries for a page of messages (called right after
-// a thread's history loads). Silently drops any id the caller doesn't
-// actually have access to rather than failing the whole batch — admins see
-// everything, same as elsewhere in the app.
-fastify.post('/api/chat/messages/reactions/batch', { preHandler: [authRequired] }, async (req, reply) => {
-  try {
-    const { table, ids } = req.body || {};
-    const userId = req.user.id;
-    const isAdmin = req.user.role === 'admin';
-
-    if (!REACTION_TABLES.includes(table)) return reply.status(400).json({ error: 'Invalid table' });
-    let idList = Array.isArray(ids) ? [...new Set(ids.map(Number).filter((n) => Number.isInteger(n) && n > 0))] : [];
-    if (!idList.length) return reply.send({ reactions: {} });
-
-    if (!isAdmin) {
-      const placeholders = idList.map(() => '?').join(',');
-      let ownedRows;
-      if (table === 'chat_messages') {
-        [ownedRows] = await pool.query(
-          `SELECT id FROM chat_messages WHERE id IN (${placeholders}) AND (sender_id = ? OR recipient_id = ?)`,
-          [...idList, userId, userId]
-        );
-      } else if (table === 'chat_group_messages') {
-        [ownedRows] = await pool.query(
-          `SELECT m.id FROM chat_group_messages m
-           JOIN chat_group_members gm ON gm.group_id = m.group_id AND gm.user_id = ?
-           WHERE m.id IN (${placeholders})`,
-          [userId, ...idList]
-        );
-      } else {
-        [ownedRows] = await pool.query(
-          `SELECT id FROM npc_messages WHERE id IN (${placeholders}) AND user_id = ?`,
-          [...idList, userId]
-        );
-      }
-      const ownedIds = new Set(ownedRows.map((r) => r.id));
-      idList = idList.filter((id) => ownedIds.has(id));
-    }
-    if (!idList.length) return reply.send({ reactions: {} });
-
-    const placeholders = idList.map(() => '?').join(',');
-    const [rows] = await pool.query(
-      `SELECT message_id, emoji, COUNT(*) as count, MAX(user_id = ?) as reacted_by_me
-       FROM chat_message_reactions
-       WHERE message_table = ? AND message_id IN (${placeholders})
-       GROUP BY message_id, emoji`,
-      [userId, table, ...idList]
-    );
-
-    const reactions = {};
-    for (const row of rows) {
-      if (!reactions[row.message_id]) reactions[row.message_id] = [];
-      reactions[row.message_id].push({ emoji: row.emoji, count: row.count, reacted_by_me: !!row.reacted_by_me });
-    }
-
-    reply.send({ reactions });
-  } catch (e) {
-    log.err('Failed to fetch reactions', { message: e.message });
-    reply.status(500).json({ error: 'Failed to fetch reactions' });
   }
 });
 
@@ -4828,7 +4693,7 @@ fastify.post('/api/domain-claims/requests/:requestId/:action', { preHandler: [au
         '❌ Domain Request Denied',
         'The Court has denied your request for this territory.',
         {}, 'court'
-      ).catch(() => {});
+      ).catch(() => { });
       log.adm('Domain claim request rejected', { admin: req.user.id, request_id: request.id, division: request.division });
       return reply.send({ success: true });
     }
@@ -4887,14 +4752,14 @@ fastify.post('/api/domain-claims/requests/:requestId/:action', { preHandler: [au
       '🏰 Domain Request Approved',
       `The Court has granted you dominion over Division ${request.division}.`,
       {}, 'court'
-    ).catch(() => {});
+    ).catch(() => { });
     for (const other of others) {
       await sendPushNotification(
         other.user_id,
         '❌ Domain Request Denied',
         'Another Kindred was granted this territory before your request could be approved.',
         {}, 'court'
-      ).catch(() => {});
+      ).catch(() => { });
     }
 
     const [row] = await pool.query('SELECT * FROM domain_claims WHERE division=?', [request.division]);
@@ -5358,14 +5223,14 @@ fastify.get('/api/push/settings', { preHandler: [authRequired] }, async (req, re
     let settings = { chat: false, system: false };
     if (rows[0] && rows[0].push_settings) {
       try {
-        settings = typeof rows[0].push_settings === 'string' 
-          ? JSON.parse(rows[0].push_settings) 
+        settings = typeof rows[0].push_settings === 'string'
+          ? JSON.parse(rows[0].push_settings)
           : rows[0].push_settings;
         // Clean up corrupted numeric keys
         for (const key of Object.keys(settings)) {
           if (!isNaN(key)) delete settings[key];
         }
-      } catch (e) {}
+      } catch (e) { }
     }
     reply.send(settings);
   } catch (e) {
@@ -5431,10 +5296,266 @@ let diceTableCreated = false;
 // // app.use(expressErrorHandler); // This was duplicated, removed one
 
 /* -------------------- Coteries -------------------- */
-// Extracted to routes/coteries.js: the coterie CRUD, membership and XP
-// economy now run through utils/coterieRules.js so V5 point rules are
-// enforced server-side, and every XP movement writes a coterie_xp_log row.
-// (Registered with the other route plugins above.)
+
+/**
+ * Create a coterie
+ * body: {
+ * name, type, domain_id|null,
+ * traits:{chasse,lien,portillon},
+ * required (object of {Name: dots}),
+ * backgrounds (array of {name,dots}),
+ * extras (array of strings),
+ * points_per_member (1|2),
+ * coterie_xp (number),
+ * members: [{ user_id, display_name }]
+ * }
+ */
+fastify.post('/api/coteries', { preHandler: [authRequired] }, async (req, reply) => {
+  try {
+    const {
+      name, type, domain_id,
+      traits = {},
+      required = null,
+      backgrounds = [],
+      flaws = [],
+      extras = [],
+      points_per_member = 1,
+      bonus_points = 0,
+      coterie_xp = 0,
+      members = []
+    } = req.body || {};
+
+    if (!name || !Array.isArray(members) || members.length < 3) {
+      return reply.status(400).json({ error: 'Name and ≥3 members are required' });
+    }
+    if (!(req.user.role === 'admin' || req.user.permission_level === 'admin')) {
+      const isMember = members.some(m => Number(m.user_id) === Number(req.user.id));
+      if (!isMember) return reply.status(403).json({ error: 'You must include yourself in the coterie' });
+    }
+
+    const chasse = Number(traits.chasse || 0);
+    const lien = Number(traits.lien || 0);
+    const portillon = Number(traits.portillon || 0);
+
+    const [ins] = await pool.query(
+      `INSERT INTO coteries
+       (name, type, domain_id, chasse, lien, portillon, required_json, backgrounds_json, flaws_json, extras_json, points_per_member, bonus_points, coterie_xp, created_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [
+        name.trim(),
+        type || null,
+        domain_id || null,
+        chasse, lien, portillon,
+        required ? JSON.stringify(required) : null,
+        JSON.stringify(backgrounds || []),
+        JSON.stringify(flaws || []),
+        JSON.stringify(extras || []),
+        Math.min(2, Math.max(1, Number(points_per_member || 1))),
+        Number(bonus_points || 0),
+        Number.isFinite(coterie_xp) ? coterie_xp : 0,
+        req.user.id
+      ]
+    );
+    const coterieId = ins.insertId;
+
+    if (members.length) {
+      const values = members.map(m => [coterieId, Number(m.user_id), (m.display_name || null)]);
+      await pool.query(
+        `INSERT INTO coterie_members (coterie_id, user_id, display_name) VALUES ?`,
+        [values]
+      );
+    }
+
+    const [[row]] = await pool.query(`SELECT * FROM coteries WHERE id=?`, [coterieId]);
+    log.ok('Coterie created', { id: coterieId, by_user_id: req.user.id });
+    broadcastNtfyAlert(`A new Coterie **"${name}"** was just formed!`, { title: 'New Coterie', tags: 'shield', priority: 'default' });
+    reply.status(201).json({ coterie: row });
+  } catch (e) {
+    log.err('Create coterie failed', { message: e.message, stack: e.stack });
+    reply.status(500).json({ error: 'Failed to create coterie' });
+  }
+});
+
+// Public registry of all coteries for all players (Character Names Only)
+fastify.get('/api/coteries/all', { preHandler: [authRequired] }, async (req, reply) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT 
+        c.id, c.name, c.type, c.domain_id,
+        COUNT(m.user_id) as member_count,
+        GROUP_CONCAT(
+          COALESCE(ch.name, m.display_name) 
+          SEPARATOR ', '
+        ) as members_display
+      FROM coteries c
+      LEFT JOIN coterie_members m ON m.coterie_id = c.id
+      LEFT JOIN characters ch ON ch.user_id = m.user_id
+      GROUP BY c.id
+      ORDER BY c.name ASC
+    `);
+    reply.send({ coteries: rows });
+  } catch (e) {
+    console.error('Failed to load all coteries', e);
+    reply.status(500).json({ error: 'Failed to load public coteries' });
+  }
+});
+
+// List coteries (admin → all, user → only where member)
+fastify.get('/api/coteries', { preHandler: [authRequired] }, async (req, reply) => {
+  try {
+    if (req.user.role === 'admin' || req.user.permission_level === 'admin') {
+      const [rows] = await pool.query(`SELECT * FROM coteries ORDER BY updated_at DESC`);
+      return reply.send({ coteries: rows });
+    }
+    const [rows] = await pool.query(`
+      SELECT c.*
+      FROM coteries c
+      JOIN coterie_members m ON m.coterie_id=c.id
+      WHERE m.user_id=?
+      ORDER BY c.updated_at DESC
+    `, [req.user.id]);
+    reply.send({ coteries: rows });
+  } catch (e) {
+    log.err('List coteries failed', { message: e.message });
+    reply.status(500).json({ error: 'Failed to load coteries' });
+  }
+});
+
+// Read single coterie (member or admin)
+fastify.get('/api/coteries/:id', { preHandler: [authRequired] }, async (req, reply) => {
+  try {
+    const id = Number(req.params.id);
+    const [[c]] = await pool.query(`SELECT * FROM coteries WHERE id=?`, [id]);
+    if (!c) return reply.status(404).json({ error: 'Not found' });
+
+    // authz: admin or member
+    if (!(req.user.role === 'admin' || req.user.permission_level === 'admin')) {
+      const [m] = await pool.query(`SELECT 1 FROM coterie_members WHERE coterie_id=? AND user_id=?`, [id, req.user.id]);
+      if (!m.length) return reply.status(403).json({ error: 'Not allowed' });
+    }
+
+    const [members] = await pool.query(`SELECT user_id, display_name FROM coterie_members WHERE coterie_id=?`, [id]);
+    reply.send({ coterie: c, members });
+  } catch (e) {
+    log.err('Read coterie failed', { message: e.message, stack: e.stack });
+    reply.status(500).json({ error: 'Failed to load coterie' });
+  }
+});
+
+
+
+// Update core fields (member or admin)
+fastify.put('/api/coteries/:id', { preHandler: [authRequired] }, async (req, reply) => {
+  try {
+    const id = Number(req.params.id);
+
+    // must be admin or member
+    if (!(req.user.role === 'admin' || req.user.permission_level === 'admin')) {
+      const [m] = await pool.query(`SELECT 1 FROM coterie_members WHERE coterie_id=? AND user_id=?`, [id, req.user.id]);
+      if (!m.length) return reply.status(403).json({ error: 'Not allowed' });
+    }
+
+    const {
+      name, type, domain_id,
+      traits = {},
+      required = null,
+      backgrounds = [],
+      flaws = [],
+      extras = [],
+      points_per_member,
+      bonus_points,
+      coterie_xp
+    } = req.body || {};
+
+    const fields = [];
+    const params = [];
+    if (name != null) { fields.push('name=?'); params.push(String(name)); }
+    if (type != null) { fields.push('type=?'); params.push(type || null); }
+    if (domain_id !== undefined) { fields.push('domain_id=?'); params.push(domain_id || null); }
+    if (traits) {
+      fields.push('chasse=?', 'lien=?', 'portillon=?');
+      params.push(Number(traits.chasse || 0), Number(traits.lien || 0), Number(traits.portillon || 0));
+    }
+    if (required !== undefined) { fields.push('required_json=?'); params.push(required ? JSON.stringify(required) : null); }
+    if (backgrounds !== undefined) { fields.push('backgrounds_json=?'); params.push(JSON.stringify(backgrounds || [])); }
+    if (flaws !== undefined) { fields.push('flaws_json=?'); params.push(JSON.stringify(flaws || [])); }
+    if (extras !== undefined) { fields.push('extras_json=?'); params.push(JSON.stringify(extras || [])); }
+    if (points_per_member !== undefined) { fields.push('points_per_member=?'); params.push(Math.min(2, Math.max(1, Number(points_per_member || 1)))); }
+    if (bonus_points !== undefined) { fields.push('bonus_points=?'); params.push(Number(bonus_points || 0)); }
+    if (coterie_xp !== undefined) { fields.push('coterie_xp=?'); params.push(Number(coterie_xp || 0)); }
+
+    if (!fields.length) return reply.send({ ok: true });
+
+    await pool.query(`UPDATE coteries SET ${fields.join(', ')} WHERE id=?`, [...params, id]);
+    const [[row]] = await pool.query(`SELECT * FROM coteries WHERE id=?`, [id]);
+    reply.send({ coterie: row });
+  } catch (e) {
+    log.err('Update coterie failed', { message: e.message });
+    reply.status(500).json({ error: 'Failed to update coterie' });
+  }
+});
+
+// Replace members (admin or current member)
+fastify.post('/api/coteries/:id/members/set', { preHandler: [authRequired] }, async (req, reply) => {
+  try {
+    const id = Number(req.params.id);
+    if (!(req.user.role === 'admin' || req.user.permission_level === 'admin')) {
+      const [m] = await pool.query(`SELECT 1 FROM coterie_members WHERE coterie_id=? AND user_id=?`, [id, req.user.id]);
+      if (!m.length) return reply.status(403).json({ error: 'Not allowed' });
+    }
+
+    const { members = [] } = req.body || {};
+    if (!Array.isArray(members) || members.length < 3) {
+      return reply.status(400).json({ error: '≥3 members required' });
+    }
+    if (!(req.user.role === 'admin' || req.user.permission_level === 'admin')) {
+      const isMember = members.some(m => Number(m.user_id) === Number(req.user.id));
+      if (!isMember) return reply.status(403).json({ error: 'You must include yourself in the coterie' });
+    }
+
+    await pool.query(`DELETE FROM coterie_members WHERE coterie_id=?`, [id]);
+    const values = members.map(m => [id, Number(m.user_id), (m.display_name || null)]);
+    await pool.query(`INSERT INTO coterie_members (coterie_id, user_id, display_name) VALUES ?`, [values]);
+
+    const [rows] = await pool.query(`SELECT user_id, display_name FROM coterie_members WHERE coterie_id=?`, [id]);
+    reply.send({ members: rows });
+  } catch (e) {
+    log.err('Set coterie members failed', { message: e.message });
+    reply.status(500).json({ error: 'Failed to set members' });
+  }
+});
+
+// Adjust Coterie XP (delta) - admin or member
+// body: { delta: +N | -N }
+fastify.post('/api/coteries/:id/xp', { preHandler: [authRequired] }, async (req, reply) => {
+  try {
+    const id = Number(req.params.id);
+    if (!(req.user.role === 'admin' || req.user.permission_level === 'admin')) {
+      const [m] = await pool.query(`SELECT 1 FROM coterie_members WHERE coterie_id=? AND user_id=?`, [id, req.user.id]);
+      if (!m.length) return reply.status(403).json({ error: 'Not allowed' });
+    }
+    const delta = Number(req.body?.delta || 0);
+    await pool.query(`UPDATE coteries SET coterie_xp = GREATEST(0, coterie_xp + ?) WHERE id=?`, [delta, id]);
+    const [[row]] = await pool.query(`SELECT coterie_xp FROM coteries WHERE id=?`, [id]);
+    reply.send({ coterie_xp: row?.coterie_xp ?? 0 });
+  } catch (e) {
+    log.err('Adjust coterie XP failed', { message: e.message });
+    reply.status(500).json({ error: 'Failed to adjust XP' });
+  }
+});
+
+// Delete coterie (admin only)
+fastify.delete('/api/coteries/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  try {
+    const id = Number(req.params.id);
+    await pool.query(`DELETE FROM coteries WHERE id=?`, [id]);
+    log.adm('Coterie deleted', { id, by_user_id: req.user.id });
+    reply.send({ ok: true });
+  } catch (e) {
+    log.err('Delete coterie failed', { message: e.message });
+    reply.status(500).json({ error: 'Failed to delete coterie' });
+  }
+});
 
 // GET: public to logged-in users (players need to see dates)
 fastify.get('/api/downtimes/config', { preHandler: [authRequired] }, async (req, reply) => {
@@ -5459,33 +5580,6 @@ fastify.get('/api/downtimes/config', { preHandler: [authRequired] }, async (req,
   } catch (e) {
     log.err('Fetch downtime config failed', { message: e.message });
     reply.status(500).json({ error: 'Failed to fetch downtime config' });
-  }
-});
-
-// WRITE (admins): Release downtimes instantly
-fastify.post('/api/admin/downtimes/release-now', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
-  try {
-    const { setSetting } = require('./utils/settings');
-    const { broadcastNtfyAlert } = require('./utils/ntfy');
-
-    // Turn off mass release mode (so they are visible instantly)
-    await setSetting('downtime_mass_release_mode', 'false');
-
-    // Broadcast the release alert
-    await broadcastNtfyAlert('The countdown is over. Downtime Resolutions have just been released to all players!', {
-      title: '🦇 Downtimes Released',
-      tags: ['loudspeaker', 'vampire'],
-      priority: 'high'
-    });
-
-    // Ensure cron job knows we notified
-    await setSetting('downtime_mass_release_notified', 'true');
-
-    log.adm('Manual Mass Release triggered by admin', { adminId: req.user.id });
-    return reply.send({ success: true, message: 'Downtimes released instantly.' });
-  } catch (e) {
-    log.err('Release now failed', { message: e.message });
-    return reply.status(500).json({ error: 'Failed to release downtimes' });
   }
 });
 
@@ -5835,7 +5929,7 @@ fastify.post('/api/admin/premonitions/send', { preHandler: [authRequired, requir
 });
 
 // PLAYER: Get my premonitions
-fastify.get('/api/premonitions/mine', { preHandler: [authRequired, requireMalkavianOrAdmin] }, async (req, reply) => {
+fastify.get('/api/premonitions/mine', { preHandler: [authRequired] }, async (req, reply) => {
   try {
 
     const [rows] = await pool.query(`
@@ -5872,7 +5966,7 @@ fastify.get('/api/premonitions/mine', { preHandler: [authRequired, requireMalkav
 
 
 // MEDIA: Stream media from DB
-fastify.get('/api/premonitions/media/:id', { preHandler: [authRequired, requireMalkavianOrAdmin] }, async (req, reply) => {
+fastify.get('/api/premonitions/media/:id', { preHandler: [authRequired] }, async (req, reply) => {
   try {
     const id = Number(req.params.id) || 0;
 
@@ -6668,9 +6762,9 @@ async function getAuthorSignature(authorId, pool) {
       LEFT JOIN characters c ON c.user_id = u.id
       WHERE u.id = ?
     `, [authorId]);
-    
+
     if (!user) return '— Issued by Court Authority';
-    
+
     let authorName = user.char_name || user.author_real_name || 'Court Authority';
     let authorRole = 'Court Member';
     if (user.char_titles) {
@@ -6681,13 +6775,13 @@ async function getAuthorSignature(authorId, pool) {
           const sorted = [...titles].sort((a, b) => {
             let aIdx = TITLES.indexOf(a);
             let bIdx = TITLES.indexOf(b);
-            if(aIdx === -1) aIdx = 99;
-            if(bIdx === -1) bIdx = 99;
+            if (aIdx === -1) aIdx = 99;
+            if (bIdx === -1) bIdx = 99;
             return aIdx - bIdx;
           });
           authorRole = sorted[0];
         }
-      } catch(e) {}
+      } catch (e) { }
     }
     return `— Issued by ${authorName}, ${authorRole}`;
   } catch (e) {
@@ -6751,7 +6845,7 @@ fastify.post('/api/news', { preHandler: [authRequired] }, async (req, reply) => 
         if (channelId) {
           const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
           const isAnnouncement = type === 'announcement';
-          const articleLink = isAnnouncement 
+          const articleLink = isAnnouncement
             ? `${appBase}/court/announcements/${insertResult.insertId}`
             : `${appBase}/news/${insertResult.insertId}`;
 
@@ -6806,7 +6900,7 @@ fastify.post('/api/news/:id/broadcast', { preHandler: [authRequired, requireAdmi
   try {
     const [rows] = await pool.query('SELECT * FROM news_entries WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return reply.status(404).send({ error: 'Entry not found' });
-    
+
     const entry = rows[0];
     const { type, title, subtitle, theme } = entry;
 
@@ -6873,14 +6967,14 @@ fastify.patch('/api/news/:id/publish', { preHandler: [authRequired, requireAdmin
   try {
     const [rows] = await pool.query('SELECT * FROM news_entries WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return reply.status(404).send({ error: 'Not found' });
-    
+
     const entry = rows[0];
     if (entry.is_private === 0) {
       return reply.send({ success: true, message: 'Already published' });
     }
 
     await pool.query('UPDATE news_entries SET is_private = 0 WHERE id = ?', [req.params.id]);
-    
+
     // We can reuse the same broadcast logic as the POST /api/news/:id/broadcast or just trigger it via fetch.
     // Or we can just let the admin click the "Broadcast" button from the UI after publishing.
     // Wait, the user said "i sould be able to push it to public form there to ap;piar in official new s and the discord bot."
@@ -7042,7 +7136,7 @@ fastify.post('/api/rumors/:id/broadcast', { preHandler: [authRequired, requireAd
   try {
     const [rows] = await pool.query('SELECT * FROM rumors WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return reply.status(404).send({ error: 'Rumor not found' });
-    
+
     const rumor = rows[0];
     const { title, body } = rumor;
 
@@ -7880,7 +7974,7 @@ fastify.get('/api/admin/domains-advanced', { preHandler: [authRequired, requireA
   } catch (e) {
     console.error('Error fetching advanced domains:', e);
     const { broadcastNtfyAlert } = require('./utils/ntfy');
-    broadcastNtfyAlert(`API Crash in /api/admin/domains-advanced:\n\n${e.message}`, { title: '🚨 API Error', tags: 'rotating_light,x', priority: 'high', requiresSubscription: 'errors' }).catch(()=>{});
+    broadcastNtfyAlert(`API Crash in /api/admin/domains-advanced:\n\n${e.message}`, { title: '🚨 API Error', tags: 'rotating_light,x', priority: 'high', requiresSubscription: 'errors' }).catch(() => { });
     reply.status(500).send({ error: 'Failed to fetch advanced domains', details: e.message, stack: e.stack });
   }
 });
@@ -7909,7 +8003,7 @@ fastify.post('/api/admin/domains/draw-problems', { preHandler: [authRequired, re
       { text: 'Sudden influx of homeless camps drawing unwanted municipal sweeps', penalty: 1 },
       { text: 'Flash floods from sudden storm paralyze local infrastructure', penalty: 1 },
       { text: 'Internet/Cellular blackout in the area causes localized panic', penalty: 1 },
-      
+
       // Occult / Vampire / Supernatural Problems (-2 to -4)
       { text: 'Second Inquisition (Entity) surveillance van spotted monitoring the area', penalty: 3 },
       { text: 'Lupine pack hunting aggressively in the area', penalty: 3 },
@@ -7932,10 +8026,10 @@ fastify.post('/api/admin/domains/draw-problems', { preHandler: [authRequired, re
 
     for (const dom of selected) {
       const prob = problemList[Math.floor(Math.random() * problemList.length)];
-      
+
       const [[{ unresolvedCount }]] = await pool.query('SELECT COUNT(*) as unresolvedCount FROM domain_problems WHERE domain_id=? AND resolved=0', [dom.id]);
       const totalPenalty = prob.penalty + Number(unresolvedCount);
-      
+
       await pool.query('INSERT INTO domain_problems (domain_id, problem_text) VALUES (?, ?)', [dom.id, prob.text]);
       await pool.query('UPDATE domain_claims SET safety_rating = GREATEST(safety_rating - ?, 0) WHERE division=?', [totalPenalty, dom.id]);
     }
@@ -7990,7 +8084,7 @@ fastify.post('/api/admin/blood-web/update', { preHandler: [authRequired, require
     const [[char]] = await pool.query('SELECT sheet FROM characters WHERE id = ?', [id]);
     if (!char) return reply.status(404).json({ error: 'Character not found' });
     let sheet = {};
-    try { sheet = typeof char.sheet === 'string' ? JSON.parse(char.sheet) : (char.sheet || {}); } catch(e){}
+    try { sheet = typeof char.sheet === 'string' ? JSON.parse(char.sheet) : (char.sheet || {}); } catch (e) { }
     if (hunger !== undefined) sheet.hunger = Math.max(0, Math.min(5, Number(hunger)));
     if (bloodPotency !== undefined) sheet.bloodPotency = Math.max(0, Math.min(10, Number(bloodPotency)));
     await pool.query('UPDATE characters SET sheet = ? WHERE id = ?', [JSON.stringify(sheet), id]);
@@ -8220,14 +8314,6 @@ io.use(async (socket, next) => {
 });
 
 io.on('connection', (socket) => {
-  // Every authenticated socket automatically gets a private room scoped to
-  // its own user id — no client action needed, so there's no race where a
-  // tab misses a notification because it forgot to join. This is what lets
-  // the server target "just this one user" (or "every admin") for chat
-  // push notifications instead of broadcasting to everyone.
-  socket.join(`user_${socket.user.id}`);
-  if (socket.user.role === 'admin') socket.join('role_admin');
-
   socket.on('join_session', async (sessionId) => {
     try {
       if (!sessionId) return;
@@ -8254,33 +8340,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('chat_message', (payload) => {
-    const sessionId = payload?.sessionId;
-    if (!sessionId) return;
-
-    // Only broadcast into rooms this socket actually joined via
-    // join_session above — which already verified STs (admin/courtuser) can
-    // join any session and everyone else must be a registered participant.
-    // socket.rooms is maintained server-side by Socket.IO itself; a client
-    // has no way to add itself to it except through that vetted join.
-    const room = `session_${sessionId}`;
-    if (!socket.rooms.has(room)) {
-      log.warn('Socket chat_message rejected: sender is not a member of the session room', { user_id: socket.user.id, sessionId });
-      return;
-    }
-
-    // Never trust client-supplied sender identity — stamp it from the
-    // authenticated socket, exactly like every HTTP route uses req.user
-    // instead of trusting a client-supplied user id.
-    const message = {
-      sessionId,
-      body: typeof payload?.body === 'string' ? payload.body.slice(0, 2000) : '',
-      senderId: socket.user.id,
-      senderName: socket.user.display_name,
-      senderRole: socket.user.role,
-      sentAt: new Date().toISOString(),
-    };
-
-    io.to(room).emit('chat_message', message);
+    io.to(`session_${payload.sessionId}`).emit('chat_message', payload);
   });
 });
 
@@ -8294,7 +8354,7 @@ fastify.listen({ port: PORT, host: '0.0.0.0' }, async (err, address) => {
     process.exit(1);
   }
   log.start(`API server started on ${address}`, { port: PORT, env: process.env.NODE_ENV || 'stable' });
-  
+
   // Track server start
   try {
     await pool.query(
@@ -8309,30 +8369,18 @@ fastify.listen({ port: PORT, host: '0.0.0.0' }, async (err, address) => {
     try {
       const [[startsRow]] = await pool.query("SELECT setting_value FROM app_settings WHERE setting_key = 'daily_server_starts'");
       const [[loginsRow]] = await pool.query("SELECT setting_value FROM app_settings WHERE setting_key = 'daily_logins'");
-      
+
       const starts = startsRow ? startsRow.setting_value : '0';
       const logins = loginsRow ? loginsRow.setting_value : '0';
-      
+
       if (typeof broadcastNtfyAlert === 'function') {
         broadcastNtfyAlert(`Daily Summary:\n- Server starts: ${starts}\n- Logins: ${logins}`, { title: 'End of Day Summary', tags: 'bar_chart' });
       }
-      
+
       // Reset counters
       await pool.query("UPDATE app_settings SET setting_value = '0' WHERE setting_key IN ('daily_server_starts', 'daily_logins')");
     } catch (e) {
       log.err('Daily summary cron failed', { error: e.message });
-    }
-  });
-
-  // Nightly purge of idempotency_keys rows past their retention window (see
-  // utils/idempotency.js) — the whole point of scoping+purging instead of
-  // letting this table grow forever.
-  cron.schedule('30 3 * * *', async () => {
-    try {
-      const deleted = await purgeOldIdempotencyKeys();
-      if (deleted > 0) log.info(`Purged ${deleted} expired idempotency key(s)`);
-    } catch (e) {
-      log.err('Idempotency key purge cron failed', { error: e.message });
     }
   });
 });
