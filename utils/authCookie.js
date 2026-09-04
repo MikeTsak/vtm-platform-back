@@ -9,21 +9,28 @@
 const COOKIE_NAME = 'token';
 const MAX_AGE_SECONDS = 7 * 24 * 60 * 60; // mirrors the JWT's own 7d expiresIn
 
-// The frontend (portal.attlarp.gr) and API (vtm.back.miketsak.gr) are on
-// different registrable domains in production — a genuinely CROSS-SITE
-// relationship, not just cross-origin. SameSite=Lax cookies are never sent
-// on cross-site XHR/fetch (only same-site requests and top-level
-// navigations), so a Lax cookie there would be set by /login but silently
-// never attached to the very next /auth/me call — SameSite=None is required
-// for the cookie to work across those two domains at all.
+// The frontend (portal.attlarp.gr) and API (api.attlarp.gr) are same-site in
+// production (same registrable domain, attlarp.gr) — this used to be a
+// genuinely cross-site relationship when the API lived on a different
+// domain (miketsak.gr), which is precisely what broke login on Safari,
+// every iOS browser (all forced onto WebKit, so subject to the same ITP
+// third-party-cookie blocking as Safari), and Chrome Incognito: those
+// browsers block third-party cookies outright regardless of SameSite, and
+// no client-side fix works around that — only same-site fixes it for real.
 //
-// But SameSite=None is only legal paired with Secure — browsers reject it
+// SameSite=None+Secure is still used for any non-local production host
+// rather than switching to Lax now that it's same-site, because None+Secure
+// works correctly for same-site requests too (Lax only *adds* a restriction
+// that None doesn't have), and it keeps this code correct by default if the
+// API is ever split onto a different domain again in the future.
+//
+// SameSite=None is only legal paired with Secure — browsers reject it
 // outright otherwise — and local dev runs over plain http://127.0.0.1 (Vite
 // proxies the frontend's /api calls to the backend same-origin, so it's
 // genuinely same-site there; changeOrigin: true in vite.config.js rewrites
 // the Host header the backend sees to 127.0.0.1). So Secure and SameSite are
 // decided together, from the same signal, rather than independently:
-// cross-site production gets None+Secure, same-site local dev gets Lax
+// any non-local host gets None+Secure, same-site local dev gets Lax
 // (no Secure requirement, and it's the correct choice for genuinely
 // same-site traffic anyway).
 //

@@ -328,7 +328,7 @@ Response:
 If Swagger is enabled in this backend:
 
 - Local: `http://localhost:3001/api-docs`
-- Production (as referenced in code/docs): `https://vtm.back.miketsak.gr/api-docs`
+- Production (as referenced in code/docs): `https://api.attlarp.gr/api-docs`
 
 To authorize in Swagger UI:
 

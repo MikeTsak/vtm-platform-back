@@ -52,15 +52,17 @@ describe('POST /api/auth/register', () => {
     expect(cookieStr).not.toMatch(/Secure/i);
   });
 
-  it('uses SameSite=None + Secure for a production-looking cross-site request', async () => {
-    // Mirrors the real deployment: frontend and API on different registrable
-    // domains (portal.attlarp.gr vs vtm.back.miketsak.gr) — SameSite=None is
-    // required or the browser never sends the cookie back on the next
-    // request, which is exactly the bug this pins down as a regression.
+  it('uses SameSite=None + Secure for any non-local production host', async () => {
+    // isCrossSiteHttps() treats every non-localhost host as needing
+    // None+Secure, regardless of whether the frontend and API happen to
+    // share a registrable domain today — that's deliberate (see the comment
+    // in authCookie.js): None+Secure is also correct for same-site traffic,
+    // and staying defensive here means this doesn't quietly break again if
+    // the API is ever split onto a different domain in the future.
     const res = await app.inject({
       method: 'POST',
       url: '/api/auth/register',
-      headers: { host: 'vtm.back.miketsak.gr' },
+      headers: { host: 'some-production-host.example' },
       payload: { email: uniqueEmail(), display_name: 'Prod User', password: 'CorrectHorse123' },
     });
     const cookieStr = res.headers['set-cookie'];
