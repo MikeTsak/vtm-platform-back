@@ -4930,39 +4930,60 @@ fastify.get('/api/domain-overlays/me', { preHandler: [authRequired] }, async (re
   }
 });
 
-fastify.get('/api/admin/domain-overlays/grants', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+// Directory for the access-management modal. Any logged-in user can open it,
+// but a non-admin can only act on the overlays they themselves hold (they can
+// "spread" what they have). Shows the CHARACTER name, not the account name.
+fastify.get('/api/domain-overlays/directory', { preHandler: [authRequired] }, async (req, reply) => {
   try {
+    const me = await resolveOverlayAccess(req.user.id, req.user.role);
+    const grantable = me.admin ? DOMAIN_OVERLAY_KEYS : me.overlays;
     const [rows] = await pool.query(`
       SELECT u.id, u.email, u.display_name, u.role,
+             (SELECT ch.name FROM characters ch
+                WHERE ch.user_id = u.id AND COALESCE(ch.is_deceased,0)=0 AND COALESCE(ch.is_left,0)=0
+                ORDER BY ch.id LIMIT 1) AS character_name,
              (SELECT ch.clan FROM characters ch
                 WHERE ch.user_id = u.id AND COALESCE(ch.is_deceased,0)=0 AND COALESCE(ch.is_left,0)=0
                 ORDER BY ch.id LIMIT 1) AS clan,
-             (SELECT GROUP_CONCAT(g.overlay_key) FROM domain_overlay_grants g WHERE g.user_id = u.id) AS granted
+             (SELECT GROUP_CONCAT(g.overlay_key) FROM domain_overlay_grants g WHERE g.user_id = u.id) AS granted,
+             (SELECT GROUP_CONCAT(g.overlay_key) FROM domain_overlay_grants g WHERE g.user_id = u.id AND g.granted_by = ?) AS granted_by_me
       FROM users u
-      ORDER BY (u.display_name IS NULL), u.display_name, u.email
-    `);
-    const users = rows.map(r => ({
-      id: r.id,
-      name: r.display_name || r.email,
-      email: r.email,
-      role: r.role,
-      clan: r.clan || null,
-      granted: r.granted ? r.granted.split(',').filter(k => DOMAIN_OVERLAY_KEYS.includes(k)) : [],
-    }));
-    reply.send({ users, keys: DOMAIN_OVERLAY_KEYS });
+      ORDER BY (character_name IS NULL), character_name, u.display_name, u.email
+    `, [req.user.id]);
+    const users = rows.map(r => {
+      const granted = r.granted ? r.granted.split(',').filter(k => DOMAIN_OVERLAY_KEYS.includes(k)) : [];
+      const grantedByMe = r.granted_by_me ? r.granted_by_me.split(',').filter(k => DOMAIN_OVERLAY_KEYS.includes(k)) : [];
+      return {
+        id: r.id,
+        name: r.character_name || r.display_name || r.email,
+        account: r.display_name || r.email,
+        role: r.role,
+        clan: r.clan || null,
+        // a non-admin only sees grant status for overlays they can act on
+        granted: me.admin ? granted : granted.filter(k => grantable.includes(k)),
+        grantedByMe,
+      };
+    });
+    reply.send({ me, keys: DOMAIN_OVERLAY_KEYS, grantable, users });
   } catch (err) {
-    log.err('GET /api/admin/domain-overlays/grants failed', { error: err.message });
-    reply.status(500).send({ error: 'Database error listing overlay grants' });
+    log.err('GET /api/domain-overlays/directory failed', { error: err.message });
+    reply.status(500).send({ error: 'Database error loading overlay directory' });
   }
 });
 
-fastify.post('/api/admin/domain-overlays/grants', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+// Grant an overlay to another player. Admin can grant anything; anyone else
+// can only grant an overlay they themselves have (spreading access).
+fastify.post('/api/domain-overlays/grants', { preHandler: [authRequired] }, async (req, reply) => {
   const userId = Number(req.body?.user_id);
   const overlayKey = String(req.body?.overlay_key || '');
   if (!Number.isInteger(userId) || !DOMAIN_OVERLAY_KEYS.includes(overlayKey)) {
     return reply.status(400).send({ error: 'user_id (int) and a valid overlay_key are required' });
   }
   try {
+    const me = await resolveOverlayAccess(req.user.id, req.user.role);
+    if (!me.admin && !me.overlays.includes(overlayKey)) {
+      return reply.status(403).send({ error: 'You can only share an overlay you have access to yourself' });
+    }
     await pool.query(
       'INSERT IGNORE INTO domain_overlay_grants (user_id, overlay_key, granted_by) VALUES (?,?,?)',
       [userId, overlayKey, req.user.id],
@@ -4970,23 +4991,35 @@ fastify.post('/api/admin/domain-overlays/grants', { preHandler: [authRequired, r
     log.dom('Domain overlay granted', { user_id: userId, overlay_key: overlayKey, by: req.user.id });
     reply.send({ ok: true });
   } catch (err) {
-    log.err('POST /api/admin/domain-overlays/grants failed', { error: err.message });
+    log.err('POST /api/domain-overlays/grants failed', { error: err.message });
     reply.status(500).send({ error: 'Database error granting overlay' });
   }
 });
 
-fastify.delete('/api/admin/domain-overlays/grants/:userId/:overlayKey', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+// Revoke: admin can revoke anything; a non-admin can only revoke a grant they
+// personally made.
+fastify.delete('/api/domain-overlays/grants/:userId/:overlayKey', { preHandler: [authRequired] }, async (req, reply) => {
   const userId = Number(req.params.userId);
   const overlayKey = String(req.params.overlayKey || '');
   if (!Number.isInteger(userId) || !DOMAIN_OVERLAY_KEYS.includes(overlayKey)) {
     return reply.status(400).send({ error: 'bad parameters' });
   }
   try {
+    if (req.user.role !== 'admin') {
+      const [[row]] = await pool.query(
+        'SELECT granted_by FROM domain_overlay_grants WHERE user_id=? AND overlay_key=?',
+        [userId, overlayKey],
+      );
+      if (!row) return reply.send({ ok: true });
+      if (row.granted_by !== req.user.id) {
+        return reply.status(403).send({ error: 'Only an admin or whoever granted it can revoke this' });
+      }
+    }
     await pool.query('DELETE FROM domain_overlay_grants WHERE user_id=? AND overlay_key=?', [userId, overlayKey]);
     log.dom('Domain overlay revoked', { user_id: userId, overlay_key: overlayKey, by: req.user.id });
     reply.send({ ok: true });
   } catch (err) {
-    log.err('DELETE /api/admin/domain-overlays/grants failed', { error: err.message });
+    log.err('DELETE /api/domain-overlays/grants failed', { error: err.message });
     reply.status(500).send({ error: 'Database error revoking overlay' });
   }
 });
