@@ -8276,7 +8276,33 @@ io.on('connection', (socket) => {
   });
 
   socket.on('chat_message', (payload) => {
-    io.to(`session_${payload.sessionId}`).emit('chat_message', payload);
+    const sessionId = payload?.sessionId;
+    if (!sessionId) return;
+
+    // Only broadcast into rooms this socket actually joined via
+    // join_session above — which already verified STs (admin/courtuser) can
+    // join any session and everyone else must be a registered participant.
+    // socket.rooms is maintained server-side by Socket.IO itself; a client
+    // has no way to add itself to it except through that vetted join.
+    const room = `session_${sessionId}`;
+    if (!socket.rooms.has(room)) {
+      log.warn('Socket chat_message rejected: sender is not a member of the session room', { user_id: socket.user.id, sessionId });
+      return;
+    }
+
+    // Never trust client-supplied sender identity — stamp it from the
+    // authenticated socket, exactly like every HTTP route uses req.user
+    // instead of trusting a client-supplied user id.
+    const message = {
+      sessionId,
+      body: typeof payload?.body === 'string' ? payload.body.slice(0, 2000) : '',
+      senderId: socket.user.id,
+      senderName: socket.user.display_name,
+      senderRole: socket.user.role,
+      sentAt: new Date().toISOString(),
+    };
+
+    io.to(room).emit('chat_message', message);
   });
 });
 

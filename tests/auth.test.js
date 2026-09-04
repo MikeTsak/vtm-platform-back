@@ -38,7 +38,34 @@ describe('POST /api/auth/register', () => {
     const cookieStr = Array.isArray(setCookie) ? setCookie[0] : setCookie;
     expect(cookieStr).toMatch(/^token=/);
     expect(cookieStr).toMatch(/HttpOnly/i);
+  });
+
+  it('uses SameSite=Lax (no Secure required) for requests that look like local dev', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      headers: { host: 'localhost:3001' },
+      payload: { email: uniqueEmail(), display_name: 'Local Dev User', password: 'CorrectHorse123' },
+    });
+    const cookieStr = res.headers['set-cookie'];
     expect(cookieStr).toMatch(/SameSite=Lax/i);
+    expect(cookieStr).not.toMatch(/Secure/i);
+  });
+
+  it('uses SameSite=None + Secure for a production-looking cross-site request', async () => {
+    // Mirrors the real deployment: frontend and API on different registrable
+    // domains (portal.attlarp.gr vs vtm.back.miketsak.gr) — SameSite=None is
+    // required or the browser never sends the cookie back on the next
+    // request, which is exactly the bug this pins down as a regression.
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      headers: { host: 'vtm.back.miketsak.gr' },
+      payload: { email: uniqueEmail(), display_name: 'Prod User', password: 'CorrectHorse123' },
+    });
+    const cookieStr = res.headers['set-cookie'];
+    expect(cookieStr).toMatch(/SameSite=None/i);
+    expect(cookieStr).toMatch(/Secure/i);
   });
 
   it('rejects a duplicate email', async () => {

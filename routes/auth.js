@@ -207,7 +207,7 @@ module.exports = async function (fastify, opts) {
   // authRequired preHandler: even a stale/expired/already-invalid cookie
   // still needs to be cleared from the browser, so this must always succeed.
   fastify.post('/logout', async (req, reply) => {
-    clearAuthCookie(reply);
+    clearAuthCookie(req, reply);
     reply.send({ ok: true });
   });
 
@@ -216,7 +216,7 @@ module.exports = async function (fastify, opts) {
   // session since it needs to know whose sessions to revoke.
   fastify.post('/logout-all', { preHandler: [authRequired] }, async (req, reply) => {
     await bumpTokenVersion(req.user.id);
-    clearAuthCookie(reply);
+    clearAuthCookie(req, reply);
     log.auth('User logged out of all sessions', { user_id: req.user.id });
     reply.send({ ok: true });
   });
