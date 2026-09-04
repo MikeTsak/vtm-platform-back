@@ -5653,7 +5653,23 @@ fastify.post('/api/admin/downtimes/config', { preHandler: [authRequired, require
     if (typeof downtime_opening !== 'undefined') await setSetting('downtime_opening', downtime_opening || '');
     if (typeof project_deadline !== 'undefined') await setSetting('project_deadline', project_deadline || '');
     if (typeof downtime_active_phase !== 'undefined') await setSetting('downtime_active_phase', downtime_active_phase || 'standard'); // <-- NEW
-    if (typeof downtime_mass_release_mode !== 'undefined') await setSetting('downtime_mass_release_mode', downtime_mass_release_mode ? 'true' : 'false');
+    if (typeof downtime_mass_release_mode !== 'undefined') {
+      const oldMassReleaseMode = await getSetting('downtime_mass_release_mode', 'false');
+      await setSetting('downtime_mass_release_mode', downtime_mass_release_mode ? 'true' : 'false');
+      
+      if (oldMassReleaseMode === 'true' && !downtime_mass_release_mode) {
+        const hasNotified = await getSetting('downtime_mass_release_notified', 'false');
+        if (hasNotified === 'false') {
+          const { broadcastNtfyAlert } = require('./utils/ntfy');
+          broadcastNtfyAlert('Downtime Resolutions have been released manually to all players!', {
+            title: '🦇 Downtimes Released',
+            tags: 'loudspeaker,vampire',
+            priority: 'default'
+          }).catch(() => {});
+          await setSetting('downtime_mass_release_notified', 'true');
+        }
+      }
+    }
     if (typeof downtime_mass_release_date !== 'undefined') {
       await setSetting('downtime_mass_release_date', downtime_mass_release_date || '');
       await setSetting('downtime_mass_release_notified', 'false');
