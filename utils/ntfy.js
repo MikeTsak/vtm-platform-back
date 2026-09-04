@@ -17,6 +17,8 @@ async function broadcastNtfyAlert(message, options = {}) {
     let query = "SELECT ntfy_topic FROM users WHERE role = 'admin' AND ntfy_topic IS NOT NULL AND ntfy_topic != ''";
     if (options.requiresSubscription === 'errors') {
       query += " AND ntfy_subscribe_errors = 1";
+    } else if (options.requiresSubscription === 'downtimes') {
+      query += " AND ntfy_subscribe_downtimes = 1";
     }
     const [admins] = await pool.query(query);
 

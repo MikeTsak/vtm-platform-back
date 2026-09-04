@@ -1217,11 +1217,11 @@ fastify.post('/api/admin/clans/config', { preHandler: [authRequired, requireAdmi
 // Admin: Get current Ntfy Topic
 fastify.get('/api/admin/ntfy', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   try {
-    const [rows] = await pool.query('SELECT ntfy_topic, ntfy_subscribed_npcs, ntfy_subscribe_errors FROM users WHERE id = ?', [req.user.id]);
-    if (!rows.length) return reply.send({ topic: '', subscribed_npcs: [], subscribe_errors: false });
+    const [rows] = await pool.query('SELECT ntfy_topic, ntfy_subscribed_npcs, ntfy_subscribe_errors, ntfy_subscribe_downtimes FROM users WHERE id = ?', [req.user.id]);
+    if (!rows.length) return reply.send({ topic: '', subscribed_npcs: [], subscribe_errors: false, subscribe_downtimes: false });
     let npcPrefs = [];
     try { if (rows[0].ntfy_subscribed_npcs) npcPrefs = typeof rows[0].ntfy_subscribed_npcs === 'string' ? JSON.parse(rows[0].ntfy_subscribed_npcs) : rows[0].ntfy_subscribed_npcs; } catch (e) { }
-    reply.send({ topic: rows[0].ntfy_topic, subscribed_npcs: npcPrefs, subscribe_errors: !!rows[0].ntfy_subscribe_errors });
+    reply.send({ topic: rows[0].ntfy_topic, subscribed_npcs: npcPrefs, subscribe_errors: !!rows[0].ntfy_subscribe_errors, subscribe_downtimes: !!rows[0].ntfy_subscribe_downtimes });
   } catch (e) {
     reply.status(500).json({ error: 'Failed to fetch Ntfy topic' });
   }
@@ -1249,11 +1249,11 @@ fastify.post('/api/admin/ntfy/generate', { preHandler: [authRequired, requireAdm
 // Admin: Save Ntfy NPC Preferences
 fastify.post('/api/admin/ntfy/prefs', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   try {
-    const { npc_ids, subscribe_errors } = req.body;
+    const { npc_ids, subscribe_errors, subscribe_downtimes } = req.body;
     const cleanIds = Array.isArray(npc_ids) ? npc_ids.map(Number).filter(n => !isNaN(n)) : [];
 
-    const [oldRows] = await pool.query('SELECT ntfy_topic, ntfy_subscribe_errors FROM users WHERE id = ?', [req.user.id]);
-    await pool.query('UPDATE users SET ntfy_subscribed_npcs = ?, ntfy_subscribe_errors = ? WHERE id = ?', [JSON.stringify(cleanIds), subscribe_errors ? 1 : 0, req.user.id]);
+    const [oldRows] = await pool.query('SELECT ntfy_topic, ntfy_subscribe_errors, ntfy_subscribe_downtimes FROM users WHERE id = ?', [req.user.id]);
+    await pool.query('UPDATE users SET ntfy_subscribed_npcs = ?, ntfy_subscribe_errors = ?, ntfy_subscribe_downtimes = ? WHERE id = ?', [JSON.stringify(cleanIds), subscribe_errors ? 1 : 0, subscribe_downtimes ? 1 : 0, req.user.id]);
 
     if (subscribe_errors && oldRows.length > 0 && !oldRows[0].ntfy_subscribe_errors && oldRows[0].ntfy_topic) {
       const axios = require('axios');
@@ -1261,8 +1261,15 @@ fastify.post('/api/admin/ntfy/prefs', { preHandler: [authRequired, requireAdmin]
         headers: { 'Title': '🦇 System Errors Subscribed', 'Tags': 'vampire,white_check_mark' }
       }).catch(() => { });
     }
+    
+    if (subscribe_downtimes && oldRows.length > 0 && !oldRows[0].ntfy_subscribe_downtimes && oldRows[0].ntfy_topic) {
+      const axios = require('axios');
+      axios.post(`https://ntfy.sh/${oldRows[0].ntfy_topic}`, `You are now subscribed to receive push notifications when players read their Downtime resolutions.`, {
+        headers: { 'Title': '🦇 Downtimes Subscribed', 'Tags': 'vampire,white_check_mark' }
+      }).catch(() => { });
+    }
 
-    reply.send({ success: true, subscribed_npcs: cleanIds, subscribe_errors: !!subscribe_errors });
+    reply.send({ success: true, subscribed_npcs: cleanIds, subscribe_errors: !!subscribe_errors, subscribe_downtimes: !!subscribe_downtimes });
   } catch (e) {
     reply.status(500).json({ error: 'Failed to save Ntfy preferences' });
   }
@@ -3076,6 +3083,47 @@ fastify.put('/api/downtimes/:id', { preHandler: [authRequired] }, async (req, re
   } catch (e) {
     console.error('Failed to update downtime/project:', e);
     reply.status(500).json({ error: 'Internal server error while updating submission' });
+  }
+});
+
+// PATCH /api/downtimes/:id/read - Mark downtime as read by player
+fastify.patch('/api/downtimes/:id/read', { preHandler: [authRequired] }, async (req, reply) => {
+  try {
+    const { id } = req.params;
+
+    // Verify ownership
+    const [rows] = await pool.query(
+      \`SELECT dt.*, c.name as char_name 
+       FROM downtimes dt 
+       JOIN characters c ON dt.character_id = c.id 
+       WHERE dt.id = ? AND c.user_id = ?\`,
+      [id, req.user.id]
+    );
+
+    if (rows.length === 0) {
+      return reply.status(403).send({ error: 'Not authorized or downtime not found' });
+    }
+
+    const dt = rows[0];
+    if (dt.is_read) {
+      return reply.send({ success: true });
+    }
+
+    await pool.query('UPDATE downtimes SET is_read = 1 WHERE id = ?', [id]);
+
+    const { broadcastNtfyAlert } = require('./utils/ntfy');
+    const displayTitle = dt.title.replace('[PROJECT] ', '');
+    broadcastNtfyAlert(\`**${dt.char_name}** has read their downtime resolution for:\n\n> *${displayTitle}*\`, {
+      title: 'Downtime Read',
+      tags: 'eyes,vampire',
+      priority: 'default',
+      requiresSubscription: 'downtimes'
+    }).catch(() => {});
+
+    reply.send({ success: true });
+  } catch (e) {
+    req.log.error(e);
+    reply.status(500).send({ error: 'Failed to mark as read' });
   }
 });
 

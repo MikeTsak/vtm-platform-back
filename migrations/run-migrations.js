@@ -151,6 +151,21 @@ async function runMigrations() {
       if (!e.message.includes('Duplicate column')) log.err("Error adding is_private:", { message: e.message });
     }
 
+    // 10. Downtime Read and Ntfy Setting
+    try {
+      await pool.query(`ALTER TABLE downtimes ADD COLUMN is_read BOOLEAN NOT NULL DEFAULT 0`);
+      log.info("Added is_read to downtimes");
+    } catch (e) {
+      if (!e.message.includes('Duplicate column')) log.err("Error adding is_read:", { message: e.message });
+    }
+
+    try {
+      await pool.query(`ALTER TABLE users ADD COLUMN ntfy_subscribe_downtimes BOOLEAN NOT NULL DEFAULT 0`);
+      log.info("Added ntfy_subscribe_downtimes to users");
+    } catch (e) {
+      if (!e.message.includes('Duplicate column')) log.err("Error adding ntfy_subscribe_downtimes:", { message: e.message });
+    }
+
     log.ok('All migrations completed successfully.');
   } catch (err) {
     log.err('Migration failed:', { error: err.message });
