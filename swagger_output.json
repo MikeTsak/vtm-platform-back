@@ -192,6 +192,9 @@
                   },
                   "subscribe_errors": {
                     "example": "any"
+                  },
+                  "subscribe_downtimes": {
+                    "example": "any"
                   }
                 }
               }
@@ -1573,6 +1576,32 @@
         }
       }
     },
+    "/api/downtimes/{id}/read": {
+      "patch": {
+        "description": "",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        }
+      }
+    },
     "/api/downtimes/mine": {
       "get": {
         "description": "",
@@ -1819,6 +1848,9 @@
       "post": {
         "description": "",
         "responses": {
+          "200": {
+            "description": "OK"
+          },
           "201": {
             "description": "Created"
           },
@@ -1945,6 +1977,9 @@
       "post": {
         "description": "",
         "responses": {
+          "200": {
+            "description": "OK"
+          },
           "201": {
             "description": "Created"
           },
@@ -2353,6 +2388,9 @@
       "post": {
         "description": "",
         "responses": {
+          "200": {
+            "description": "OK"
+          },
           "201": {
             "description": "Created"
           },
@@ -3391,6 +3429,9 @@
       "post": {
         "description": "",
         "responses": {
+          "200": {
+            "description": "OK"
+          },
           "201": {
             "description": "Created"
           },
@@ -3526,6 +3567,9 @@
       "post": {
         "description": "",
         "responses": {
+          "200": {
+            "description": "OK"
+          },
           "201": {
             "description": "Created"
           },
@@ -3556,6 +3600,9 @@
       "post": {
         "description": "",
         "responses": {
+          "200": {
+            "description": "OK"
+          },
           "201": {
             "description": "Created"
           },
@@ -3909,6 +3956,9 @@
       "post": {
         "description": "",
         "responses": {
+          "200": {
+            "description": "OK"
+          },
           "201": {
             "description": "Created"
           },
@@ -4385,6 +4435,9 @@
       "post": {
         "description": "",
         "responses": {
+          "200": {
+            "description": "OK"
+          },
           "201": {
             "description": "Created"
           },
