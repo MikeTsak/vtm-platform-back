@@ -5518,13 +5518,6 @@ fastify.post('/api/push/web-subscribe', { preHandler: [authRequired] }, async (r
 
 
 // --- NEW ROUTE to remove a subscription (e.g., on logout) ---
-// DUP: fastify.post('/api/push/unsubscribe', { preHandler: [authRequired] }, async (req, reply) => {
-// DUP:   // Logic to find and delete the subscription from your DB
-// DUP:   // ...
-// DUP:   reply.send({ ok: true });
-// DUP: });
-
-
 // app.use(attachRequestLogger(...));
 
 // --- DB Init Helpers ---
@@ -5554,12 +5547,15 @@ fastify.post('/api/coteries', { preHandler: [authRequired] }, async (req, reply)
       traits = {},
       required = null,
       backgrounds = [],
+      merits = [],
       flaws = [],
       extras = [],
       points_per_member = 1,
       bonus_points = 0,
       coterie_xp = 0,
-      members = []
+      members = [],
+      concept = null,
+      rules_override = false
     } = req.body || {};
 
     if (!name || !Array.isArray(members) || members.length < 3) {
@@ -5590,8 +5586,8 @@ fastify.post('/api/coteries', { preHandler: [authRequired] }, async (req, reply)
 
     const [ins] = await pool.query(
       `INSERT INTO coteries
-       (name, type, domain_id, chasse, lien, portillon, required_json, backgrounds_json, flaws_json, extras_json, points_per_member, bonus_points, coterie_xp, created_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       (name, type, domain_id, chasse, lien, portillon, required_json, backgrounds_json, flaws_json, extras_json, points_per_member, bonus_points, coterie_xp, created_by, concept, merits_json, rules_override)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         name.trim(),
         type || null,
@@ -5604,7 +5600,10 @@ fastify.post('/api/coteries', { preHandler: [authRequired] }, async (req, reply)
         Math.min(2, Math.max(1, Number(points_per_member || 1))),
         Number(bonus_points || 0),
         Number.isFinite(coterie_xp) ? coterie_xp : 0,
-        req.user.id
+        req.user.id,
+        concept ? concept.trim() : null,
+        JSON.stringify(merits || []),
+        rules_override ? 1 : 0
       ]
     );
     const coterieId = ins.insertId;
@@ -5630,7 +5629,7 @@ fastify.post('/api/coteries', { preHandler: [authRequired] }, async (req, reply)
     const [[row]] = await pool.query(`SELECT * FROM coteries WHERE id=?`, [coterieId]);
     log.ok('Coterie created', { id: coterieId, by_user_id: req.user.id });
     broadcastNtfyAlert(`A new Coterie **"${name}"** was just formed!`, { title: 'New Coterie', tags: 'shield', priority: 'default' });
-    reply.status(201).json({ coterie: row });
+    reply.status(201).json({ coterie: mapCoterie(row) });
   } catch (e) {
     log.err('Create coterie failed', { message: e.message, stack: e.stack });
     reply.status(500).json({ error: 'Failed to create coterie' });
@@ -5666,7 +5665,7 @@ fastify.get('/api/coteries', { preHandler: [authRequired] }, async (req, reply) 
   try {
     if (req.user.role === 'admin' || req.user.permission_level === 'admin') {
       const [rows] = await pool.query(`SELECT * FROM coteries ORDER BY updated_at DESC`);
-      return reply.send({ coteries: rows });
+      return reply.send({ coteries: rows.map(mapCoterie) });
     }
     const [rows] = await pool.query(`
       SELECT c.*
@@ -5675,7 +5674,7 @@ fastify.get('/api/coteries', { preHandler: [authRequired] }, async (req, reply) 
       WHERE m.user_id=?
       ORDER BY c.updated_at DESC
     `, [req.user.id]);
-    reply.send({ coteries: rows });
+    reply.send({ coteries: rows.map(mapCoterie) });
   } catch (e) {
     log.err('List coteries failed', { message: e.message });
     reply.status(500).json({ error: 'Failed to load coteries' });
@@ -5696,7 +5695,7 @@ fastify.get('/api/coteries/:id', { preHandler: [authRequired] }, async (req, rep
     }
 
     const [members] = await pool.query(`SELECT user_id, display_name FROM coterie_members WHERE coterie_id=?`, [id]);
-    reply.send({ coterie: c, members });
+    reply.send({ coterie: mapCoterie(c), members });
   } catch (e) {
     log.err('Read coterie failed', { message: e.message, stack: e.stack });
     reply.status(500).json({ error: 'Failed to load coterie' });
@@ -5721,11 +5720,14 @@ fastify.put('/api/coteries/:id', { preHandler: [authRequired] }, async (req, rep
       traits = {},
       required = null,
       backgrounds = [],
+      merits = [],
       flaws = [],
       extras = [],
       points_per_member,
       bonus_points,
-      coterie_xp
+      coterie_xp,
+      concept,
+      rules_override
     } = req.body || {};
 
     const fields = [];
@@ -5739,17 +5741,20 @@ fastify.put('/api/coteries/:id', { preHandler: [authRequired] }, async (req, rep
     }
     if (required !== undefined) { fields.push('required_json=?'); params.push(required ? JSON.stringify(required) : null); }
     if (backgrounds !== undefined) { fields.push('backgrounds_json=?'); params.push(JSON.stringify(backgrounds || [])); }
+    if (merits !== undefined) { fields.push('merits_json=?'); params.push(JSON.stringify(merits || [])); }
     if (flaws !== undefined) { fields.push('flaws_json=?'); params.push(JSON.stringify(flaws || [])); }
     if (extras !== undefined) { fields.push('extras_json=?'); params.push(JSON.stringify(extras || [])); }
     if (points_per_member !== undefined) { fields.push('points_per_member=?'); params.push(Math.min(2, Math.max(1, Number(points_per_member || 1)))); }
     if (bonus_points !== undefined) { fields.push('bonus_points=?'); params.push(Number(bonus_points || 0)); }
     if (coterie_xp !== undefined) { fields.push('coterie_xp=?'); params.push(Number(coterie_xp || 0)); }
+    if (concept !== undefined) { fields.push('concept=?'); params.push(concept ? concept.trim() : null); }
+    if (rules_override !== undefined) { fields.push('rules_override=?'); params.push(rules_override ? 1 : 0); }
 
     if (!fields.length) return reply.send({ ok: true });
 
     await pool.query(`UPDATE coteries SET ${fields.join(', ')} WHERE id=?`, [...params, id]);
     const [[row]] = await pool.query(`SELECT * FROM coteries WHERE id=?`, [id]);
-    reply.send({ coterie: row });
+    reply.send({ coterie: mapCoterie(row) });
   } catch (e) {
     log.err('Update coterie failed', { message: e.message });
     reply.status(500).json({ error: 'Failed to update coterie' });
