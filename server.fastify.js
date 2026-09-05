@@ -86,43 +86,32 @@ const VAR_EXPIRES = process.env.EMAILJS_VAR_EXPIRES || 'expires_minutes';
 
 // Install global handlers to catch crashes and unhandled promise rejections
 installProcessHandlers();
+const bootStartedAt = Date.now();
+const { startBootProgress, pluginLoaded, printReadyBanner } = require('./utils/bootBanner');
+
 const asciiArt = `
-                       .-+#%%@@@@@@@@@@@@@@@%%*=:                       
-                     %@@@@@@@@%#**+++++**#%@@@@@@@@+                    
-                     #-*%@@@@%%####***####%%@@@@%===                    
-                     :.+@* :@+==---------=+*# .@@:..                    
-                  :@@: -@*.%                =*.@@  #@#                  
-               .%@@@@  -@*+=                 %.@@   @@@@=.              
-             =@@*%@@%  -@**-                 #:@@   @@@#%@#.            
-           -@@*+@%%@@. -@*++                 %.@@  -@@*@*+#@%.          
-         .@@*++@%+%#@% -@* @@@@@@@@@@@@@@@@@@+.@@ :@%%#+@*++%@+         
-        -@%+++#@++@*+@@*@* :@@@@@@@@@@@@@@@@* .@@#@%+%#+*@+++*@%.       
-       *@#++++@+++%#++*%@@@@#%@@@@@@@@@@@@@*%@@@@#+++%#++%#++++%@.      
-      +@*++++#@+++#%+++*@%*%@#+%@@@@@@@@@*+@@#*@@++++@*++*@+++++%@:     
-     -@*+++++%#+++*@+++#@@+++#@*+#@@@@@*+%@*++*@@*++*@++++@*+++++@@.    
-    :@*++++++@*++++@*++*%#+++++@**%@@@#+%%+++++%%+++@#++++%#++++++@*    
-    *@+++++++@*++++*@++@@@#+%**@@:#+#%:*@%+%**@@@#++@+++++%#++++++*@:   
-    @*+@-  .%@%*  :@@%#@@@===   *% :* :@-   #.#@@#@@%*. .%@@*  .*%+%#   
-   -%%.      ==     .@.-@*   .#*   :*   :%-   .@@ =#      #.      *#%   
-   =@:                .-@*  =*.    .*     :%: .@@ .                *%   
-   -*                  -@* *-      :*       #:.@@                  .%   
-    :                  -@*=*       :#       .%.@@                   -   
-                       -@**:    .+@@@@#:     *:@@                       
-                       -@**:  *@@@@@@@@@@%-  *:@@                       
-                       -@*=@@@@@@@@@@@@@@@@@%%.@@                       
-                       -@* *@@@@@@@@@@@@@@@@@:.@@                       
-                      -@@%:.=*#%@@@@@@@@@%#*:.-@@*                      
-                     %%+--*%@@@@@@@@@@@@@@@@@#+:=#@=                    
-                     +@@@@@@@@@@@@@@@@@@@@@@@@@@@@%.                    
-                           .:-==++++++++==--:.
-
+         %@@@@@@@@@@@@@@@
+         #*@@@%##*##%@@@=
+      .@@@-@%        %@@#@@=
+    -@@@@@-@*        %@@-@@@@%
+   @@*@%@@@@@@@@@@@@@@@@@%#@+@@.
+  @@+#@+%+%@@@@@@@@@@@@@+@#%@+%@:
+ @@++@#+@*#@+#@#@@@%@+@@+@++@++@@
+ @@++@%+@@@@#%@@#%@@%#@@@@+%@*+%@#
+=@.  ==  @-@ *# :* %%:@@#   #   #%
+-*        -@*-  :#   %@@        .%
+          -@* @@@@@@-*@@
+          -@@@@@@@@@@@@@
+         %@@%@@@@@@@@@@@@
+         +@@@@@@@@@@@@@@%
 `;
-
 console.log(asciiArt);
-console.log('======================================================');
-console.log('🦇 Erebus Portal Backend v1.0.0 (Vampire: The Masquerade)');
-console.log(`💻 Node.js: ${process.version}`);
-console.log('======================================================\n');
+console.log('🦇 Erebus Portal API');
+
+startBootProgress([
+  'multipart', 'helmet', 'cors', 'cookie', 'static', 'compression',
+  'swagger', 'swagger-ui', 'dashboard', 'auth', 'users', 'characters', 'wiki',
+]);
 
 log.start('API booting…');
 
@@ -195,7 +184,7 @@ fastify.setErrorHandler(async (error, request, reply) => {
 // ------------------------------------------------------------------------
 
 const multipart = require('@fastify/multipart');
-fastify.register(multipart, { limits: { fileSize: 50 * 1024 * 1024 } }); fastify.after(() => console.log("Finished loading plugin 1"));
+fastify.register(multipart, { limits: { fileSize: 50 * 1024 * 1024 } }); fastify.after(() => pluginLoaded('multipart'));
 
 // CORS: In production, set CORS_ORIGIN env var to your frontend URL (comma-separated
 // for more than one). Auth now travels as an httpOnly cookie (credentials: true
@@ -238,24 +227,24 @@ fastify.register(helmet, {
       upgradeInsecureRequests: [],
     },
   },
-}); fastify.after(() => console.log("Finished loading plugin 2"));
+}); fastify.after(() => pluginLoaded('helmet'));
 fastify.register(cors, {
   origin: corsOrigin,
   credentials: true,
   methods: ['GET', 'PUT', 'POST', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'Pragma', 'Expires', 'Idempotency-Key', 'X-Requested-With', 'Accept']
-}); fastify.after(() => console.log("Finished loading plugin 3"));
+}); fastify.after(() => pluginLoaded('cors'));
 // Session JWT lives in an httpOnly cookie (see utils/authCookie.js) — this
 // decorates req.cookies / reply.setCookie / reply.clearCookie.
-fastify.register(require('@fastify/cookie')); fastify.after(() => console.log("Finished loading plugin cookie"));
+fastify.register(require('@fastify/cookie')); fastify.after(() => pluginLoaded('cookie'));
 
 fastify.register(require('@fastify/static'), {
   root: path.join(__dirname, 'public'),
   prefix: '/public/',
-}); fastify.after(() => console.log("Finished loading plugin 4"));
+}); fastify.after(() => pluginLoaded('static'));
 // trust proxy disabled by default in fastify
 // Add compression middleware
-fastify.register(compression); fastify.after(() => console.log("Finished loading plugin 5"));
+fastify.register(compression); fastify.after(() => pluginLoaded('compression'));
 // Increase payload limit to 70MB for Base64 image uploads
 // app.use(express.json());
 // app.use(express.urlencoded());
@@ -271,7 +260,7 @@ fastify.register(fastifySwagger, {
   specification: {
     document: swaggerSpec,
   },
-}); fastify.after(() => console.log("Finished loading plugin 7"));
+}); fastify.after(() => pluginLoaded('swagger'));
 fastify.register(fastifySwaggerUi, {
   routePrefix: '/api-docs',
   uiConfig: {
@@ -280,7 +269,7 @@ fastify.register(fastifySwaggerUi, {
   },
   staticCSP: true, // Swagger UI sets its own CSP for its bundled assets, independent of the strict global policy above
   exposeRoute: true
-}); fastify.after(() => console.log("Finished loading plugin 8"));
+}); fastify.after(() => pluginLoaded('swagger-ui'));
 
 // Disable caching for all admin API routes to prevent 304 errors
 fastify.addHook('preHandler', async (request, reply) => { if (request.url.startsWith('/api/admin')) { reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, private'); } });
@@ -961,7 +950,7 @@ function formatDate(d) {
 // ==========================================
 // --- NEW MODULAR ROUTES ---
 // ==========================================
-fastify.register(require('./routes/dashboard.fastify'), { prefix: '/api/home' }); fastify.after(() => console.log("Finished loading plugin 9"));
+fastify.register(require('./routes/dashboard.fastify'), { prefix: '/api/home' }); fastify.after(() => pluginLoaded('dashboard'));
 
 // ==========================================
 // --- GLOBAL BANNER ROUTES ---
@@ -1612,16 +1601,16 @@ fastify.register(require('./routes/auth'), {
   broadcastNtfyAlert,
   // We use this fallback since it might not be globally imported here
   sendResetEmailWithEmailJS: (typeof sendResetEmailWithEmailJS === 'function') ? sendResetEmailWithEmailJS : null
-}); fastify.after(() => console.log("Finished loading plugin 10"));
+}); fastify.after(() => pluginLoaded('auth'));
 
 fastify.register(require('./routes/users'), {
   prefix: '/api/users',
   authRequired
-}); fastify.after(() => console.log("Finished loading plugin 11"));
+}); fastify.after(() => pluginLoaded('users'));
 
 
-fastify.register(require('./routes/characters'), { pool, log, authRequired, moderateLimiter, requireAdmin, validateRetainerSheet, getMimeType, sharp, imageClient, broadcastNtfyAlert }); fastify.after(() => console.log("Finished loading plugin 12"));
-fastify.register(require('./routes/wiki'), { pool, log, authRequired, requireAdmin, imageClient }); fastify.after(() => console.log("Finished loading plugin wiki"));
+fastify.register(require('./routes/characters'), { pool, log, authRequired, moderateLimiter, requireAdmin, validateRetainerSheet, getMimeType, sharp, imageClient, broadcastNtfyAlert }); fastify.after(() => pluginLoaded('characters'));
+fastify.register(require('./routes/wiki'), { pool, log, authRequired, requireAdmin, imageClient }); fastify.after(() => pluginLoaded('wiki'));
 /* -------------------- XP Spend -------------------- */
 fastify.post('/api/characters/xp/spend', { preHandler: [authRequired] }, async (req, reply) => {
   const {
@@ -3086,41 +3075,45 @@ fastify.put('/api/downtimes/:id', { preHandler: [authRequired] }, async (req, re
   }
 });
 
-// PATCH /api/downtimes/:id/read - Mark downtime as read by player
-fastify.patch('/api/downtimes/:id/read', { preHandler: [authRequired] }, async (req, reply) => {
+// PATCH /api/downtimes/read-batch - Mark multiple downtimes as read
+fastify.patch('/api/downtimes/read-batch', { preHandler: [authRequired] }, async (req, reply) => {
   try {
-    const { id } = req.params;
+    const { ids } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) return reply.send({ success: true });
 
-    // Verify ownership
+    // Verify ownership and get data
     const [rows] = await pool.query(
       `SELECT dt.*, c.name as char_name 
        FROM downtimes dt 
        JOIN characters c ON dt.character_id = c.id 
-       WHERE dt.id = ? AND c.user_id = ?`,
-      [id, req.user.id]
+       WHERE dt.id IN (?) AND c.user_id = ? AND dt.is_read = 0`,
+      [ids, req.user.id]
     );
 
     if (rows.length === 0) {
-      return reply.status(403).send({ error: 'Not authorized or downtime not found' });
-    }
-
-    const dt = rows[0];
-    if (dt.is_read) {
       return reply.send({ success: true });
     }
 
-    await pool.query('UPDATE downtimes SET is_read = 1 WHERE id = ?', [id]);
+    const validIds = rows.map(r => r.id);
+    await pool.query('UPDATE downtimes SET is_read = 1 WHERE id IN (?)', [validIds]);
 
     const { broadcastNtfyAlert } = require('./utils/ntfy');
-    const displayTitle = dt.title.replace('[PROJECT] ', '');
-    broadcastNtfyAlert(`**${dt.char_name}** has read their downtime resolution for:\n\n> *${displayTitle}*`, {
+    const charName = rows[0].char_name;
+    const titles = rows.map(dt => dt.title.replace('[PROJECT] ', ''));
+    
+    let msg = `**${charName}** has read their downtime resolution for:\n\n`;
+    titles.forEach(t => {
+      msg += `> *${t}*\n`;
+    });
+
+    broadcastNtfyAlert(msg, {
       title: 'Downtime Read',
       tags: 'eyes,vampire',
       priority: 'default',
       requiresSubscription: 'downtimes'
     }).catch(() => {});
 
-    reply.send({ success: true });
+    reply.send({ success: true, updated: validIds.length });
   } catch (e) {
     req.log.error(e);
     reply.status(500).send({ error: 'Failed to mark as read' });
@@ -8172,7 +8165,14 @@ fastify.post('/api/admin/masquerade-threat', { preHandler: [authRequired, requir
 fastify.get('/api/admin/coteries', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   try {
     const [coteries] = await pool.query('SELECT * FROM coteries');
-    const [members] = await pool.query('SELECT cm.*, c.name as char_name FROM coterie_members cm JOIN characters c ON cm.user_id = c.user_id');
+    // Joins on the recorded character_id rather than user_id: the old join
+    // duplicated rows (and picked an arbitrary name) for any user holding
+    // more than one character, and dropped members whose character was gone.
+    const [members] = await pool.query(
+      `SELECT cm.*, COALESCE(c.name, cm.display_name) AS char_name, c.clan
+         FROM coterie_members cm
+         LEFT JOIN characters c ON c.id = cm.character_id`
+    );
     reply.send({ coteries, members });
   } catch (e) {
     reply.status(500).json({ error: 'Failed to fetch coteries' });
@@ -8404,13 +8404,29 @@ io.on('connection', (socket) => {
   });
 
   socket.on('chat_message', (payload) => {
-    io.to(`session_${payload.sessionId}`).emit('chat_message', payload);
+    if (!payload || !payload.sessionId) return;
+    const room = `session_${payload.sessionId}`;
+    // socket.rooms is server-maintained state — the only way into a room is
+    // the membership-checked join_session handler above, so this is an
+    // authoritative check that this socket was actually let into this
+    // session, not something a client can fake by just sending a sessionId.
+    if (!socket.rooms.has(room)) return;
+
+    // Overwrite (not merge-if-missing) sender identity from the verified
+    // socket.user, discarding whatever the client put in the payload —
+    // otherwise any authenticated socket could put an arbitrary sender in
+    // the payload and impersonate someone else in a session it may not even
+    // belong to.
+    io.to(room).emit('chat_message', {
+      ...payload,
+      senderId: socket.user.id,
+      senderName: socket.user.display_name,
+    });
   });
 });
 
 fastify.decorate('io', io);
 
-console.log("[TRACE] Before fastify.ready");
 fastify.listen({ port: PORT, host: '0.0.0.0' }, async (err, address) => {
   if (err) {
     log.err(`API server failed to start`, { error: err.message });
@@ -8418,6 +8434,12 @@ fastify.listen({ port: PORT, host: '0.0.0.0' }, async (err, address) => {
     process.exit(1);
   }
   log.start(`API server started on ${address}`, { port: PORT, env: process.env.NODE_ENV || 'stable' });
+  printReadyBanner({
+    address,
+    env: process.env.NODE_ENV || 'stable',
+    nodeVersion: process.version,
+    bootMs: Date.now() - bootStartedAt,
+  });
 
   // Track server start
   try {

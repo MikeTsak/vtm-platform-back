@@ -100,6 +100,14 @@ function buildTestApp(pool) {
     authRequired,
   });
 
+  app.register(require('../../routes/coteries'), {
+    pool,
+    log: testLog,
+    authRequired,
+    requireAdmin,
+    broadcastNtfyAlert: noop,
+  });
+
   return app;
 }
 

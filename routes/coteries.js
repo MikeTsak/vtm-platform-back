@@ -30,6 +30,16 @@ const safeParse = (val, fallback) => {
   }
 };
 
+// Re-serialises a JSON column for binding back into a statement. mysql2
+// returns MariaDB JSON columns already parsed, and binding a JS array as a
+// query parameter makes the driver expand it into a comma-separated list
+// (an empty array expands to nothing and produces a syntax error), so a
+// value read out of a row can never be written straight back in.
+const jsonColumn = (val, fallback) => {
+  const parsed = safeParse(val, fallback);
+  return parsed == null ? null : JSON.stringify(parsed);
+};
+
 // Shapes a raw `coteries` row into the object the client consumes, with the
 // derived V5 mechanics attached so the sheet does not have to recompute them.
 function presentCoterie(row, members = []) {
@@ -418,15 +428,20 @@ module.exports = async function (fastify, opts) {
           : existing.concept,
         merged.domainId ? Number(merged.domainId) : null,
         check.traits.chasse, check.traits.lien, check.traits.portillon,
+        // Carried-over JSON columns are re-stringified rather than passed
+        // through. mysql2 hands MariaDB JSON columns back already parsed, and
+        // binding a JS array as a parameter makes the driver expand it into a
+        // comma-separated list — an empty one expands to nothing and breaks
+        // the statement.
         body.required !== undefined
           ? (body.required ? JSON.stringify(body.required) : null)
-          : existing.required_json,
+          : jsonColumn(existing.required_json, null),
         JSON.stringify(check.backgrounds),
         JSON.stringify(check.merits),
         JSON.stringify(check.flaws),
         body.extras !== undefined
           ? JSON.stringify(Array.isArray(body.extras) ? body.extras : [])
-          : existing.extras_json,
+          : jsonColumn(existing.extras_json, []),
         check.pointsPerMember,
         Number(merged.bonusPoints) || 0,
         rulesOverride ? 1 : 0,
