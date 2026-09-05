@@ -191,7 +191,7 @@ fastify.register(multipart, { limits: { fileSize: 50 * 1024 * 1024 } }); fastify
 // below), so — unlike a Bearer-token API — reflecting *any* calling origin here
 // would let an arbitrary website ride a logged-in visitor's session cookie. Never
 // fall back to "allow all"; fall back to the known app origins instead.
-const DEFAULT_CORS_ORIGINS = ['https://portal.attlarp.gr', 'http://localhost:3002', 'http://127.0.0.1:3002'];
+const DEFAULT_CORS_ORIGINS = ['https://portal.attlarp.gr', 'http://localhost:3002', 'http://127.0.0.1:3002', 'https://h.attlarp.gr'];
 const corsOrigin = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
   : DEFAULT_CORS_ORIGINS;
