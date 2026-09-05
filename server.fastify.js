@@ -5051,7 +5051,7 @@ fastify.get('/api/domain-claims/:division/problems', { preHandler: [authRequired
 });
 
 /** Court/admin: set (or clear, via null) a division's Masquerade safety rating */
-fastify.patch('/api/domain-claims/:division/safety', { preHandler: [authRequired, requireCourt] }, async (req, reply) => {
+fastify.patch('/api/domain-claims/:division/safety', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   const division = Number(req.params.division);
   if (!Number.isInteger(division)) return reply.status(400).json({ error: 'division must be an integer' });
 
@@ -5570,6 +5570,20 @@ fastify.post('/api/coteries', { preHandler: [authRequired] }, async (req, reply)
       if (!isMember) return reply.status(403).json({ error: 'You must include yourself in the coterie' });
     }
 
+    const xpCost = Number(bonus_points || 0) * 3;
+    let ch = null;
+
+    if (xpCost > 0) {
+      const [rows] = await pool.query('SELECT * FROM characters WHERE user_id=?', [req.user.id]);
+      ch = rows[0];
+      if (!ch) {
+        return reply.status(400).json({ error: 'You must have a character to spend XP on a Coterie.' });
+      }
+      if ((ch.xp || 0) < xpCost) {
+        return reply.status(400).json({ error: `Not enough XP to contribute ${bonus_points} dots (need ${xpCost}, have ${ch.xp})` });
+      }
+    }
+
     const chasse = Number(traits.chasse || 0);
     const lien = Number(traits.lien || 0);
     const portillon = Number(traits.portillon || 0);
@@ -5601,6 +5615,16 @@ fastify.post('/api/coteries', { preHandler: [authRequired] }, async (req, reply)
         `INSERT INTO coterie_members (coterie_id, user_id, display_name) VALUES ?`,
         [values]
       );
+    }
+
+    if (xpCost > 0 && ch) {
+      await pool.query('UPDATE characters SET xp = xp - ? WHERE id=?', [xpCost, ch.id]);
+      try {
+        await pool.query(
+          'INSERT INTO xp_log (character_id, action, target, from_level, to_level, cost, payload) VALUES (?,?,?,?,?,?,?)',
+          [ch.id, 'coterie_creation', name.trim(), 0, bonus_points, xpCost, JSON.stringify({ coterie_id: coterieId })]
+        );
+      } catch (_) { /* ignore */ }
     }
 
     const [[row]] = await pool.query(`SELECT * FROM coteries WHERE id=?`, [coterieId]);
@@ -6272,8 +6296,8 @@ async function getSessionInternalId(codeOrId) {
   return rows[0]?.id;
 }
 
-// Create a new live session (Generates an 8-character Code) - CHANGED TO requireCourt
-fastify.post('/api/live-session', { preHandler: [authRequired, requireCourt, moderateLimiter] }, async (req, reply) => {
+// Create a new live session (Generates an 8-character Code) - CHANGED TO requireAdmin
+fastify.post('/api/live-session', { preHandler: [authRequired, requireAdmin, moderateLimiter] }, async (req, reply) => {
   try {
     const { name } = req.body;
 
@@ -6300,8 +6324,8 @@ fastify.post('/api/live-session', { preHandler: [authRequired, requireCourt, mod
   }
 });
 
-// End an active live session - CHANGED TO requireCourt
-fastify.post('/api/live-session/:id/end', { preHandler: [authRequired, requireCourt] }, async (req, reply) => {
+// End an active live session - CHANGED TO requireAdmin
+fastify.post('/api/live-session/:id/end', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   try {
     const [rows] = await pool.query('SELECT id, created_at, status FROM live_sessions WHERE session_code=? OR id=?', [req.params.id, req.params.id]);
     if (!rows.length) return reply.status(404).json({ error: 'Session not found' });
@@ -6323,8 +6347,8 @@ fastify.post('/api/live-session/:id/end', { preHandler: [authRequired, requireCo
   }
 });
 
-// Admin/ST: List all historical sessions - CHANGED TO requireCourt
-fastify.get('/api/admin/live-sessions', { preHandler: [authRequired, requireCourt] }, async (req, reply) => {
+// Admin/ST: List all historical sessions - CHANGED TO requireAdmin
+fastify.get('/api/admin/live-sessions', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   try {
     const [sessions] = await pool.query(`
       SELECT s.*, u.display_name as st_name,
@@ -6471,7 +6495,7 @@ fastify.get('/api/live-session/:id/players', { preHandler: [authRequired] }, asy
 });
 
 // Update Session Metadata
-fastify.patch('/api/live-session/:id/metadata', { preHandler: [authRequired, requireCourt] }, async (req, reply) => {
+fastify.patch('/api/live-session/:id/metadata', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   try {
     const internalId = await getSessionInternalId(req.params.id);
     const { metadata } = req.body;
@@ -6486,8 +6510,8 @@ fastify.patch('/api/live-session/:id/metadata', { preHandler: [authRequired, req
   }
 });
 
-// Broadcast a message (ST/Admin) - CHANGED TO requireCourt
-fastify.post('/api/live-session/:id/broadcast', { preHandler: [authRequired, requireCourt] }, async (req, reply) => {
+// Broadcast a message (ST/Admin) - CHANGED TO requireAdmin
+fastify.post('/api/live-session/:id/broadcast', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   const internalId = await getSessionInternalId(req.params.id);
   await pool.query('INSERT INTO live_session_broadcasts (session_id, message, target_character_id) VALUES (?, ?, ?)',
     [internalId, req.body.message, req.body.target_character_id || null]);
@@ -6523,8 +6547,8 @@ fastify.get('/api/live-session/:id/broadcast', { preHandler: [authRequired] }, a
   }
 });
 
-// Update a live player's trackers as ST - CHANGED TO requireCourt
-fastify.patch('/api/live-session/:id/players/:charId', { preHandler: [authRequired, requireCourt] }, async (req, reply) => {
+// Update a live player's trackers as ST - CHANGED TO requireAdmin
+fastify.patch('/api/live-session/:id/players/:charId', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   try {
     const charId = req.params.charId;
     const { hungerDelta, healthSupDelta, healthAggDelta, wpSupDelta, wpAggDelta, humanityDelta, frenzyState, forceRouseCheck } = req.body;

@@ -241,7 +241,7 @@ function computePool({ memberCount, pointsPerMember, bonusPoints, flaws }) {
 // type, subtract the listed costs from the coterie pool."
 function computeSpend({ traits, backgrounds, merits }) {
   const t = traits || {};
-  const domain = DOMAIN_TRAITS.reduce((n, k) => n + (Number(t[k]) || 0), 0);
+  const domain = ['lien', 'portillon'].reduce((n, k) => n + (Number(t[k]) || 0), 0);
   const bg = sumDots(backgrounds);
   const mr = sumDots(merits);
   return { domain, backgrounds: bg, merits: mr, total: domain + bg + mr };

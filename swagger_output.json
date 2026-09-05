@@ -68,6 +68,26 @@
         }
       }
     },
+    "/api/admin/backfill-avatar-thumbs/stream": {
+      "get": {
+        "description": "",
+        "responses": {
+          "default": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/api/admin/migrate-avatars-to-cdn/stream": {
+      "get": {
+        "description": "",
+        "responses": {
+          "default": {
+            "description": ""
+          }
+        }
+      }
+    },
     "/api/admin/system/banner": {
       "post": {
         "description": "",
@@ -1382,6 +1402,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -1429,6 +1456,13 @@
             "name": "id",
             "in": "path",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
             "schema": {
               "type": "string"
             }
@@ -1779,6 +1813,13 @@
             "name": "id",
             "in": "path",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
             "schema": {
               "type": "string"
             }
@@ -5540,6 +5581,13 @@
             "name": "id",
             "in": "path",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
             "schema": {
               "type": "string"
             }
