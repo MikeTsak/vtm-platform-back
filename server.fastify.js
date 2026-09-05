@@ -2477,7 +2477,7 @@ fastify.get('/api/chat/media/:id', { preHandler: [authRequired] }, async (req, r
     reply.header('Cache-Control', 'private, max-age=31536000');
     reply.send(data);
   } catch (e) {
-    reply.status(404).end();
+    reply.status(404).send('Not found');
   }
 });
 
@@ -6932,7 +6932,7 @@ fastify.get('/api/news/media/:id', async (req, reply) => {
       reply.send(data);
     }
   } catch (e) {
-    reply.status(404).end();
+    reply.status(404).send('Not found');
   }
 });
 
