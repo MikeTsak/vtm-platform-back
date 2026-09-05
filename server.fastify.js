@@ -5008,6 +5008,117 @@ fastify.post('/api/domain-claims/requests/:requestId/:action', { preHandler: [au
   }
 });
 
+/* -------------------- Court-Level Domain Assignment -------------------- */
+
+/** Court/admin: list active characters + non-disabled NPCs for the assign dropdowns */
+fastify.get('/api/court/characters-and-npcs', { preHandler: [authRequired, requireCourt] }, async (req, reply) => {
+  try {
+    const [characters] = await pool.query(
+      `SELECT c.id, c.name, c.clan, u.display_name AS player_name
+       FROM characters c
+       JOIN users u ON u.id = c.user_id
+       ORDER BY c.name ASC`
+    );
+    const [npcs] = await pool.query(
+      `SELECT id, name, clan
+       FROM npcs
+       WHERE (is_disabled IS NULL OR is_disabled = 0)
+         AND (is_deceased IS NULL OR is_deceased = 0)
+       ORDER BY name ASC`
+    );
+    reply.send({ characters, npcs });
+  } catch (err) {
+    log.err('GET /api/court/characters-and-npcs failed', { error: err.message });
+    reply.status(500).send({ error: 'Database error fetching assignables' });
+  }
+});
+
+/** Court/admin: directly assign a division to a character or NPC, or unassign it */
+fastify.post('/api/court/domain-claims/:division/assign', { preHandler: [authRequired, requireCourt] }, async (req, reply) => {
+  const division = Number(req.params.division);
+  if (!Number.isInteger(division)) {
+    return reply.status(400).send({ error: 'division must be an integer' });
+  }
+
+  const { character_id, npc_id, color, unassign } = req.body || {};
+
+  try {
+    if (unassign) {
+      // ── Unassign: preserve previous owner history, same as vacate ──
+      const [[row]] = await pool.query('SELECT * FROM domain_claims WHERE division=?', [division]);
+      if (!row) return reply.status(404).send({ error: 'Division has no claim to unassign' });
+      if (!row.owner_character_id && !row.owner_npc_id && !row.is_abaton && !(row.owner_name && row.owner_name.trim())) {
+        return reply.status(409).send({ error: 'Division is already unclaimed' });
+      }
+      await pool.query(
+        `UPDATE domain_claims
+         SET previous_owner_name=?, previous_owner_character_id=?, previous_claimed_at=?,
+             owner_character_id=NULL, owner_npc_id=NULL, owner_name=NULL, color='#888888', is_abaton=0
+         WHERE division=?`,
+        [row.owner_name, row.owner_character_id, row.claimed_at, division]
+      );
+      const [updated] = await pool.query('SELECT * FROM domain_claims WHERE division=?', [division]);
+      log.adm('Court unassigned domain', { court_user: req.user.id, division });
+      return reply.send({ claim: updated[0] });
+    }
+
+    // ── Assign ──
+    if (character_id != null && npc_id != null) {
+      return reply.status(400).send({ error: 'Provide character_id OR npc_id, not both' });
+    }
+    if (character_id == null && npc_id == null) {
+      return reply.status(400).send({ error: 'Provide character_id or npc_id, or set unassign: true' });
+    }
+
+    let ownerName = null;
+    let assignCharId = null;
+    let assignNpcId = null;
+
+    if (character_id != null) {
+      const cid = Number(character_id);
+      if (!Number.isInteger(cid)) return reply.status(400).send({ error: 'character_id must be an integer' });
+      const [[ch]] = await pool.query('SELECT id, name FROM characters WHERE id=?', [cid]);
+      if (!ch) return reply.status(404).send({ error: 'Character not found' });
+      assignCharId = cid;
+      ownerName = ch.name;
+    } else {
+      const nid = Number(npc_id);
+      if (!Number.isInteger(nid)) return reply.status(400).send({ error: 'npc_id must be an integer' });
+      const [[npc]] = await pool.query('SELECT id, name FROM npcs WHERE id=?', [nid]);
+      if (!npc) return reply.status(404).send({ error: 'NPC not found' });
+      assignNpcId = nid;
+      ownerName = npc.name;
+    }
+
+    let hex = color;
+    if (typeof hex !== 'string' || !/^#([0-9a-fA-F]{6})$/.test(hex.trim())) {
+      hex = '#' + Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0');
+    }
+
+    const [existingRow] = await pool.query('SELECT division FROM domain_claims WHERE division=?', [division]);
+    if (existingRow.length) {
+      await pool.query(
+        `UPDATE domain_claims
+         SET owner_character_id=?, owner_npc_id=?, owner_name=?, color=?, claimed_at=NOW(), is_abaton=0
+         WHERE division=?`,
+        [assignCharId, assignNpcId, ownerName, hex, division]
+      );
+    } else {
+      await pool.query(
+        'INSERT INTO domain_claims (division, owner_character_id, owner_npc_id, owner_name, color, safety_rating) VALUES (?,?,?,?,?,NULL)',
+        [division, assignCharId, assignNpcId, ownerName, hex]
+      );
+    }
+
+    const [row] = await pool.query('SELECT * FROM domain_claims WHERE division=?', [division]);
+    log.adm('Court assigned domain', { court_user: req.user.id, division, ownerName });
+    reply.send({ claim: row[0] });
+  } catch (err) {
+    log.err('POST /api/court/domain-claims/:division/assign failed', { error: err.message });
+    reply.status(500).send({ error: 'Database error assigning domain' });
+  }
+});
+
 /** Court/admin: release a claimed division back to Unclaimed, preserving the previous owner */
 fastify.post('/api/admin/domain-claims/:division/vacate', { preHandler: [authRequired, requireCourt] }, async (req, reply) => {
   const division = Number(req.params.division);
