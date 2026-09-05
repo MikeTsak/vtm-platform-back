@@ -976,6 +976,30 @@ fastify.get('/api/system/banner', async (req, reply) => {
   }
 });
 
+// reply.hijack() takes the raw response over before @fastify/cors's onSend
+// hook ever runs, so every hand-rolled SSE route below has to set its own
+// CORS headers. A bare '*' only works for a request with no credentials —
+// the three admin SSE routes below all carry the httpOnly session cookie
+// (EventSource is created with withCredentials: true), and browsers refuse
+// to expose ANY response to script for a credentialed request unless
+// Access-Control-Allow-Origin echoes back that one exact origin (plus
+// Access-Control-Allow-Credentials: true) — a wildcard is invalid there and
+// the connection just dies with a generic error event, which is exactly
+// what "Connection lost or failed to stream." looks like. This never shows
+// up testing with curl, since CORS is purely a browser-side enforcement,
+// not something the server itself refuses.
+function sseCorsHeaders(req) {
+  const origin = req.headers.origin;
+  if (origin && corsOrigin.includes(origin)) {
+    return {
+      'Access-Control-Allow-Origin': origin,
+      'Access-Control-Allow-Credentials': 'true',
+      'Vary': 'Origin',
+    };
+  }
+  return {};
+}
+
 // Public: Stream banner updates (SSE)
 fastify.get('/api/system/banner/stream', (req, reply) => {
   reply.hijack();
@@ -983,7 +1007,14 @@ fastify.get('/api/system/banner/stream', (req, reply) => {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': '*'
+    // No credentials on this one (public route), so a wildcard is valid —
+    // kept as '*' rather than echoing origin, on purpose, so it still works
+    // for any caller. X-Accel-Buffering guards against a reverse proxy
+    // (e.g. nginx in front of Apache/Node on Plesk) buffering the whole
+    // response instead of streaming it chunk by chunk, which can otherwise
+    // present as the stream hanging or erroring out.
+    'Access-Control-Allow-Origin': '*',
+    'X-Accel-Buffering': 'no'
   });
   reply.raw.flushHeaders();
 
@@ -1025,7 +1056,8 @@ fastify.get('/api/admin/migrate-media/stream', { preHandler: [authRequired, requ
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': '*'
+    'X-Accel-Buffering': 'no',
+    ...sseCorsHeaders(req)
   });
   reply.raw.flushHeaders();
 
@@ -1088,7 +1120,9 @@ fastify.get('/api/admin/run-migrations/stream', { preHandler: [authRequired, req
   reply.raw.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive'
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+    ...sseCorsHeaders(req)
   });
   reply.raw.flushHeaders();
 
@@ -1159,7 +1193,8 @@ fastify.get('/api/admin/backfill-avatar-thumbs/stream', { preHandler: [authRequi
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': '*'
+    'X-Accel-Buffering': 'no',
+    ...sseCorsHeaders(req)
   });
   reply.raw.flushHeaders();
 
