@@ -12,6 +12,7 @@
     "migrate-npc-avatars": "node migrate-npc-avatars.js",
     "migrate-retainers": "node migrate-retainers.js",
     "migrate-avatar-thumbs": "node migrate-avatar-thumbs.js",
+    "migrate-avatars-to-cdn": "node migrate-avatars-to-cdn.js",
     "migrate-news-urls": "node update_news_urls.js"
   },
   "dependencies": {

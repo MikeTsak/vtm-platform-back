@@ -1252,6 +1252,74 @@ fastify.get('/api/admin/backfill-avatar-thumbs/stream', { preHandler: [authRequi
   });
 });
 
+// Admin: Migrate any leftover avatar BLOBs to the CDN, then clear them
+// (SSE) — same spawn/stream pattern as the routes above, for
+// migrate-avatars-to-cdn.js.
+fastify.get('/api/admin/migrate-avatars-to-cdn/stream', { preHandler: [authRequired, requireAdmin] }, (req, reply) => {
+  reply.hijack();
+  reply.raw.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+    ...sseCorsHeaders(req)
+  });
+  reply.raw.flushHeaders();
+
+  const scripts = ['migrate-avatars-to-cdn.js'];
+  const total = scripts.length;
+  let current = 0;
+
+  const sendEvent = (event, data) => {
+    reply.raw.write(`event: ${event}\n`);
+    reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+    if (reply.raw.flush) reply.raw.flush();
+  };
+
+  sendEvent('start', { total });
+
+  const runNext = () => {
+    if (current >= total) {
+      sendEvent('done', { message: 'Avatar BLOB cleanup complete!' });
+      return setTimeout(() => {
+        reply.raw.end();
+      }, 500);
+    }
+
+    const script = scripts[current];
+    sendEvent('progress', { script, current: current + 1, total });
+    sendEvent('log', `\n--- Running ${script} ---`);
+
+    const child = spawn(process.execPath, [script], { cwd: __dirname });
+
+    child.stdout.on('data', (data) => {
+      sendEvent('log', data.toString());
+    });
+
+    child.stderr.on('data', (data) => {
+      sendEvent('log', `[ERROR] ${data.toString()}`);
+    });
+
+    child.on('close', (code) => {
+      sendEvent('log', `--- ${script} finished with code ${code} ---`);
+      current++;
+      runNext();
+    });
+
+    child.on('error', (err) => {
+      sendEvent('log', `[FATAL] Failed to start ${script}: ${err.message}`);
+      current++;
+      runNext();
+    });
+  };
+
+  runNext();
+
+  req.raw.on('close', () => {
+    reply.raw.end();
+  });
+});
+
 // Admin: Save global banner settings
 fastify.post('/api/admin/system/banner', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   try {
@@ -2898,30 +2966,21 @@ fastify.put('/api/npcs/:id/avatar', { preHandler: [authRequired, requireAdmin] }
       .toBuffer();
 
     const filename = "npcs_" + req.params.id + ".jpg";
-    let avatarUrl = null;
+    const result = await imageClient.uploadImage(buffer, filename);
+    if (!result || !result.success) throw new Error((result && result.error) || 'CDN upload failed');
+    const avatarUrl = result.url;
+
     let avatarUrlThumb = null;
     try {
-      const result = await imageClient.uploadImage(buffer, filename);
-      if (result && result.success) avatarUrl = result.url;
+      const thumbResult = await imageClient.uploadImage(thumbBuffer, "npcs_" + req.params.id + "_thumb.jpg");
+      if (thumbResult && thumbResult.success) avatarUrlThumb = thumbResult.url;
     } catch (imgErr) {
-      log.warn('CDN upload failed for NPC avatar, using DB buffer fallback', { error: imgErr.message });
-    }
-    if (avatarUrl) {
-      try {
-        const thumbResult = await imageClient.uploadImage(thumbBuffer, "npcs_" + req.params.id + "_thumb.jpg");
-        if (thumbResult && thumbResult.success) avatarUrlThumb = thumbResult.url;
-      } catch (imgErr) {
-        log.warn('CDN thumb upload failed for NPC avatar', { error: imgErr.message });
-      }
+      log.warn('CDN thumb upload failed for NPC avatar', { error: imgErr.message });
     }
 
-    // Only keep the binary fallback in the DB when the CDN upload failed —
-    // avoids duplicating every avatar image into MySQL on the common path.
-    if (avatarUrl) {
-      await pool.query('UPDATE npcs SET avatar_url = ?, avatar_url_thumb = ?, avatar = NULL WHERE id = ?', [avatarUrl, avatarUrlThumb, req.params.id]);
-    } else {
-      await pool.query('UPDATE npcs SET avatar_url = NULL, avatar_url_thumb = NULL, avatar = ? WHERE id = ?', [buffer, req.params.id]);
-    }
+    // CDN-only — no BLOB fallback (see migrate-avatars-to-cdn.js for the
+    // one-off cleanup of any avatars still stored as bytes from before).
+    await pool.query('UPDATE npcs SET avatar_url = ?, avatar_url_thumb = ?, avatar = NULL WHERE id = ?', [avatarUrl, avatarUrlThumb, req.params.id]);
     reply.send({ success: true, message: 'NPC Avatar updated successfully.', url: avatarUrl });
   } catch (e) {
     log.err('NPC Avatar PUT error', { message: e.message });
@@ -2964,30 +3023,21 @@ fastify.put('/api/retainers/:id/avatar', { preHandler: [authRequired] }, async (
       .toBuffer();
 
     const filename = "retainers_" + req.params.id + ".jpg";
-    let avatarUrl = null;
+    const result = await imageClient.uploadImage(processedBuffer, filename);
+    if (!result || !result.success) throw new Error((result && result.error) || 'CDN upload failed');
+    const avatarUrl = result.url;
+
     let avatarUrlThumb = null;
     try {
-      const result = await imageClient.uploadImage(processedBuffer, filename);
-      if (result && result.success) avatarUrl = result.url;
+      const thumbResult = await imageClient.uploadImage(thumbBuffer, "retainers_" + req.params.id + "_thumb.jpg");
+      if (thumbResult && thumbResult.success) avatarUrlThumb = thumbResult.url;
     } catch (imgErr) {
-      log.warn('CDN upload failed for retainer, using DB buffer fallback', { error: imgErr.message });
-    }
-    if (avatarUrl) {
-      try {
-        const thumbResult = await imageClient.uploadImage(thumbBuffer, "retainers_" + req.params.id + "_thumb.jpg");
-        if (thumbResult && thumbResult.success) avatarUrlThumb = thumbResult.url;
-      } catch (imgErr) {
-        log.warn('CDN thumb upload failed for retainer', { error: imgErr.message });
-      }
+      log.warn('CDN thumb upload failed for retainer', { error: imgErr.message });
     }
 
-    // Only keep the binary fallback in the DB when the CDN upload failed —
-    // avoids duplicating every avatar image into MySQL on the common path.
-    if (avatarUrl) {
-      await pool.query('UPDATE retainers SET avatar_url = ?, avatar_url_thumb = ?, avatar = NULL WHERE id = ?', [avatarUrl, avatarUrlThumb, req.params.id]);
-    } else {
-      await pool.query('UPDATE retainers SET avatar_url = NULL, avatar_url_thumb = NULL, avatar = ? WHERE id = ?', [processedBuffer, req.params.id]);
-    }
+    // CDN-only — no BLOB fallback (see migrate-avatars-to-cdn.js for the
+    // one-off cleanup of any avatars still stored as bytes from before).
+    await pool.query('UPDATE retainers SET avatar_url = ?, avatar_url_thumb = ?, avatar = NULL WHERE id = ?', [avatarUrl, avatarUrlThumb, req.params.id]);
     reply.send({ success: true, url: avatarUrl });
   } catch (e) {
     log.err('Failed to update retainer avatar', { error: e.message });
@@ -6001,19 +6051,14 @@ fastify.post('/api/admin/premonitions/upload', { preHandler: [authRequired, requ
 
     const ext = originalname ? originalname.split('.').pop() : 'bin';
     const filenameToUpload = 'premonitions_media_' + Date.now() + '.' + ext;
-    let resultUrl = null;
-    try {
-      const result = await imageClient.uploadImage(buffer, filenameToUpload);
-      if (result && result.success) resultUrl = result.url;
-    } catch (imgErr) {
-      log.warn('CDN upload failed for premonition media, using DB buffer fallback', { error: imgErr.message });
-    }
+    const result = await imageClient.uploadImage(buffer, filenameToUpload);
+    if (!result || !result.success) throw new Error((result && result.error) || 'CDN upload failed');
+    const resultUrl = result.url;
 
-    // Only keep the binary fallback in the DB when the CDN upload failed —
-    // avoids duplicating every media file into MySQL on the common path.
+    // CDN-only — no BLOB fallback.
     const [ins] = await pool.query(
-      'INSERT INTO premonition_media (filename, mime, size, data_url, data) VALUES (?,?,?,?,?)',
-      [originalname, mimetype, size, resultUrl, resultUrl ? null : buffer]
+      'INSERT INTO premonition_media (filename, mime, size, data_url, data) VALUES (?,?,?,?,NULL)',
+      [originalname, mimetype, size, resultUrl]
     );
     const media_id = ins.insertId;
 
@@ -6827,22 +6872,17 @@ fastify.post('/api/news/upload', { preHandler: [authRequired] }, async (req, rep
 
     const ext = originalname ? originalname.split('.').pop() : 'bin';
     const filenameToUpload = 'news_media_' + Date.now() + '.' + ext;
-    let resultUrl = null;
-    try {
-      const result = await imageClient.uploadImage(buffer, filenameToUpload);
-      if (result && result.success) resultUrl = result.url;
-    } catch (imgErr) {
-      log.warn('CDN upload failed for news media, using DB buffer fallback', { error: imgErr.message });
-    }
+    const result = await imageClient.uploadImage(buffer, filenameToUpload);
+    if (!result || !result.success) throw new Error((result && result.error) || 'CDN upload failed');
+    const resultUrl = result.url;
 
-    // Only keep the binary fallback in the DB when the CDN upload failed —
-    // avoids duplicating every media file into MySQL on the common path.
+    // CDN-only — no BLOB fallback.
     const [ins] = await pool.query(
-      'INSERT INTO news_media (filename, mime, size, data_url, data) VALUES (?,?,?,?,?)',
-      [originalname, mimetype, size, resultUrl, resultUrl ? null : buffer]
+      'INSERT INTO news_media (filename, mime, size, data_url, data) VALUES (?,?,?,?,NULL)',
+      [originalname, mimetype, size, resultUrl]
     );
 
-    reply.send({ url: resultUrl || `/api/news/media/${ins.insertId}` });
+    reply.send({ url: resultUrl });
   } catch (e) {
     log.err('News upload failed', { message: e.message });
     reply.status(500).send({ error: `Upload failed: ${e.message}` });
@@ -8066,32 +8106,23 @@ fastify.put('/api/users/:id/avatar', { preHandler: [authRequired] }, async (req,
       .toBuffer();
 
     const filename = "users_" + req.params.id + ".jpg";
-    let avatarUrl = null;
+    const result = await imageClient.uploadImage(buffer, filename);
+    if (!result || !result.success) throw new Error((result && result.error) || 'CDN upload failed');
+    const avatarUrl = result.url;
+
+    // Best-effort: the main avatar already succeeded above, so a failed
+    // thumb upload shouldn't fail the whole request.
     let avatarUrlThumb = null;
     try {
-      const result = await imageClient.uploadImage(buffer, filename);
-      if (result && result.success) avatarUrl = result.url;
+      const thumbResult = await imageClient.uploadImage(thumbBuffer, "users_" + req.params.id + "_thumb.jpg");
+      if (thumbResult && thumbResult.success) avatarUrlThumb = thumbResult.url;
     } catch (imgErr) {
-      log.warn('CDN upload failed, using DB buffer fallback', { error: imgErr.message });
-    }
-    // Only bother with the thumb if the full upload actually reached the
-    // CDN — the BLOB fallback path below has no URL to hand out anyway.
-    if (avatarUrl) {
-      try {
-        const thumbResult = await imageClient.uploadImage(thumbBuffer, "users_" + req.params.id + "_thumb.jpg");
-        if (thumbResult && thumbResult.success) avatarUrlThumb = thumbResult.url;
-      } catch (imgErr) {
-        log.warn('CDN thumb upload failed', { error: imgErr.message });
-      }
+      log.warn('CDN thumb upload failed', { error: imgErr.message });
     }
 
-    // Only keep the binary fallback in the DB when the CDN upload failed —
-    // avoids duplicating every avatar image into MySQL on the common path.
-    if (avatarUrl) {
-      await pool.query('UPDATE users SET avatar_url = ?, avatar_url_thumb = ?, avatar = NULL WHERE id = ?', [avatarUrl, avatarUrlThumb, req.params.id]);
-    } else {
-      await pool.query('UPDATE users SET avatar_url = NULL, avatar_url_thumb = NULL, avatar = ? WHERE id = ?', [buffer, req.params.id]);
-    }
+    // CDN-only — no BLOB fallback (see migrate-avatars-to-cdn.js for the
+    // one-off cleanup of any avatars still stored as bytes from before).
+    await pool.query('UPDATE users SET avatar_url = ?, avatar_url_thumb = ?, avatar = NULL WHERE id = ?', [avatarUrl, avatarUrlThumb, req.params.id]);
     reply.send({ success: true, message: 'Avatar updated successfully.', url: avatarUrl });
   } catch (e) {
     log.err('Avatar PUT error', { message: e.message, stack: e.stack });

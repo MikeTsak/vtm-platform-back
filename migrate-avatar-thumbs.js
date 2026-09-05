@@ -19,11 +19,14 @@ if (!apiKey) {
 }
 const imageClient = new VampireImageClient({ baseUrl: 'https://img.miketsak.gr', apiKey });
 
+// email_identities never got a BLOB fallback column — its PUT route throws
+// on a failed CDN upload rather than falling back to storing bytes in MySQL
+// (see the PUT /api/identities/:id/avatar handler), unlike the other three.
 const TABLES = [
-  { table: 'users', prefix: 'users' },
-  { table: 'npcs', prefix: 'npcs' },
-  { table: 'retainers', prefix: 'retainers' },
-  { table: 'email_identities', prefix: 'email_identities' },
+  { table: 'users', prefix: 'users', hasBlob: true },
+  { table: 'npcs', prefix: 'npcs', hasBlob: true },
+  { table: 'retainers', prefix: 'retainers', hasBlob: true },
+  { table: 'email_identities', prefix: 'email_identities', hasBlob: false },
 ];
 
 async function fetchSourceBuffer(row) {
@@ -57,10 +60,12 @@ async function migrate() {
   let totalDone = 0;
   let totalFailed = 0;
 
-  for (const { table, prefix } of TABLES) {
+  for (const { table, prefix, hasBlob } of TABLES) {
+    const cols = hasBlob ? 'id, avatar_url, avatar' : 'id, avatar_url';
+    const blobCheck = hasBlob ? 'OR avatar IS NOT NULL' : '';
     const [rows] = await pool.query(
-      `SELECT id, avatar_url, avatar FROM ${table}
-       WHERE avatar_url_thumb IS NULL AND (avatar_url IS NOT NULL OR avatar IS NOT NULL)`
+      `SELECT ${cols} FROM ${table}
+       WHERE avatar_url_thumb IS NULL AND (avatar_url IS NOT NULL ${blobCheck})`
     );
     console.log(`\n📂 [TABLE] ${table}: ${rows.length} avatar(s) need a thumb`);
 
