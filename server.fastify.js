@@ -5540,6 +5540,37 @@ let diceTableCreated = false;
  * members: [{ user_id, display_name }]
  * }
  */
+
+function mapCoterie(c) {
+  if (!c) return c;
+  
+  const parseJson = (val, def) => {
+    if (typeof val === 'string') {
+      try { return JSON.parse(val); } catch (e) { return def; }
+    }
+    return val != null ? val : def;
+  };
+
+  let mems = parseJson(c.members, []);
+  if (mems.length === 1 && mems[0].user_id === null) {
+    mems = [];
+  }
+
+  return {
+    ...c,
+    traits: {
+      chasse: c.chasse || 0,
+      lien: c.lien || 0,
+      portillon: c.portillon || 0
+    },
+    members: mems,
+    required: parseJson(c.required_json, null),
+    backgrounds: parseJson(c.backgrounds_json, []),
+    flaws: parseJson(c.flaws_json, []),
+    extras: parseJson(c.extras_json, []),
+    merits: parseJson(c.merits_json, [])
+  };
+}
 fastify.post('/api/coteries', { preHandler: [authRequired] }, async (req, reply) => {
   try {
     const {
@@ -5664,14 +5695,28 @@ fastify.get('/api/coteries/all', { preHandler: [authRequired] }, async (req, rep
 fastify.get('/api/coteries', { preHandler: [authRequired] }, async (req, reply) => {
   try {
     if (req.user.role === 'admin' || req.user.permission_level === 'admin') {
-      const [rows] = await pool.query(`SELECT * FROM coteries ORDER BY updated_at DESC`);
+      const [rows] = await pool.query(`
+        SELECT c.*,
+          JSON_ARRAYAGG(
+            JSON_OBJECT('user_id', m.user_id, 'display_name', m.display_name)
+          ) as members
+        FROM coteries c
+        LEFT JOIN coterie_members m ON m.coterie_id = c.id
+        GROUP BY c.id
+        ORDER BY c.updated_at DESC
+      `);
       return reply.send({ coteries: rows.map(mapCoterie) });
     }
     const [rows] = await pool.query(`
-      SELECT c.*
+      SELECT c.*,
+        JSON_ARRAYAGG(
+          JSON_OBJECT('user_id', m2.user_id, 'display_name', m2.display_name)
+        ) as members
       FROM coteries c
-      JOIN coterie_members m ON m.coterie_id=c.id
+      JOIN coterie_members m ON m.coterie_id = c.id
+      LEFT JOIN coterie_members m2 ON m2.coterie_id = c.id
       WHERE m.user_id=?
+      GROUP BY c.id
       ORDER BY c.updated_at DESC
     `, [req.user.id]);
     reply.send({ coteries: rows.map(mapCoterie) });
