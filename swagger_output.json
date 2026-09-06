@@ -3117,6 +3117,74 @@
         }
       }
     },
+    "/api/court/characters-and-npcs": {
+      "get": {
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        }
+      }
+    },
+    "/api/court/domain-claims/{division}/assign": {
+      "post": {
+        "description": "",
+        "parameters": [
+          {
+            "name": "division",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "character_id": {
+                    "example": "any"
+                  },
+                  "npc_id": {
+                    "example": "any"
+                  },
+                  "color": {
+                    "example": "any"
+                  },
+                  "unassign": {
+                    "example": "any"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/domain-claims/{division}/vacate": {
       "post": {
         "description": "",
@@ -3652,6 +3720,9 @@
                   "backgrounds": {
                     "example": "any"
                   },
+                  "merits": {
+                    "example": "any"
+                  },
                   "flaws": {
                     "example": "any"
                   },
@@ -3668,6 +3739,12 @@
                     "example": "any"
                   },
                   "members": {
+                    "example": "any"
+                  },
+                  "concept": {
+                    "example": "any"
+                  },
+                  "rules_override": {
                     "example": "any"
                   }
                 }
@@ -3764,6 +3841,9 @@
                   "backgrounds": {
                     "example": "any"
                   },
+                  "merits": {
+                    "example": "any"
+                  },
                   "flaws": {
                     "example": "any"
                   },
@@ -3777,6 +3857,12 @@
                     "example": "any"
                   },
                   "coterie_xp": {
+                    "example": "any"
+                  },
+                  "concept": {
+                    "example": "any"
+                  },
+                  "rules_override": {
                     "example": "any"
                   }
                 }

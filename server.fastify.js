@@ -124,7 +124,6 @@ require('./discordWorker');
 
 const fastify = require('fastify')({
   logger: false,
-  disableRequestLogging: true,
   bodyLimit: 73400320
 });
 const app = fastify; // Alias for compatibility with some routes
@@ -8808,48 +8807,49 @@ io.on('connection', (socket) => {
 
 fastify.decorate('io', io);
 
-fastify.listen({ port: PORT, host: '0.0.0.0' }, async (err, address) => {
-  if (err) {
+fastify.listen({ port: PORT, host: '0.0.0.0' })
+  .then(async (address) => {
+    log.start(`API server started on ${address}`, { port: PORT, env: process.env.NODE_ENV || 'stable' });
+    printReadyBanner({
+      address,
+      env: process.env.NODE_ENV || 'stable',
+      nodeVersion: process.version,
+      bootMs: Date.now() - bootStartedAt,
+    });
+
+    // Track server start
+    try {
+      await pool.query(
+        "INSERT INTO app_settings (setting_key, setting_value) VALUES ('daily_server_starts', '1') ON DUPLICATE KEY UPDATE setting_value = CAST(CAST(setting_value AS UNSIGNED) + 1 AS CHAR)"
+      );
+    } catch (e) {
+      log.err('Failed to track server start', { error: e.message });
+    }
+
+    // Daily cron job for ntfy summary (runs at 23:59 every day)
+    cron.schedule('59 23 * * *', async () => {
+      try {
+        const [[startsRow]] = await pool.query("SELECT setting_value FROM app_settings WHERE setting_key = 'daily_server_starts'");
+        const [[loginsRow]] = await pool.query("SELECT setting_value FROM app_settings WHERE setting_key = 'daily_logins'");
+
+        const starts = startsRow ? startsRow.setting_value : '0';
+        const logins = loginsRow ? loginsRow.setting_value : '0';
+
+        if (typeof broadcastNtfyAlert === 'function') {
+          broadcastNtfyAlert(`Daily Summary:\n- Server starts: ${starts}\n- Logins: ${logins}`, { title: 'End of Day Summary', tags: 'bar_chart' });
+        }
+
+        // Reset counters
+        await pool.query("UPDATE app_settings SET setting_value = '0' WHERE setting_key IN ('daily_server_starts', 'daily_logins')");
+      } catch (e) {
+        log.err('Daily summary cron failed', { error: e.message });
+      }
+    });
+  })
+  .catch((err) => {
     log.err(`API server failed to start`, { error: err.message });
     console.error(err);
     process.exit(1);
-  }
-  log.start(`API server started on ${address}`, { port: PORT, env: process.env.NODE_ENV || 'stable' });
-  printReadyBanner({
-    address,
-    env: process.env.NODE_ENV || 'stable',
-    nodeVersion: process.version,
-    bootMs: Date.now() - bootStartedAt,
   });
-
-  // Track server start
-  try {
-    await pool.query(
-      "INSERT INTO app_settings (setting_key, setting_value) VALUES ('daily_server_starts', '1') ON DUPLICATE KEY UPDATE setting_value = CAST(CAST(setting_value AS UNSIGNED) + 1 AS CHAR)"
-    );
-  } catch (e) {
-    log.err('Failed to track server start', { error: e.message });
-  }
-
-  // Daily cron job for ntfy summary (runs at 23:59 every day)
-  cron.schedule('59 23 * * *', async () => {
-    try {
-      const [[startsRow]] = await pool.query("SELECT setting_value FROM app_settings WHERE setting_key = 'daily_server_starts'");
-      const [[loginsRow]] = await pool.query("SELECT setting_value FROM app_settings WHERE setting_key = 'daily_logins'");
-
-      const starts = startsRow ? startsRow.setting_value : '0';
-      const logins = loginsRow ? loginsRow.setting_value : '0';
-
-      if (typeof broadcastNtfyAlert === 'function') {
-        broadcastNtfyAlert(`Daily Summary:\n- Server starts: ${starts}\n- Logins: ${logins}`, { title: 'End of Day Summary', tags: 'bar_chart' });
-      }
-
-      // Reset counters
-      await pool.query("UPDATE app_settings SET setting_value = '0' WHERE setting_key IN ('daily_server_starts', 'daily_logins')");
-    } catch (e) {
-      log.err('Daily summary cron failed', { error: e.message });
-    }
-  });
-});
 
 //port is set to 3001
