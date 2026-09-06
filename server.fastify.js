@@ -2932,10 +2932,26 @@ fastify.get('/api/npcs/:id/avatar', async (req, reply) => {
     const [rows] = await pool.query('SELECT avatar_url, avatar_url_thumb, avatar FROM npcs WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return reply.status(404).send('Avatar not found');
 
-    if (req.query.size === 'thumb' && rows[0].avatar_url_thumb) return reply.redirect(rows[0].avatar_url_thumb);
-    if (rows[0].avatar_url) return reply.redirect(rows[0].avatar_url);
+    const targetUrl = (req.query.size === 'thumb' && rows[0].avatar_url_thumb) ? rows[0].avatar_url_thumb 
+                    : rows[0].avatar_url ? rows[0].avatar_url 
+                    : (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) ? rows[0].avatar 
+                    : null;
+
+    if (targetUrl) {
+      try {
+        const response = await fetch(targetUrl);
+        if (!response.ok) return reply.status(404).send('Avatar not found on CDN');
+        const buffer = await response.arrayBuffer();
+        const mimeType = response.headers.get('content-type') || 'image/jpeg';
+        reply.header('Content-Type', mimeType);
+        reply.header('Cache-Control', 'public, max-age=86400');
+        return reply.send(Buffer.from(buffer));
+      } catch (err) {
+        return reply.status(500).send('Error proxying avatar');
+      }
+    }
+
     if (!rows[0].avatar) return reply.status(404).send('Avatar not found');
-    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return reply.redirect(rows[0].avatar);
 
     const mime = getMimeType(rows[0].avatar);
     reply.header('Content-Type', mime);
@@ -3468,10 +3484,26 @@ fastify.get('/api/identities/:id/avatar', async (req, reply) => {
     const [rows] = await pool.query('SELECT avatar_url, avatar_url_thumb, avatar FROM email_identities WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return reply.status(404).send('Avatar not found');
 
-    if (req.query.size === 'thumb' && rows[0].avatar_url_thumb) return reply.redirect(rows[0].avatar_url_thumb);
-    if (rows[0].avatar_url) return reply.redirect(rows[0].avatar_url);
+    const targetUrl = (req.query.size === 'thumb' && rows[0].avatar_url_thumb) ? rows[0].avatar_url_thumb 
+                    : rows[0].avatar_url ? rows[0].avatar_url 
+                    : (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) ? rows[0].avatar 
+                    : null;
+
+    if (targetUrl) {
+      try {
+        const response = await fetch(targetUrl);
+        if (!response.ok) return reply.status(404).send('Avatar not found on CDN');
+        const buffer = await response.arrayBuffer();
+        const mimeType = response.headers.get('content-type') || 'image/jpeg';
+        reply.header('Content-Type', mimeType);
+        reply.header('Cache-Control', 'public, max-age=86400');
+        return reply.send(Buffer.from(buffer));
+      } catch (err) {
+        return reply.status(500).send('Error proxying avatar');
+      }
+    }
+
     if (!rows[0].avatar) return reply.status(404).send('Avatar not found');
-    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return reply.redirect(rows[0].avatar);
 
     const mime = getMimeType(rows[0].avatar);
     reply.header('Content-Type', mime);
@@ -8251,10 +8283,26 @@ fastify.get('/api/users/:id/avatar', async (req, reply) => {
     const [rows] = await pool.query('SELECT avatar_url, avatar_url_thumb, avatar FROM users WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return reply.status(404).send('Avatar not found');
 
-    if (req.query.size === 'thumb' && rows[0].avatar_url_thumb) return reply.redirect(rows[0].avatar_url_thumb);
-    if (rows[0].avatar_url) return reply.redirect(rows[0].avatar_url);
+    const targetUrl = (req.query.size === 'thumb' && rows[0].avatar_url_thumb) ? rows[0].avatar_url_thumb 
+                    : rows[0].avatar_url ? rows[0].avatar_url 
+                    : (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) ? rows[0].avatar 
+                    : null;
+
+    if (targetUrl) {
+      try {
+        const response = await fetch(targetUrl);
+        if (!response.ok) return reply.status(404).send('Avatar not found on CDN');
+        const buffer = await response.arrayBuffer();
+        const mimeType = response.headers.get('content-type') || 'image/jpeg';
+        reply.header('Content-Type', mimeType);
+        reply.header('Cache-Control', 'public, max-age=86400');
+        return reply.send(Buffer.from(buffer));
+      } catch (err) {
+        return reply.status(500).send('Error proxying avatar');
+      }
+    }
+
     if (!rows[0].avatar) return reply.status(404).send('Avatar not found');
-    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return reply.redirect(rows[0].avatar);
 
     const mime = getMimeType(rows[0].avatar);
     reply.header('Content-Type', mime);
