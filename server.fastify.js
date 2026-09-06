@@ -190,7 +190,7 @@ fastify.register(multipart, { limits: { fileSize: 50 * 1024 * 1024 } }); fastify
 // below), so — unlike a Bearer-token API — reflecting *any* calling origin here
 // would let an arbitrary website ride a logged-in visitor's session cookie. Never
 // fall back to "allow all"; fall back to the known app origins instead.
-const DEFAULT_CORS_ORIGINS = ['https://portal.attlarp.gr', 'http://localhost:3002', 'http://127.0.0.1:3002', 'https://h.attlarp.gr'];
+const DEFAULT_CORS_ORIGINS = ['https://portal.attlarp.gr', 'http://localhost:3002', 'http://127.0.0.1:3002', 'https://h.attlarp.gr', 'http://localhost:5173'];
 const corsOrigin = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
   : DEFAULT_CORS_ORIGINS;
@@ -1419,7 +1419,7 @@ fastify.post('/api/admin/ntfy/prefs', { preHandler: [authRequired, requireAdmin]
         headers: { 'Title': '🦇 System Errors Subscribed', 'Tags': 'vampire,white_check_mark' }
       }).catch(() => { });
     }
-    
+
     if (subscribe_downtimes && oldRows.length > 0 && !oldRows[0].ntfy_subscribe_downtimes && oldRows[0].ntfy_topic) {
       const axios = require('axios');
       axios.post(`https://ntfy.sh/${oldRows[0].ntfy_topic}`, `You are now subscribed to receive push notifications when players read their Downtime resolutions.`, {
@@ -2932,10 +2932,10 @@ fastify.get('/api/npcs/:id/avatar', async (req, reply) => {
     const [rows] = await pool.query('SELECT avatar_url, avatar_url_thumb, avatar FROM npcs WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return reply.status(404).send('Avatar not found');
 
-    const targetUrl = (req.query.size === 'thumb' && rows[0].avatar_url_thumb) ? rows[0].avatar_url_thumb 
-                    : rows[0].avatar_url ? rows[0].avatar_url 
-                    : (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) ? rows[0].avatar 
-                    : null;
+    const targetUrl = (req.query.size === 'thumb' && rows[0].avatar_url_thumb) ? rows[0].avatar_url_thumb
+      : rows[0].avatar_url ? rows[0].avatar_url
+        : (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) ? rows[0].avatar
+          : null;
 
     if (targetUrl) {
       try {
@@ -3295,7 +3295,7 @@ fastify.patch('/api/downtimes/read-batch', { preHandler: [authRequired] }, async
     const { broadcastNtfyAlert } = require('./utils/ntfy');
     const charName = rows[0].char_name;
     const titles = rows.map(dt => dt.title.replace('[PROJECT] ', ''));
-    
+
     let msg = `**${charName}** has read their downtime resolution for:\n\n`;
     titles.forEach(t => {
       msg += `> *${t}*\n`;
@@ -3306,7 +3306,7 @@ fastify.patch('/api/downtimes/read-batch', { preHandler: [authRequired] }, async
       tags: 'eyes,vampire',
       priority: 'default',
       requiresSubscription: 'downtimes'
-    }).catch(() => {});
+    }).catch(() => { });
 
     reply.send({ success: true, updated: validIds.length });
   } catch (e) {
@@ -3484,10 +3484,10 @@ fastify.get('/api/identities/:id/avatar', async (req, reply) => {
     const [rows] = await pool.query('SELECT avatar_url, avatar_url_thumb, avatar FROM email_identities WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return reply.status(404).send('Avatar not found');
 
-    const targetUrl = (req.query.size === 'thumb' && rows[0].avatar_url_thumb) ? rows[0].avatar_url_thumb 
-                    : rows[0].avatar_url ? rows[0].avatar_url 
-                    : (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) ? rows[0].avatar 
-                    : null;
+    const targetUrl = (req.query.size === 'thumb' && rows[0].avatar_url_thumb) ? rows[0].avatar_url_thumb
+      : rows[0].avatar_url ? rows[0].avatar_url
+        : (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) ? rows[0].avatar
+          : null;
 
     if (targetUrl) {
       try {
@@ -5685,7 +5685,7 @@ let diceTableCreated = false;
 
 function mapCoterie(c) {
   if (!c) return c;
-  
+
   const parseJson = (val, def) => {
     if (typeof val === 'string') {
       try { return JSON.parse(val); } catch (e) { return def; }
@@ -6061,7 +6061,7 @@ fastify.post('/api/admin/downtimes/config', { preHandler: [authRequired, require
     if (typeof downtime_mass_release_mode !== 'undefined') {
       const oldMassReleaseMode = await getSetting('downtime_mass_release_mode', 'false');
       await setSetting('downtime_mass_release_mode', downtime_mass_release_mode ? 'true' : 'false');
-      
+
       if (oldMassReleaseMode === 'true' && !downtime_mass_release_mode) {
         const hasNotified = await getSetting('downtime_mass_release_notified', 'false');
         if (hasNotified === 'false') {
@@ -6070,7 +6070,7 @@ fastify.post('/api/admin/downtimes/config', { preHandler: [authRequired, require
             title: '🦇 Downtimes Released',
             tags: 'loudspeaker,vampire',
             priority: 'default'
-          }).catch(() => {});
+          }).catch(() => { });
           await setSetting('downtime_mass_release_notified', 'true');
         }
       }
@@ -8283,10 +8283,10 @@ fastify.get('/api/users/:id/avatar', async (req, reply) => {
     const [rows] = await pool.query('SELECT avatar_url, avatar_url_thumb, avatar FROM users WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return reply.status(404).send('Avatar not found');
 
-    const targetUrl = (req.query.size === 'thumb' && rows[0].avatar_url_thumb) ? rows[0].avatar_url_thumb 
-                    : rows[0].avatar_url ? rows[0].avatar_url 
-                    : (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) ? rows[0].avatar 
-                    : null;
+    const targetUrl = (req.query.size === 'thumb' && rows[0].avatar_url_thumb) ? rows[0].avatar_url_thumb
+      : rows[0].avatar_url ? rows[0].avatar_url
+        : (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) ? rows[0].avatar
+          : null;
 
     if (targetUrl) {
       try {
