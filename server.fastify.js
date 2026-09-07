@@ -2108,7 +2108,7 @@ fastify.delete('/api/admin/characters/:id', { preHandler: [authRequired, require
 
 // List NPCs (admin) — single canonical route
 fastify.get('/api/admin/npcs', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
-  const [rows] = await pool.query('SELECT id, name, clan, sheet, xp, created_at, updated_at, camarilla_titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, is_disabled FROM npcs ORDER BY id DESC');
+  const [rows] = await pool.query('SELECT id, name, clan, sheet, xp, created_at, updated_at, camarilla_titles, status, image_url, (avatar_url IS NOT NULL OR avatar_url_thumb IS NOT NULL) AS has_avatar, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, is_disabled FROM npcs ORDER BY id DESC');
 
   // Parse JSON sheet if stored as string
   rows.forEach(r => {
@@ -2233,14 +2233,14 @@ fastify.get('/api/admin/chat/npc-conversations/:npcId', { preHandler: [authRequi
         u.display_name, 
         c.name AS char_name, 
         MAX(m.created_at) AS last_message_at,
-        (SELECT COUNT(*) FROM npc_messages WHERE npc_id = ? AND user_id = u.id AND from_side = 'user' AND read_at IS NULL) as unread_count
+        COUNT(CASE WHEN m.from_side = 'user' AND m.read_at IS NULL THEN 1 END) as unread_count
       FROM npc_messages m
       JOIN users u ON m.user_id = u.id
       LEFT JOIN characters c ON c.user_id = u.id -- FIXED: Changed from u.character_id = c.id
       WHERE m.npc_id = ?
       GROUP BY u.id, u.display_name, c.name
       ORDER BY unread_count DESC, last_message_at DESC
-    `, [npcId, npcId]);
+    `, [npcId]);
     reply.send({ conversations: rows });
   } catch (e) {
     // Pro-tip: Log the actual error here temporarily if you ever get another 500!
@@ -2362,9 +2362,15 @@ fastify.get('/api/chat/my-recent', { preHandler: [authRequired] }, async (req, r
     const [npcRows] = await pool.query(
       `SELECT m.id, m.npc_id AS partner_id, n.name AS partner_name, 
               m.body, m.created_at, 'npc' as type,
-              (SELECT COUNT(*) FROM npc_messages WHERE npc_id = m.npc_id AND user_id = ? AND from_side = 'npc' AND read_at IS NULL) as unread_count
+              COALESCE(u.unread_count, 0) as unread_count
        FROM npc_messages m
        JOIN npcs n ON n.id = m.npc_id
+       LEFT JOIN (
+         SELECT npc_id, COUNT(*) as unread_count
+         FROM npc_messages
+         WHERE user_id = ? AND from_side = 'npc' AND read_at IS NULL
+         GROUP BY npc_id
+       ) u ON u.npc_id = m.npc_id
        WHERE m.user_id = ? AND IFNULL(n.is_disabled, 0) = 0
        ORDER BY m.created_at DESC LIMIT ?`,
       [userId, userId, limit]
@@ -2376,10 +2382,16 @@ fastify.get('/api/chat/my-recent', { preHandler: [authRequired] }, async (req, r
               CASE WHEN cm.sender_id = ? THEN cm.recipient_id ELSE cm.sender_id END as partner_id,
               CASE WHEN cm.sender_id = ? THEN r.display_name ELSE s.display_name END as partner_name,
               cm.body, cm.created_at, 'player' as type,
-              (SELECT COUNT(*) FROM chat_messages WHERE sender_id = (CASE WHEN cm.sender_id = ? THEN cm.recipient_id ELSE cm.sender_id END) AND recipient_id = ? AND read_at IS NULL) as unread_count
+              COALESCE(u.unread_count, 0) as unread_count
        FROM chat_messages cm
        JOIN users s ON cm.sender_id = s.id
        JOIN users r ON cm.recipient_id = r.id
+       LEFT JOIN (
+         SELECT sender_id, COUNT(*) as unread_count
+         FROM chat_messages
+         WHERE recipient_id = ? AND read_at IS NULL
+         GROUP BY sender_id
+       ) u ON u.sender_id = (CASE WHEN cm.sender_id = ? THEN cm.recipient_id ELSE cm.sender_id END)
        WHERE cm.sender_id = ? OR cm.recipient_id = ?
        ORDER BY cm.created_at DESC LIMIT ?`,
       [userId, userId, userId, userId, userId, userId, limit]
@@ -2536,11 +2548,17 @@ fastify.get('/api/admin/emails/threads', { preHandler: [authRequired, requireAdm
       SELECT t.id, t.subject, t.updated_at,
              u.display_name as user_name, c.name as char_name,
              i.email_address, i.display_name as identity_name,
-             (SELECT COUNT(*) FROM email_messages WHERE thread_id=t.id AND sender_type='user' AND is_read=0) as unread_count
+             COALESCE(um.unread_count, 0) as unread_count
       FROM email_threads t
       JOIN users u ON u.id = t.user_id
       LEFT JOIN characters c ON c.user_id = u.id
       JOIN email_identities i ON i.id = t.identity_id
+      LEFT JOIN (
+        SELECT thread_id, COUNT(*) as unread_count
+        FROM email_messages
+        WHERE sender_type = 'user' AND is_read = 0
+        GROUP BY thread_id
+      ) um ON um.thread_id = t.id
       ORDER BY t.updated_at DESC
     `);
     reply.send({ threads });
@@ -2602,10 +2620,25 @@ fastify.get('/api/emails/my-inbox', { preHandler: [authRequired] }, async (req, 
     const [threads] = await pool.query(`
       SELECT t.id, t.subject, t.updated_at,
              i.email_address as from_email, i.display_name as from_name,
-             (SELECT body FROM email_messages WHERE thread_id=t.id ORDER BY created_at DESC LIMIT 1) as snippet,
-             (SELECT COUNT(*) FROM email_messages WHERE thread_id=t.id AND sender_type='identity' AND is_read=0) as unread_count
+             snip.body as snippet,
+             COALESCE(um.unread_count, 0) as unread_count
       FROM email_threads t
       JOIN email_identities i ON i.id = t.identity_id
+      LEFT JOIN (
+        SELECT thread_id, body
+        FROM (
+          SELECT thread_id, body,
+                 ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY created_at DESC) as rn
+          FROM email_messages
+        ) ordered_msgs
+        WHERE rn = 1
+      ) snip ON snip.thread_id = t.id
+      LEFT JOIN (
+        SELECT thread_id, COUNT(*) as unread_count
+        FROM email_messages
+        WHERE sender_type = 'identity' AND is_read = 0
+        GROUP BY thread_id
+      ) um ON um.thread_id = t.id
       WHERE t.user_id = ?
       ORDER BY t.updated_at DESC
     `, [req.user.id]);
@@ -2903,10 +2936,19 @@ fastify.post('/api/admin/chat/npc/messages', { preHandler: [authRequired, requir
 fastify.get('/api/admin/camarilla/roster', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   try {
     const [players] = await pool.query(
-      "SELECT id, user_id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, 'player' as type FROM characters"
+      `SELECT c.id, c.user_id, c.name, c.clan, c.camarilla_titles as titles, c.status, c.image_url, 
+              c.is_ex, c.is_deceased, c.is_hidden, c.is_left, c.is_called, c.is_missing, c.is_exiled, c.is_bloodhunted, 
+              'player' as type,
+              (u.avatar_url IS NOT NULL OR u.avatar_url_thumb IS NOT NULL) as has_avatar
+       FROM characters c
+       LEFT JOIN users u ON c.user_id = u.id`
     );
     const [npcs] = await pool.query(
-      "SELECT id, NULL as user_id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, 'npc' as type FROM npcs"
+      `SELECT n.id, NULL as user_id, n.name, n.clan, n.camarilla_titles as titles, n.status, n.image_url, 
+              n.is_ex, n.is_deceased, n.is_hidden, n.is_left, n.is_called, n.is_missing, n.is_exiled, n.is_bloodhunted, 
+              'npc' as type,
+              (n.avatar_url IS NOT NULL OR n.avatar_url_thumb IS NOT NULL) as has_avatar
+       FROM npcs n`
     );
 
     const format = (list) => list.map(item => ({
@@ -2914,7 +2956,8 @@ fastify.get('/api/admin/camarilla/roster', { preHandler: [authRequired, requireA
       titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || []),
       is_ex: !!item.is_ex,
       is_deceased: !!item.is_deceased,
-      is_hidden: !!item.is_hidden // <--- Add this
+      is_hidden: !!item.is_hidden,
+      has_avatar: Boolean(item.has_avatar)
     }));
 
     const combined = [...format(players), ...format(npcs)];
@@ -3064,10 +3107,19 @@ fastify.put('/api/retainers/:id/avatar', { preHandler: [authRequired] }, async (
 fastify.get('/api/camarilla/roster', { preHandler: [authRequired] }, async (req, reply) => {
   try {
     const [players] = await pool.query(
-      "SELECT id, user_id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, 'player' as type FROM characters"
+      `SELECT c.id, c.user_id, c.name, c.clan, c.camarilla_titles as titles, c.status, c.image_url, 
+              c.is_ex, c.is_deceased, c.is_hidden, c.is_left, c.is_called, c.is_missing, c.is_exiled, c.is_bloodhunted, 
+              'player' as type,
+              (u.avatar_url IS NOT NULL OR u.avatar_url_thumb IS NOT NULL) as has_avatar
+       FROM characters c
+       LEFT JOIN users u ON c.user_id = u.id`
     );
     const [npcs] = await pool.query(
-      "SELECT id, NULL as user_id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, 'npc' as type FROM npcs"
+      `SELECT n.id, NULL as user_id, n.name, n.clan, n.camarilla_titles as titles, n.status, n.image_url, 
+              n.is_ex, n.is_deceased, n.is_hidden, n.is_left, n.is_called, n.is_missing, n.is_exiled, n.is_bloodhunted, 
+              'npc' as type,
+              (n.avatar_url IS NOT NULL OR n.avatar_url_thumb IS NOT NULL) as has_avatar
+       FROM npcs n`
     );
 
     const format = (list) => list.map(item => ({
@@ -3080,7 +3132,8 @@ fastify.get('/api/camarilla/roster', { preHandler: [authRequired] }, async (req,
       is_called: !!item.is_called,
       is_missing: !!item.is_missing,
       is_exiled: !!item.is_exiled,
-      is_bloodhunted: !!item.is_bloodhunted
+      is_bloodhunted: !!item.is_bloodhunted,
+      has_avatar: Boolean(item.has_avatar)
     }));
 
     const combined = [...format(players), ...format(npcs)];
@@ -3942,10 +3995,20 @@ fastify.get('/api/admin/chat/groups', { preHandler: [authRequired, requireAdmin]
   try {
     const [groups] = await pool.query(`
       SELECT g.*, u.display_name as creator_name,
-      (SELECT COUNT(*) FROM chat_group_members WHERE group_id = g.id) as member_count,
-      (SELECT MAX(created_at) FROM chat_group_messages WHERE group_id = g.id) as last_active
+             COALESCE(m.member_count, 0) as member_count,
+             msg.last_active
       FROM chat_groups g
       LEFT JOIN users u ON g.created_by = u.id
+      LEFT JOIN (
+        SELECT group_id, COUNT(*) as member_count
+        FROM chat_group_members
+        GROUP BY group_id
+      ) m ON m.group_id = g.id
+      LEFT JOIN (
+        SELECT group_id, MAX(created_at) as last_active
+        FROM chat_group_messages
+        GROUP BY group_id
+      ) msg ON msg.group_id = g.id
       ORDER BY last_active DESC
     `);
     reply.send({ groups });
@@ -4061,21 +4124,36 @@ fastify.get('/api/chat/npcs', { preHandler: [authRequired] }, async (req, reply)
     if (isAdmin) {
       // Admins see if ANY player has sent an unread message to the NPC
       query = `SELECT n.id, n.name, n.clan, n.image_url,
-        (SELECT created_at FROM npc_messages WHERE npc_id = n.id ORDER BY created_at DESC LIMIT 1) as last_message_at,
-        (SELECT COUNT(*) FROM npc_messages WHERE npc_id = n.id AND from_side = 'user' AND read_at IS NULL) as unread_count
-       FROM npcs n
-       WHERE IFNULL(n.is_disabled, 0) = 0
-       ORDER BY unread_count DESC, last_message_at DESC, n.name ASC`;
+             m.last_message_at,
+             COALESCE(m.unread_count, 0) as unread_count
+      FROM npcs n
+      LEFT JOIN (
+        SELECT npc_id,
+               MAX(created_at) as last_message_at,
+               COUNT(CASE WHEN from_side = 'user' AND read_at IS NULL THEN 1 END) as unread_count
+        FROM npc_messages
+        GROUP BY npc_id
+      ) m ON m.npc_id = n.id
+      WHERE IFNULL(n.is_disabled, 0) = 0
+      ORDER BY unread_count DESC, last_message_at DESC, n.name ASC`;
       params = [];
     } else {
       // Players see if the NPC has sent them an unread message
       query = `SELECT n.id, n.name, n.clan, n.image_url,
-        (SELECT created_at FROM npc_messages WHERE npc_id = n.id AND user_id = ? ORDER BY created_at DESC LIMIT 1) as last_message_at,
-        (SELECT COUNT(*) FROM npc_messages WHERE npc_id = n.id AND user_id = ? AND from_side = 'npc' AND read_at IS NULL) as unread_count
-       FROM npcs n
-       WHERE IFNULL(n.is_disabled, 0) = 0
-       ORDER BY unread_count DESC, last_message_at DESC, n.name ASC`;
-      params = [myId, myId];
+             m.last_message_at,
+             COALESCE(m.unread_count, 0) as unread_count
+      FROM npcs n
+      LEFT JOIN (
+        SELECT npc_id,
+               MAX(created_at) as last_message_at,
+               COUNT(CASE WHEN from_side = 'npc' AND read_at IS NULL THEN 1 END) as unread_count
+        FROM npc_messages
+        WHERE user_id = ?
+        GROUP BY npc_id
+      ) m ON m.npc_id = n.id
+      WHERE IFNULL(n.is_disabled, 0) = 0
+      ORDER BY unread_count DESC, last_message_at DESC, n.name ASC`;
+      params = [myId];
     }
     const [rows] = await pool.query(query, params);
     reply.send({ npcs: rows });
@@ -4557,6 +4635,7 @@ fastify.get('/api/admin/users', { preHandler: [authRequired, requireAdmin] }, as
   // We added u.discord_id to the SELECT list here
   const [rows] = await pool.query(
     `SELECT u.id, u.email, u.display_name, u.role, u.discord_id,
+            (u.avatar_url IS NOT NULL OR u.avatar_url_thumb IS NOT NULL) AS has_avatar,
             c.id AS character_id, c.name AS char_name, c.clan, c.sheet, c.xp
      FROM users u
      LEFT JOIN characters c ON c.user_id=u.id
@@ -4741,9 +4820,11 @@ fastify.get('/api/domain-claims', { preHandler: [authRequired] }, async (req, re
       SELECT d.division, d.owner_name, d.color, d.owner_character_id, d.owner_npc_id, d.is_abaton, d.claimed_at, d.safety_rating,
              d.previous_owner_name, d.previous_owner_character_id, d.previous_claimed_at, c.user_id,
              c.name AS character_name, c.clan AS character_clan, c.camarilla_titles AS character_titles,
-             n.name AS npc_name, n.clan AS npc_clan, n.camarilla_titles AS npc_titles
+             n.name AS npc_name, n.clan AS npc_clan, n.camarilla_titles AS npc_titles,
+             ((u.avatar_url IS NOT NULL OR u.avatar_url_thumb IS NOT NULL) OR (n.avatar_url IS NOT NULL OR n.avatar_url_thumb IS NOT NULL)) AS has_avatar
       FROM domain_claims d
       LEFT JOIN characters c ON d.owner_character_id = c.id
+      LEFT JOIN users u ON c.user_id = u.id
       LEFT JOIN npcs n ON d.owner_npc_id = n.id
     `);
     // owner_name is a legacy free-text snapshot that can drift from the linked
@@ -4757,6 +4838,7 @@ fastify.get('/api/domain-claims', { preHandler: [authRequired] }, async (req, re
         live_name: r.character_name || r.npc_name || null,
         clan: r.character_clan || r.npc_clan || null,
         titles: Array.isArray(titles) ? titles : [],
+        has_avatar: !!r.has_avatar,
       };
     });
     reply.send({ claims });
@@ -5336,15 +5418,28 @@ fastify.get('/api/domain-overlays/directory', { preHandler: [authRequired] }, as
     const grantable = me.admin ? DOMAIN_OVERLAY_KEYS : me.overlays;
     const [rows] = await pool.query(`
       SELECT u.id, u.email, u.display_name, u.role,
-             (SELECT ch.name FROM characters ch
-                WHERE ch.user_id = u.id AND COALESCE(ch.is_deceased,0)=0 AND COALESCE(ch.is_left,0)=0
-                ORDER BY ch.id LIMIT 1) AS character_name,
-             (SELECT ch.clan FROM characters ch
-                WHERE ch.user_id = u.id AND COALESCE(ch.is_deceased,0)=0 AND COALESCE(ch.is_left,0)=0
-                ORDER BY ch.id LIMIT 1) AS clan,
-             (SELECT GROUP_CONCAT(g.overlay_key) FROM domain_overlay_grants g WHERE g.user_id = u.id) AS granted,
-             (SELECT GROUP_CONCAT(g.overlay_key) FROM domain_overlay_grants g WHERE g.user_id = u.id AND g.granted_by = ?) AS granted_by_me
+             ch.name AS character_name,
+             ch.clan AS clan,
+             g.granted,
+             g.granted_by_me
       FROM users u
+      LEFT JOIN (
+        SELECT user_id, name, clan
+        FROM (
+          SELECT user_id, name, clan,
+                 ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY id) as rn
+          FROM characters
+          WHERE COALESCE(is_deceased, 0) = 0 AND COALESCE(is_left, 0) = 0
+        ) active_chars
+        WHERE rn = 1
+      ) ch ON ch.user_id = u.id
+      LEFT JOIN (
+        SELECT user_id,
+               GROUP_CONCAT(overlay_key) AS granted,
+               GROUP_CONCAT(CASE WHEN granted_by = ? THEN overlay_key END) AS granted_by_me
+        FROM domain_overlay_grants
+        GROUP BY user_id
+      ) g ON g.user_id = u.id
       ORDER BY (character_name IS NULL), character_name, u.display_name, u.email
     `, [req.user.id]);
     const users = rows.map(r => {
@@ -6544,9 +6639,14 @@ fastify.get('/api/admin/live-sessions', { preHandler: [authRequired, requireAdmi
   try {
     const [sessions] = await pool.query(`
       SELECT s.*, u.display_name as st_name,
-      (SELECT COUNT(DISTINCT user_id) FROM live_session_participants WHERE session_id = s.id) as player_count
+             COALESCE(p.player_count, 0) as player_count
       FROM live_sessions s
       LEFT JOIN users u ON s.admin_id = u.id
+      LEFT JOIN (
+        SELECT session_id, COUNT(DISTINCT user_id) as player_count
+        FROM live_session_participants
+        GROUP BY session_id
+      ) p ON p.session_id = s.id
       ORDER BY s.created_at DESC
     `);
     reply.send({ sessions });
