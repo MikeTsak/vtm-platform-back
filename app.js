@@ -7,7 +7,7 @@
 
 const pool = require('./db');
 const { log } = require('./logger');
-const { authRequired, requireAdmin } = require('./authMiddleware.fastify');
+const { authRequired, optionalAuth, requireAdmin } = require('./authMiddleware.fastify');
 const { requireCourt, authLimiter, moderateLimiter, uploadLimiter } = require('./services/guards');
 const { broadcastNtfyAlert } = require('./utils/ntfy');
 const { sendPushNotification } = require('./services/push');
@@ -52,6 +52,7 @@ function buildApp(overrides = {}) {
     pool,
     log,
     authRequired,
+    optionalAuth,
     requireAdmin,
     requireCourt,
     authLimiter,

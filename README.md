@@ -32,13 +32,10 @@ All components communicate with this backend API to provide a full-featured LARP
 - [Project layout](#project-layout)
 - [Authentication & roles](#authentication--roles)
 - [API overview](#api-overview)
-  - [Auth](#auth)
-  - [Characters (player)](#characters-player)
-  - [Downtimes (player)](#downtimes-player)
-  - [Domains / claims](#domains--claims)
-  - [Admin endpoints](#admin-endpoints)
-  - [NPC endpoints (admin)](#npc-endpoints-admin)
 - [XP spend rules](#xp-spend-rules)
+- [Realtime (socket.io)](#realtime-socketio)
+- [Background jobs](#background-jobs)
+- [Tests](#tests)
 - [Swagger / OpenAPI](#swagger--openapi)
 - [Troubleshooting / gotchas](#troubleshooting--gotchas)
 - [cURL examples](#curl-examples)
@@ -48,9 +45,10 @@ All components communicate with this backend API to provide a full-featured LARP
 
 ## Requirements
 
-- Node.js 18+ (npm 9+ recommended)
+- **Node.js 20+** — Fastify 5 does not support Node 18.
 - MariaDB 10.5+ (tested on 10.6)
 - A database + user with privileges to create tables (InnoDB)
+- `sharp` needs prebuilt binaries for your platform (installed automatically).
 
 ---
 
@@ -60,53 +58,106 @@ All components communicate with this backend API to provide a full-featured LARP
 # 1) Install deps
 npm install
 
-# 2) Create .env
+# 2) Create .env  (see "Environment variables" below — the server refuses to
+#    boot if a required key is missing, and tells you which one)
 cp .env.example .env
-# edit .env with DB credentials + JWT secret
 
-# 3) Run migrations (creates tables)
+# 3) Run migrations (creates/updates tables)
 npm run migrate
 
-# 4) Run server
-npm start
-# or (if present)
-npm run dev
+# 4) Run the server
+npm run dev      # nodemon + regenerates the Swagger spec
+# or
+npm start        # plain node + regenerates the Swagger spec
 ```
 
-The API should be available on:
+The API listens on `http://localhost:3001/api` by default.
 
-- `http://localhost:3001/api`
+`initDatabase()` also runs on every boot and is idempotent, so a fresh database
+comes up without a manual migration step. `npm run migrate` is for applying the
+numbered migrations in `migrations/list/`.
+
+### npm scripts
+
+| Script | What it does |
+| --- | --- |
+| `dev` | Regenerate the Swagger spec, then run under nodemon |
+| `start` | Regenerate the Swagger spec, then run once |
+| `test` / `test:watch` | vitest integration + unit tests |
+| `migrate` | Run the numbered migrations in `migrations/list/` |
+| `migrate-avatar-thumbs` | Backfill the 160px avatar thumbnails |
+| `migrate-avatars-to-cdn` | One-off: move BLOB avatars to the image CDN |
+| `migrate-news-urls` | One-off: rewrite legacy news media URLs |
+
+Both `dev` and `start` run `swagger-autogen.js` first. It reads the route
+manifest in `routes/index.js`, so a new route module is documented
+automatically — you never edit the scanned-file list by hand.
 
 ---
 
 ## Environment variables
 
-Create a `.env` file in the repo root:
+Create a `.env` file in `back/`. Startup validation lives in
+`utils/envValidator.js` (Zod): if a **required** key is missing the process
+logs which one and exits immediately.
 
 ```env
-# HTTP
-PORT=3001
-NODE_ENV=development
-
-# MariaDB
+# --- Required ---------------------------------------------------------
 DB_HOST=localhost
 DB_PORT=3306
 DB_USER=your_db_user
-DB_PASSWORD=your_db_password
+DB_PASS=your_db_password          # note: DB_PASS, not DB_PASSWORD
 DB_NAME=vtm
 
-# JWT
 JWT_SECRET=replace_me_with_strong_random
 
-# Optional logging
+# Web Push. Generate once with: npx web-push generate-vapid-keys
+VAPID_PUBLIC_KEY=...
+VAPID_PRIVATE_KEY=...
+
+# --- Optional ---------------------------------------------------------
+PORT=3001                          # default 3001
+NODE_ENV=development
+VAPID_SUBJECT=mailto:admin@attlarp.gr
+
+# Comma-separated allowlist. Falls back to the known app origins
+# (config/cors.js) — never to "*", because auth is a cookie.
+CORS_ORIGIN=https://portal.attlarp.gr,http://localhost:5173
+
+# Forces the session cookie's Secure/SameSite pair instead of inferring it
+# from the request. Set to "false" only for non-TLS local setups that the
+# hostname sniffing in utils/authCookie.js can't detect.
+COOKIE_SECURE=true
+
+APP_BASE_URL=https://portal.attlarp.gr   # used to build links in emails/pushes
+IMAGE_API_KEY=...                        # img.miketsak.gr upload key
+DISCORD_BOT_TOKEN=...                    # omit to run without the bot
+LOG_CHANNEL_ID=...                       # Discord channel for error reports
+NTFY_TOPIC=...                           # ntfy.sh broadcast topic
+
+# Password-reset mail (EmailJS). Without these, /auth/forgot throws.
+EMAILJS_SERVICE_ID=...
+EMAILJS_TEMPLATE_ID=...
+EMAILJS_PUBLIC_KEY=...
+EMAILJS_PRIVATE_KEY=...
+# Only if your EmailJS template uses non-default variable names:
+EMAILJS_VAR_TO=to_email
+EMAILJS_VAR_NAME=to_name
+EMAILJS_VAR_APP=app_name
+EMAILJS_VAR_LINK=reset_link
+EMAILJS_VAR_EXPIRES=expires_minutes
+
+# Logging (see logger.js)
 LOG_LEVEL=debug
+LOG_FILE=./logs/api.log            # required by the admin log viewer
+LOG_JSON=0
 ```
 
 Notes:
 
-- The server uses strict startup validation (via `Zod`). If any required variable is missing, the app will instantly crash and tell you which one.
-- Don’t commit secrets. Ensure `.env` is in `.gitignore`.
-- Changing `JWT_SECRET` invalidates existing tokens (users must re-login).
+- Don't commit secrets — `.env` is in `.gitignore`.
+- Changing `JWT_SECRET` invalidates every existing session (all users re-login).
+- Tests use a separate database via `TEST_DB_NAME`; see `tests/setup/env.js`.
 
 ---
 
@@ -262,62 +313,98 @@ directly by the module that uses it rather than threaded through `opts`.
 
 ## Authentication & roles
 
-- Auth uses JWT.
-- Clients must send: `Authorization: Bearer <token>`
-- Users have a `role` of `user` or `admin`.
-- Admin routes return **403** if the token role is not `admin`.
+The session JWT travels in an **httpOnly cookie** named `token`, not in
+`localStorage`. Client-side JS — including an injected XSS payload — cannot
+read it. The frontend never handles a token; it just sends
+`withCredentials: true` (see `front/src/core/api.js`).
+
+- `POST /api/auth/login` sets the cookie; `POST /api/auth/logout` clears it.
+- An `Authorization: Bearer <token>` header is still accepted, for non-browser
+  clients (the mobile app, scripts, cURL) that can't rely on cookies.
+- There is deliberately **no** `?token=` query fallback — a token in a URL leaks
+  into access logs, proxy logs and browser history. SSE streams, `<img>` avatar
+  requests and the socket.io handshake all authenticate via the cookie.
+
+**Revocation.** Each token embeds `tv`, the user's `token_version`. Bumping that
+column (password reset, "log out everywhere") invalidates every token already
+issued to them — `authRequired` re-checks it on each request, so revocation is
+immediate rather than waiting out the 7-day expiry.
+
+**Cookie flags.** `Secure` and `SameSite` are decided together from one signal
+(`utils/authCookie.js`): a request that is HTTPS, or forwarded as HTTPS, or
+addressed to a non-local host, gets `SameSite=None; Secure`; local dev over
+`http://127.0.0.1` gets `SameSite=Lax`. `COOKIE_SECURE` overrides both. Getting
+this wrong is what previously broke login on Safari, iOS and Chrome Incognito.
+
+### Roles
+
+| Role | Meaning |
+| --- | --- |
+| `user` | Ordinary player. |
+| `courtuser` | Court officer. Passes `requireCourt` — boons, domain assignment, the Court NPC-chat views. |
+| `admin` | Storyteller. Passes both `requireCourt` and `requireAdmin`. |
+
+Guards live in `authMiddleware.fastify.js` (`authRequired`, `optionalAuth`,
+`requireAdmin`) and `services/guards.js` (`requireCourt`). Admin routes answer
+**403** for a non-admin session and **401** for no session at all.
+
+`optionalAuth` is for endpoints that are public but reveal more to a signed-in
+caller (e.g. the wiki feed showing private articles to admins). Do **not** wrap
+`authRequired` in a try/catch for that — it *sends* a 401 rather than throwing,
+so the reply is already committed by the time your catch would run.
+
+> **Rate limiting is currently a no-op.** The four limiters in
+> `services/guards.js` are stubs, and `@fastify/rate-limit` — although
+> installed — is not registered. Every call site already declares which tier it
+> wants, so switching real limiting on is a change to that one file.
 
 ---
 
 ## API overview
 
-Base path: `/api`
+Base path: `/api`. There are ~220 endpoints; **`/api-docs` is the generated,
+always-current reference**. This section is a map of where things live, not an
+exhaustive list — for the authoritative route table read `routes/index.js` and
+the module it points at.
 
-### Auth
+| Area | Module | Notable endpoints |
+| --- | --- | --- |
+| Health & status | `routes/system.js` | `GET /health`, `GET /` (HTML status page) |
+| Auth | `routes/auth.js` | `/auth/register`, `/auth/login`, `/auth/me`, `/auth/forgot`, `/auth/reset`, `/auth/logout`, `/auth/logout-all` |
+| Users | `routes/users.js`, `routes/adminUsers.js` | `/users/search`, `/admin/users`, `PATCH /admin/users/:id`, `/auth/refresh` |
+| Characters | `routes/characters.js` | `/characters/me`, `/characters/user/:id` (admin; `:id` is a **character** id), inventory, retainers |
+| XP | `routes/characterXp.js`, `routes/xp.js` | `POST /characters/xp/spend` (self, idempotent), `/admin/characters/:id/xp/spend`, `/admin/characters/:id/xp`, `/admin/xp-logs` |
+| Mechanics | `routes/mechanics.js` | `/characters/:id/rouse`, `/spend-wp`, `/apply-damage` — server-authoritative |
+| Downtimes | `routes/downtimes.js` | `/downtimes/mine`, `/downtimes/quota`, `POST /downtimes`, `/admin/downtimes`, `/downtimes/config` |
+| Domains | `routes/domains.js`, `routes/domainClaims.js`, `routes/domainOverlays.js` | claims, requests, Court assignment, safety, codex, restricted map overlays |
+| Coteries | `routes/coteries.js` | CRUD, `/coteries/:id/members/set`, `/coteries/:id/purchase`, `/coteries/:id/xp` (admin) |
+| Boons | `routes/boons.js` | `/boons`, `/boons/entities` — Court writes, everyone reads |
+| Court | `routes/camarilla.js` | `/camarilla/roster` (public), `/admin/camarilla/update` |
+| Chat | `routes/chat.js`, `routes/npcChat.js` | DMs, groups, reactions, media, 4h edit/delete window, NPC threads |
+| Email (in-fiction) | `routes/emails.js` | `/emails/my-inbox`, `/emails/send`, `/admin/emails/*` |
+| News & rumours | `routes/news.js`, `routes/rumors.js` | public feed, sitemap, authoring, per-theme permissions, broadcast |
+| Premonitions | `routes/premonitions.js` | Malkavian visions: authoring, delivery, media |
+| Hunts | `routes/hunts.js` | hunt/step authoring, review, group join, submission |
+| Live sessions | `routes/liveSessions.js` | lifecycle, participants, rolls, ST broadcast |
+| Dice | `routes/dice.js` | `POST /dice/rolls`, `/admin/dice/rolls` |
+| Wiki | `routes/wiki.js` | articles, search, graph, timeline, Elysium boards |
+| Push | `routes/push.js` | subscribe/unsubscribe, per-category settings, test send |
+| NPCs | `routes/npcs.js` | admin CRUD + NPC XP |
+| Avatars | `routes/avatars.js` | `GET/PUT /{users,npcs,retainers,identities}/:id/avatar` |
+| Admin tooling | `routes/adminMisc.js`, `routes/adminLogs.js`, `routes/maintenance.js`, `routes/discordAdmin.js`, `routes/ntfy.js`, `routes/clans.js`, `routes/banner.js` | events, broadcasts, timelines, blood web, audit logs, log tail, SSE migration runners, Discord/ntfy config, clan availability, global banner |
 
-- `POST /auth/register` → returns `{ token }`
-- `POST /auth/login` → returns `{ token }`
-- `GET /auth/me` → returns `{ user }` (requires auth)
+### Conventions
 
-### Characters (player)
-
-- `GET /characters/me` → `{ character }`
-- `POST /characters` body `{ name, clan, sheet }` → `{ character }` (starts at **50 XP**)
-- `PUT /characters` body `{ name?, clan?, sheet? }` → `{ character }`
-- `POST /characters/xp/spend` → `{ character, spent }`
-
-### Downtimes (player)
-
-- `GET /downtimes/quota` → `{ used, limit: 3 }` (per calendar month)
-- `GET /downtimes/mine` → `{ downtimes: [...] }`
-- `POST /downtimes` body `{ title, body, feeding_type? }` → `{ downtime }`
-
-### Domains / claims
-
-- `GET /domain-claims` → `{ claims: [...] }`
-
-### Admin endpoints
-
-- `GET /admin/users`
-- `PATCH /admin/users/:id` body `{ display_name?, email?, role? }` (if implemented)
-- `PATCH /admin/characters/:id` body `{ name?, clan?, sheet? }`
-- `PATCH /admin/characters/:id/xp` body `{ delta }`
-- `GET /admin/downtimes`
-- `PATCH /admin/downtimes/:id` body `{ status?, gm_notes?, gm_resolution? }`
-- Claims:
-  - `PATCH /admin/domain-claims/:division` body `{ owner_name?, color?, owner_character_id? }` (upsert)
-  - `DELETE /admin/domain-claims/:division`
-
-### NPC endpoints (admin)
-
-NPCs are `characters` with `user_id IS NULL`.
-
-- `GET /admin/npcs`
-- `POST /admin/npcs` body `{ name, clan, sheet? }` → starts at **10,000 XP**
-- `GET /admin/npcs/:id`
-- `PATCH /admin/npcs/:id` body `{ name?, clan?, sheet? }`
-- `DELETE /admin/npcs/:id`
-- `POST /admin/npcs/:id/xp/spend`
+- Success bodies are JSON objects, never bare arrays: `{ character }`,
+  `{ articles: [...] }`, `{ ok: true }`.
+- Errors are `{ error: "..." }`, with `{ error: "Validation Error", details }`
+  for schema failures.
+- Everything under `/api/admin` is sent `Cache-Control: no-store` by a global
+  hook, so the admin panel never reads a stale 304.
+- Long-running admin jobs stream **SSE** rather than blocking a request — see
+  `routes/maintenance.js`.
+- `POST /api/characters/xp/spend` honours an `Idempotency-Key` header, so a
+  retried request cannot double-spend. It is the only endpoint that does.
 
 ---
 
@@ -370,32 +457,107 @@ Response:
 
 ---
 
+## Realtime (socket.io)
+
+`realtime.js` attaches socket.io to the same HTTP server and decorates the
+Fastify instance, so route modules publish through `fastify.io` (or
+`req.server.io` inside a handler).
+
+- **Handshake auth** mirrors `authRequired`: the JWT is read from the handshake
+  `Cookie` header (falling back to `auth.token`), verified, and checked against
+  the user's current `token_version`. Unauthenticated sockets are rejected.
+- **Rooms**: `user_<id>` (joined automatically), `admin_chat` (admins and Court),
+  `group_<id>` (membership-checked on join), `session_<code>` (participants and
+  STs).
+- **Events**: the server emits `chat:refresh` and `chat:reactions` to nudge
+  clients to refetch, and `refresh_session` for live sessions. `chat_message` is
+  relayed for live sessions with the sender identity overwritten from the
+  verified socket — a client cannot spoof who sent a message.
+- The socket.io CORS allowlist is the same `config/cors.js` list the HTTP layer
+  uses.
+
+---
+
+## Background jobs
+
+Every cron and interval in the process is registered in `jobs/index.js` and
+started once, by `startJobs()`, after the server is listening. Nothing schedules
+itself as a side effect of being `require()`d.
+
+| Schedule | Job |
+| --- | --- |
+| `0 12 * * *` | Downtime deadline pings — DMs players who still owe actions when the deadline is 24–48h out. No-ops without a Discord client. |
+| `* * * * *` | Mass-release ping — one ntfy broadcast the moment the countdown expires, latched by `downtime_mass_release_notified`. |
+| every 60s | Daily Discord mail digest — compares the clock to the admin-set `discord_schedule_time`; sends at most once per day. |
+| `59 23 * * *` | End-of-day ntfy summary, then resets the counters. |
+
+---
+
+## Tests
+
+```bash
+npm test          # vitest run
+npm run test:watch
+```
+
+Integration tests build a real Fastify instance from the production route
+plugins (`tests/setup/testApp.js`) against an isolated test database
+(`TEST_DB_NAME`, see `tests/setup/env.js`). Auth, authorization and DB access
+are the real code — only outbound side effects (ntfy, EmailJS, image uploads)
+are stubbed.
+
+Because route modules take their pool/logger/guards from `opts`, mounting one in
+isolation is a single `app.register(require('../../routes/x'), { pool, ... })`.
+
+---
+
 ## Swagger / OpenAPI
 
-If Swagger is enabled in this backend:
-
 - Local: `http://localhost:3001/api-docs`
-- Production (as referenced in code/docs): `https://api.attlarp.gr/api-docs`
+- Production: `https://api.attlarp.gr/api-docs`
 
-To authorize in Swagger UI:
+The spec (`swagger_output.json`) is regenerated by `swagger-autogen.js` on every
+`npm run dev` / `npm start`. Its scanned-file list is derived from
+`ROUTE_MODULES` in `routes/index.js`, so adding a route module documents it
+automatically.
 
-1. Call `/api/auth/login` to obtain a token.
-2. Click **Authorize**.
-3. Paste: `Bearer <token>`
+Swagger UI runs in the browser and shares its cookies with the API, so if you
+are already logged in to the portal on the same site, authenticated calls just
+work. For a Bearer token instead, click **Authorize** and paste
+`Bearer <token>`.
 
 ---
 
 ## Troubleshooting / gotchas
 
-- **FK create errors (`errno:150`)**: check signed vs unsigned ID types and ensure InnoDB.
-- **403 on admin routes**: your JWT role isn’t `admin`.
-- **JWT invalid**: server restarted with a different `JWT_SECRET`.
-- **CORS**: ensure the Express app allows the frontend origin in development.
-- **mysql2 promise usage**: export `pool.promise()` from `db.js` and `await pool.query(...)`.
+- **Boot exits immediately with a variable name** — a required key is missing
+  from `.env`. Note it is `DB_PASS`, not `DB_PASSWORD`.
+- **`EADDRINUSE :3001`** — another instance is already running. `PORT=0` does
+  *not* pick a random port; `Number(process.env.PORT) || 3001` treats 0 as unset.
+- **401 everywhere after a deploy** — `JWT_SECRET` changed, or the user's
+  `token_version` was bumped. Both force a re-login, by design.
+- **Login works locally but not in production (Safari / iOS / Incognito)** — a
+  cookie-flag problem, not a credentials problem. See
+  `utils/authCookie.js`; set `COOKIE_SECURE=true` explicitly if the reverse
+  proxy does not forward `X-Forwarded-Proto`.
+- **CORS failures** — add the origin to `CORS_ORIGIN`. `config/cors.js` is the
+  single source of truth and is shared by HTTP, SSE and the socket.io
+  handshake; there is no "allow all" fallback because auth is a cookie.
+- **403 on admin routes** — the session's role is not `admin`. Court officers
+  (`courtuser`) pass `requireCourt` but not `requireAdmin`.
+- **Admin log viewer is empty** — `LOG_FILE` is unset.
+- **Discord features silently do nothing** — the bot runs in
+  `discordWorker.js`; without `DISCORD_BOT_TOKEN` every Discord path no-ops by
+  design (`services/discord.js` exports a null client).
+- **FK create errors (`errno:150`)** — check signed vs unsigned ID types and
+  make sure the engine is InnoDB.
 
 ---
 
 ## cURL examples
+
+Auth is a cookie, so use a cookie jar (`-c` to save, `-b` to send). The
+`Authorization: Bearer` header works too, if you prefer.
 
 ### Register
 
@@ -405,28 +567,29 @@ curl -X POST http://localhost:3001/api/auth/register \
   -d '{"email":"admin@example.com","display_name":"Admin","password":"changeme"}'
 ```
 
-### Login
+### Login (stores the session cookie in cookies.txt)
 
 ```bash
-curl -X POST http://localhost:3001/api/auth/login \
+curl -c cookies.txt -X POST http://localhost:3001/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"admin@example.com","password":"changeme"}'
-# => { "token": "..." }
 ```
 
-### Create character
+### Who am I
 
 ```bash
-curl -X POST http://localhost:3001/api/characters \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"name":"Alexios","clan":"Tremere","sheet":{"predatorType":"Siren"}}'
+curl -b cookies.txt http://localhost:3001/api/auth/me
 ```
 
 ### Spend XP (discipline dot increase)
 
+`Idempotency-Key` makes a retry safe — replaying the same key returns the first
+response instead of charging twice.
+
 ```bash
-curl -X POST http://localhost:3001/api/characters/xp/spend \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+curl -b cookies.txt -X POST http://localhost:3001/api/characters/xp/spend \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: 3f1c1f5e-1f0e-4a3f-9b47-1a2b3c4d5e6f' \
   -d '{
     "type":"discipline",
     "disciplineKind":"clan",
@@ -440,16 +603,33 @@ curl -X POST http://localhost:3001/api/characters/xp/spend \
 ### Admin: resolve a downtime
 
 ```bash
-curl -X PATCH http://localhost:3001/api/admin/downtimes/12 \
-  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+curl -b cookies.txt -X PATCH http://localhost:3001/api/admin/downtimes/12 \
+  -H 'Content-Type: application/json' \
   -d '{"status":"resolved","gm_resolution":"You tracked the ghoul and reclaimed the book."}'
+```
+
+### Upload an avatar (multipart)
+
+```bash
+curl -b cookies.txt -X PUT http://localhost:3001/api/users/1/avatar \
+  -F 'avatar=@portrait.png'
 ```
 
 ---
 
 ## Production notes
 
-- Run behind a reverse proxy (nginx) with TLS.
-- Use a process manager (PM2/systemd).
-- Keep DB backups.
-- Rotate `JWT_SECRET` carefully (forces user re-login).
+- Run behind a reverse proxy (Apache/nginx) terminating TLS. Make sure it
+  forwards `X-Forwarded-Proto`, or set `COOKIE_SECURE=true` explicitly —
+  otherwise the session cookie's flags are guessed from the hostname.
+- The proxy must pass WebSocket upgrades through for socket.io, or realtime
+  chat silently falls back to polling.
+- Use a process manager (PM2/systemd). `npm start` regenerates the Swagger spec
+  first, so the process needs write access to `swagger_output.json`.
+- `sharp` is pinned to low memory use (`cache(false)`, `concurrency(1)`) for the
+  2GB Plesk box — don't remove that without checking headroom.
+- Keep DB backups. `initDatabase()` creates missing tables but never drops or
+  alters existing data.
+- Rotate `JWT_SECRET` deliberately: it logs every user out.
+- The Discord bot is a separate module in the same process
+  (`discordWorker.js`); it reconnects on its own and never blocks API boot.

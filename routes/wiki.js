@@ -1,14 +1,14 @@
 module.exports = async function (fastify, opts) {
-  const { pool, log, authRequired, imageClient } = opts;
+  const { pool, log, authRequired, optionalAuth, imageClient } = opts;
 
   /* -------------------- WIKI ARTICLES -------------------- */
 
   // Get all published articles (Dashboard / Feed)
   fastify.get('/api/wiki/articles', async (req, reply) => {
     try {
-      // Determine if caller is admin (token optional)
-      let isAdmin = false;
-      try { await authRequired(req, reply); isAdmin = req.user?.role === 'admin'; } catch (_) {}
+      // Determine if caller is admin (token optional — anonymous is fine here)
+      await optionalAuth(req);
+      const isAdmin = req.user?.role === 'admin';
 
       const statusFilter = isAdmin ? `a.status IN ('published','private')` : `a.status = 'published'`;
       const [rows] = await pool.query(
@@ -36,14 +36,9 @@ module.exports = async function (fastify, opts) {
 
       // Permission check for private articles
       if (article.status === 'private') {
-         try {
-           await authRequired(req, reply);
-           if (req.user.role !== 'admin') {
-              return reply.status(403).send({ error: 'Forbidden' });
-           }
-         } catch (err) {
-           return reply.status(401).send({ error: 'Unauthorized' });
-         }
+        const user = await optionalAuth(req);
+        if (!user) return reply.status(401).send({ error: 'Unauthorized' });
+        if (user.role !== 'admin') return reply.status(403).send({ error: 'Forbidden' });
       }
 
       const [tagRows] = await pool.query(

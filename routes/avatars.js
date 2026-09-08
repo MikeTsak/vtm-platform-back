@@ -3,6 +3,31 @@
 // Avatar read/write for every portrait-bearing entity (users, NPCs, retainers,
 // email identities). Uploads are resized and pushed to the image CDN.
 
+const axios = require('axios');
+
+// The GET routes normally 302 to the image CDN (img.miketsak.gr), which sends
+// no CORS header. That's fine for a plain <img>, but the Domains map reads
+// avatar pixels into a WebGL texture (deck.gl IconLayer) and a canvas — that
+// needs the bytes served same-origin. Call the endpoint with ?raw=1 and it
+// proxies the CDN image through instead of redirecting. Falls back to the
+// redirect if the upstream fetch fails.
+async function sendAvatar(reply, log, targetUrl, wantRaw) {
+  if (wantRaw) {
+    try {
+      const up = await axios.get(targetUrl, { responseType: 'arraybuffer', timeout: 10000 });
+      reply.header('Content-Type', up.headers['content-type'] || 'image/webp');
+      reply.header('Cache-Control', 'public, max-age=86400');
+      return reply.send(Buffer.from(up.data));
+    } catch (err) {
+      log.warn('Avatar raw proxy failed; redirecting instead', { url: targetUrl, error: err.message });
+    }
+  }
+  reply.header('Cache-Control', 'public, max-age=86400');
+  return reply.redirect(targetUrl);
+}
+
+const wantsRaw = (req) => req.query.raw === '1' || req.query.raw === 'true';
+
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, getMimeType, imageClient, sharp } = opts;
 
@@ -17,8 +42,7 @@ module.exports = async function (fastify, opts) {
             : null;
 
       if (targetUrl) {
-        reply.header('Cache-Control', 'public, max-age=86400');
-        return reply.redirect(targetUrl);
+        return sendAvatar(reply, log, targetUrl, wantsRaw(req));
       }
 
       if (!rows[0].avatar) return reply.status(404).send('Avatar not found');
@@ -227,8 +251,7 @@ module.exports = async function (fastify, opts) {
             : null;
 
       if (targetUrl) {
-        reply.header('Cache-Control', 'public, max-age=86400');
-        return reply.redirect(targetUrl);
+        return sendAvatar(reply, log, targetUrl, wantsRaw(req));
       }
 
       if (!rows[0].avatar) return reply.status(404).send('Avatar not found');

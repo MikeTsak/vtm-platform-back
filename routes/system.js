@@ -14,7 +14,7 @@ const { DEFAULT_CORS_ORIGINS } = require('../config/cors');
 const APP_ROOT = path.join(__dirname, '..');
 
 module.exports = async function (fastify, opts) {
-  const { pool } = opts;
+  const { pool, authRequired, requireAdmin } = opts;
 
   // --- Simple status/health ---
 
@@ -48,7 +48,10 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  fastify.get('/api/debug/db-check', async (req, reply) => {
+  // Admin-only: this returns the database name and the most recent hunts and
+  // hunt_steps — including each step's `prompt`, i.e. puzzle content players
+  // are meant to discover in play. It was previously unauthenticated.
+  fastify.get('/api/debug/db-check', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const [hunts] = await pool.query('SELECT id, title, is_active, created_at FROM hunts ORDER BY created_at DESC LIMIT 10');
       const [steps] = await pool.query('SELECT id, hunt_id, step_order, task_type, prompt FROM hunt_steps ORDER BY id DESC LIMIT 10');

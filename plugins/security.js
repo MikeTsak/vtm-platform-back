@@ -64,6 +64,28 @@ module.exports = fp(async function security(fastify) {
   });
   fastify.after(() => pluginLoaded('static'));
 
-  fastify.register(compression);
+  // Registered NON-global on purpose: it decorates reply.compress() but adds no
+  // onSend hook, so no route is compressed unless it asks.
+  //
+  // Why: Fastify requires an async handler that calls reply.send() to also
+  // `return reply` (or `return reply.send(...)`). Handlers across this codebase
+  // instead end with a bare `reply.send(...)` — ~490 call sites. With a global
+  // compression onSend hook in play, reply.send() no longer completes
+  // synchronously, so the handler's promise resolves with `undefined` while the
+  // reply is still in flight and Fastify sends a SECOND, empty response. The
+  // client then gets `Content-Encoding: gzip` with `Content-Length: 0` and an
+  // empty body — but only for payloads over the 1KB compression threshold,
+  // which is why small responses looked fine and every large list (admin users,
+  // rosters, claims, coteries) came back blank.
+  //
+  // This was latent before the routes moved into plugins: inline routes were
+  // added to the root instance synchronously, before this plugin's hook was
+  // installed during ready(), so global compression never actually applied to
+  // them. Turning it on for the first time is what surfaced the handler bug.
+  //
+  // To switch global compression back on, the handlers must be fixed first —
+  // every `reply.send(x)` that ends an async handler needs to become
+  // `return reply.send(x)`.
+  fastify.register(compression, { global: false });
   fastify.after(() => pluginLoaded('compression'));
 });
