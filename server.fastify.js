@@ -86,6 +86,7 @@ const VAR_EXPIRES = process.env.EMAILJS_VAR_EXPIRES || 'expires_minutes';
 
 // Install global handlers to catch crashes and unhandled promise rejections
 installProcessHandlers();
+let io = null;
 const bootStartedAt = Date.now();
 const { startBootProgress, pluginLoaded, printReadyBanner } = require('./utils/bootBanner');
 
@@ -2300,6 +2301,12 @@ fastify.post('/api/admin/chat/reply-as-npc/:npcId/:userId', { preHandler: [authR
     );
 
     log.adm('Admin replied as NPC', { admin_id: req.user.id, npc_id: npcId, to_user_id: userId });
+
+    if (io) {
+      io.to(`user_${userId}`).emit('chat:refresh', { type: 'npc', partnerId: Number(npcId) });
+      io.to('admin_chat').emit('chat:refresh', { type: 'npc', partnerId: Number(npcId), userId: Number(userId) });
+    }
+
     reply.send({ ok: true, message: 'Message sent as NPC' });
   } catch (e) {
     log.err('Admin reply as NPC failed', { message: e.message, stack: e.stack });
@@ -2854,6 +2861,11 @@ fastify.post('/api/chat/npc/messages', { preHandler: [authRequired] }, async (re
     }
     // ----------------------------------------------
 
+    if (io) {
+      io.to('admin_chat').emit('chat:refresh', { type: 'npc', partnerId: Number(npc_id), userId });
+      io.to(`user_${userId}`).emit('chat:refresh', { type: 'npc', partnerId: Number(npc_id) });
+    }
+
     reply.status(201).json({ message });
   } catch (e) {
     log.err('NPC send failed', { message: e.message });
@@ -2924,6 +2936,11 @@ fastify.post('/api/admin/chat/npc/messages', { preHandler: [authRequired, requir
     }
     // ----------------------------------------
 
+    if (io) {
+      io.to(`user_${user_id}`).emit('chat:refresh', { type: 'npc', partnerId: Number(npc_id) });
+      io.to('admin_chat').emit('chat:refresh', { type: 'npc', partnerId: Number(npc_id), userId: Number(user_id) });
+    }
+
     reply.status(201).json({ message });
   } catch (e) {
     reply.status(500).json({ error: 'Failed' });
@@ -2981,17 +2998,8 @@ fastify.get('/api/npcs/:id/avatar', async (req, reply) => {
           : null;
 
     if (targetUrl) {
-      try {
-        const response = await fetch(targetUrl);
-        if (!response.ok) return reply.status(404).send('Avatar not found on CDN');
-        const buffer = await response.arrayBuffer();
-        const mimeType = response.headers.get('content-type') || 'image/jpeg';
-        reply.header('Content-Type', mimeType);
-        reply.header('Cache-Control', 'public, max-age=86400');
-        return reply.send(Buffer.from(buffer));
-      } catch (err) {
-        return reply.status(500).send('Error proxying avatar');
-      }
+      reply.header('Cache-Control', 'public, max-age=86400');
+      return reply.redirect(targetUrl);
     }
 
     if (!rows[0].avatar) return reply.status(404).send('Avatar not found');
@@ -3051,10 +3059,19 @@ fastify.get('/api/retainers/:id/avatar', async (req, reply) => {
   try {
     const [rows] = await pool.query('SELECT avatar_url, avatar_url_thumb, avatar FROM retainers WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return reply.status(404).send('No avatar found');
-    if (req.query.size === 'thumb' && rows[0].avatar_url_thumb) return reply.redirect(rows[0].avatar_url_thumb);
-    if (rows[0].avatar_url) return reply.redirect(rows[0].avatar_url);
+    if (req.query.size === 'thumb' && rows[0].avatar_url_thumb) {
+      reply.header('Cache-Control', 'public, max-age=86400');
+      return reply.redirect(rows[0].avatar_url_thumb);
+    }
+    if (rows[0].avatar_url) {
+      reply.header('Cache-Control', 'public, max-age=86400');
+      return reply.redirect(rows[0].avatar_url);
+    }
     if (!rows[0].avatar) return reply.status(404).send('No avatar found');
-    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) return reply.redirect(rows[0].avatar);
+    if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) {
+      reply.header('Cache-Control', 'public, max-age=86400');
+      return reply.redirect(rows[0].avatar);
+    }
     const mime = getMimeType(rows[0].avatar);
     reply.header('Content-Type', mime);
     reply.header('Cache-Control', 'public, max-age=86400');
@@ -3543,17 +3560,8 @@ fastify.get('/api/identities/:id/avatar', async (req, reply) => {
           : null;
 
     if (targetUrl) {
-      try {
-        const response = await fetch(targetUrl);
-        if (!response.ok) return reply.status(404).send('Avatar not found on CDN');
-        const buffer = await response.arrayBuffer();
-        const mimeType = response.headers.get('content-type') || 'image/jpeg';
-        reply.header('Content-Type', mimeType);
-        reply.header('Cache-Control', 'public, max-age=86400');
-        return reply.send(Buffer.from(buffer));
-      } catch (err) {
-        return reply.status(500).send('Error proxying avatar');
-      }
+      reply.header('Cache-Control', 'public, max-age=86400');
+      return reply.redirect(targetUrl);
     }
 
     if (!rows[0].avatar) return reply.status(404).send('Avatar not found');
@@ -3983,6 +3991,14 @@ fastify.post('/api/chat/groups/:id/messages', { preHandler: [authRequired] }, as
     }
     // --------------------------------------------
 
+    if (io) {
+      io.to(`group_${groupId}`).emit('chat:refresh', { type: 'group', groupId });
+      for (const member of members) {
+        io.to(`user_${member.user_id}`).emit('chat:refresh', { type: 'group', groupId });
+      }
+      io.to(`user_${req.user.id}`).emit('chat:refresh', { type: 'group', groupId });
+    }
+
     reply.status(201).json({ message });
   } catch (e) {
     log.err('Group send failed', { message: e.message });
@@ -4223,12 +4239,110 @@ fastify.post('/api/chat/messages', { preHandler: [authRequired] }, async (req, r
       recipient_id,
       message.sender_name,
       message.attachment_id ? '📷 Image Attachment' : message.body
-    )
+    );
+
+    if (io) {
+      io.to(`user_${recipient_id}`).emit('chat:refresh', { type: 'user', partnerId: req.user.id });
+      io.to(`user_${req.user.id}`).emit('chat:refresh', { type: 'user', partnerId: recipient_id });
+    }
 
     reply.status(201).send({ message });
   } catch (e) {
     log.err('Failed to send message', { message: e.message });
     reply.status(500).send({ error: 'Failed' });
+  }
+});
+
+/* --- Chat Reactions --- */
+const ALLOWED_REACTION_TABLES = ['chat_messages', 'npc_messages', 'chat_group_messages'];
+
+fastify.post('/api/chat/messages/:id/reactions', { preHandler: [authRequired] }, async (req, reply) => {
+  try {
+    const messageId = Number(req.params.id);
+    const { table, emoji } = req.body || {};
+    const userId = req.user.id;
+
+    if (!messageId || !table || !emoji || !ALLOWED_REACTION_TABLES.includes(table)) {
+      return reply.status(400).send({ error: 'Invalid reaction parameters' });
+    }
+
+    // Toggle reaction: delete if exists, otherwise insert
+    const [existing] = await pool.query(
+      'SELECT id FROM chat_message_reactions WHERE message_table = ? AND message_id = ? AND user_id = ? AND emoji = ?',
+      [table, messageId, userId, emoji]
+    );
+
+    if (existing.length > 0) {
+      await pool.query('DELETE FROM chat_message_reactions WHERE id = ?', [existing[0].id]);
+    } else {
+      await pool.query(
+        'INSERT INTO chat_message_reactions (message_table, message_id, user_id, emoji) VALUES (?, ?, ?, ?)',
+        [table, messageId, userId, emoji]
+      );
+    }
+
+    // Fetch updated aggregate reactions for this message
+    const [rows] = await pool.query(
+      `SELECT emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
+       FROM chat_message_reactions
+       WHERE message_table = ? AND message_id = ?
+       GROUP BY emoji`,
+      [table, messageId]
+    );
+
+    const reactions = rows.map(r => ({
+      emoji: r.emoji,
+      count: Number(r.count),
+      users: r.users ? r.users.split(',').map(Number) : []
+    }));
+
+    if (io) {
+      io.emit('chat:reactions', { table, messageId });
+      io.emit('chat:refresh', { type: 'reaction', table, messageId });
+    }
+
+    reply.send({ reactions });
+  } catch (e) {
+    log.err('Failed to toggle reaction', { error: e.message });
+    reply.status(500).send({ error: 'Failed to toggle reaction' });
+  }
+});
+
+fastify.post('/api/chat/messages/reactions/batch', { preHandler: [authRequired] }, async (req, reply) => {
+  try {
+    const { table, ids } = req.body || {};
+
+    if (!table || !ALLOWED_REACTION_TABLES.includes(table) || !Array.isArray(ids) || ids.length === 0) {
+      return reply.send({ reactions: {} });
+    }
+
+    const cleanIds = ids.map(Number).filter(n => Number.isInteger(n) && n > 0).slice(0, 150);
+    if (cleanIds.length === 0) {
+      return reply.send({ reactions: {} });
+    }
+
+    const [rows] = await pool.query(
+      `SELECT message_id, emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
+       FROM chat_message_reactions
+       WHERE message_table = ? AND message_id IN (?)
+       GROUP BY message_id, emoji`,
+      [table, cleanIds]
+    );
+
+    const map = {};
+    for (const r of rows) {
+      if (!map[r.message_id]) map[r.message_id] = [];
+      map[r.message_id].push({
+        emoji: r.emoji,
+        count: Number(r.count),
+        users: r.users ? r.users.split(',').map(Number) : []
+      });
+    }
+
+    reply.send({ reactions: map });
+  } catch (e) {
+    log.err('Failed to batch fetch reactions', { error: e.message });
+    reply.status(500).send({ error: 'Failed to batch fetch reactions' });
   }
 });
 
@@ -4446,6 +4560,14 @@ fastify.post('/api/chat/read', { preHandler: [authRequired] }, async (req, reply
         [sender_id, req.user.id]
       );
     }
+
+    if (io) {
+      io.to(`user_${req.user.id}`).emit('chat:refresh', { type: 'read', sender_id, npc_id });
+      if (sender_id) {
+        io.to(`user_${sender_id}`).emit('chat:refresh', { type: 'read', reader_id: req.user.id });
+      }
+    }
+
     reply.send({ ok: true });
   } catch (e) {
     reply.status(500).json({ error: 'Failed to mark as read' });
@@ -8389,17 +8511,8 @@ fastify.get('/api/users/:id/avatar', async (req, reply) => {
           : null;
 
     if (targetUrl) {
-      try {
-        const response = await fetch(targetUrl);
-        if (!response.ok) return reply.status(404).send('Avatar not found on CDN');
-        const buffer = await response.arrayBuffer();
-        const mimeType = response.headers.get('content-type') || 'image/jpeg';
-        reply.header('Content-Type', mimeType);
-        reply.header('Cache-Control', 'public, max-age=86400');
-        return reply.send(Buffer.from(buffer));
-      } catch (err) {
-        return reply.status(500).send('Error proxying avatar');
-      }
+      reply.header('Cache-Control', 'public, max-age=86400');
+      return reply.redirect(targetUrl);
     }
 
     if (!rows[0].avatar) return reply.status(404).send('Avatar not found');
@@ -8875,7 +8988,7 @@ const PORT = Number(process.env.PORT) || 3001;
 const server = fastify.server;
 const { Server } = require('socket.io');
 const { parse: parseCookieHeader } = require('cookie');
-const io = new Server(server, {
+io = new Server(server, {
   // Matches the HTTP CORS policy: an explicit origin allowlist + credentials,
   // never '*' — the handshake now carries the httpOnly session cookie.
   cors: { origin: corsOrigin, credentials: true }
@@ -8906,6 +9019,34 @@ io.use(async (socket, next) => {
 });
 
 io.on('connection', (socket) => {
+  // Real-time chat: automatically join authenticated user's private room
+  if (socket.user?.id) {
+    socket.join(`user_${socket.user.id}`);
+    if (socket.user.role === 'admin' || socket.user.role === 'courtuser') {
+      socket.join('admin_chat');
+    }
+  }
+
+  // Real-time group chat rooms
+  socket.on('join_group', async (groupId) => {
+    try {
+      if (!groupId || !socket.user?.id) return;
+      const [rows] = await pool.query(
+        'SELECT 1 FROM chat_group_members WHERE group_id = ? AND user_id = ? LIMIT 1',
+        [groupId, socket.user.id]
+      );
+      if (rows.length > 0) {
+        socket.join(`group_${groupId}`);
+      }
+    } catch (e) {
+      log.err('Socket join_group failed', { error: e.message });
+    }
+  });
+
+  socket.on('leave_group', (groupId) => {
+    if (groupId) socket.leave(`group_${groupId}`);
+  });
+
   socket.on('join_session', async (sessionId) => {
     try {
       if (!sessionId) return;
