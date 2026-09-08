@@ -185,6 +185,44 @@ function scheduleDailySummary() {
   });
 }
 
+// ============================================================================
+// NIGHTLY DATABASE BACKUP
+// ============================================================================
+// Writes a gzipped SQL dump to back/backups (see scripts/backup-db.js) and
+// prunes anything past the retention window.
+//
+// Defaults to --no-media: premonition_media and news_media hold full-size
+// images as BLOBs and are ~370 MB of a ~383 MB database, so a nightly full dump
+// would be 400 MB a night. Without them the dump is ~2.4 MB, and those images
+// barely change. Set BACKUP_SCHEDULE_FULL=true for full nightly dumps, and take
+// a manual `npm run backup` before anything risky either way.
+function scheduleNightlyBackup() {
+  if (process.env.BACKUP_SCHEDULE_ENABLED === 'false') {
+    log.info('Nightly database backup is disabled (BACKUP_SCHEDULE_ENABLED=false).');
+    return null;
+  }
+  const expr = process.env.BACKUP_SCHEDULE_CRON || '30 3 * * *';
+  const skipMedia = process.env.BACKUP_SCHEDULE_FULL !== 'true';
+
+  return cron.schedule(expr, async () => {
+    try {
+      const { backup } = require('../scripts/backup-db');
+      const res = await backup({ quiet: true, skipMedia });
+      const mb = (res.size / 1024 / 1024).toFixed(1);
+      log.ok(`Database backup written (${mb} MB, ${res.rows} rows${skipMedia ? ', media omitted' : ''}).`);
+      if (res.pruned) log.info(`Pruned ${res.pruned} expired backup(s).`);
+    } catch (e) {
+      log.err('Nightly database backup FAILED', { error: e.message });
+      broadcastNtfyAlert(`Nightly database backup failed:\n${e.message}`, {
+        title: '🚨 Backup failed',
+        tags: ['rotating_light', 'floppy_disk'],
+        priority: 'high',
+        requiresSubscription: 'errors',
+      }).catch(() => { });
+    }
+  });
+}
+
 let started = false;
 function startJobs() {
   if (started) return;
@@ -193,6 +231,7 @@ function startJobs() {
   scheduleMassReleasePings();
   scheduleDailyMailCheck();
   scheduleDailySummary();
+  scheduleNightlyBackup();
   log.start('Background jobs scheduled.');
 }
 

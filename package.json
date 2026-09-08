@@ -7,7 +7,11 @@
     "start": "node swagger-autogen.js && node server.fastify.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "migrate": "node migrations/run-migrations.js",
+    "migrate": "node scripts/migrate.js",
+    "migrate:status": "node scripts/migrate-status.js",
+    "migrate:legacy": "node migrations/run-migrations.js",
+    "backup": "node scripts/backup-db.js",
+    "backup:list": "node scripts/backup-db.js --list",
     "migrate-avatar-thumbs": "node migrate-avatar-thumbs.js",
     "migrate-avatars-to-cdn": "node migrate-avatars-to-cdn.js",
     "migrate-news-urls": "node update_news_urls.js"

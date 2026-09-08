@@ -36,6 +36,8 @@ All components communicate with this backend API to provide a full-featured LARP
 - [Realtime (socket.io)](#realtime-socketio)
 - [Background jobs](#background-jobs)
 - [Tests](#tests)
+- [Backups](#backups)
+- [Schema versions (migrations)](#schema-versions-migrations)
 - [Swagger / OpenAPI](#swagger--openapi)
 - [Troubleshooting / gotchas](#troubleshooting--gotchas)
 - [cURL examples](#curl-examples)
@@ -84,7 +86,11 @@ numbered migrations in `migrations/list/`.
 | `dev` | Regenerate the Swagger spec, then run under nodemon |
 | `start` | Regenerate the Swagger spec, then run once |
 | `test` / `test:watch` | vitest integration + unit tests |
-| `migrate` | Run the numbered migrations in `migrations/list/` |
+| `migrate` | Apply pending migrations from `migrations/list/` |
+| `migrate:status` | Show which migrations are applied and which are pending |
+| `migrate:legacy` | The old ad-hoc `run-migrations.js`; superseded, kept for reference |
+| `backup` | Full gzipped SQL dump (add `-- --no-media` to skip image BLOBs) |
+| `backup:list` | List existing backups with size and date |
 | `migrate-avatar-thumbs` | Backfill the 160px avatar thumbnails |
 | `migrate-avatars-to-cdn` | One-off: move BLOB avatars to the image CDN |
 | `migrate-news-urls` | One-off: rewrite legacy news media URLs |
@@ -511,6 +517,115 @@ isolation is a single `app.register(require('../../routes/x'), { pool, ... })`.
 
 ---
 
+## Backups
+
+`scripts/backup-db.js` writes a gzipped SQL dump using mysql2 — deliberately
+**not** `mysqldump`, which isn't installed everywhere this runs and whose absence
+would silently stop the job. The output is a plain SQL script, so you can import
+it straight into **phpMyAdmin** (Import ▸ choose file — it accepts `.sql.gz`), or
+pipe it to a mysql client:
+
+```bash
+gunzip -c backups/vtm-20260909-033000.sql.gz | mysql -u USER -p vtm
+```
+
+```bash
+npm run backup                  # full dump           -> vtm-<stamp>.sql.gz
+npm run backup -- --no-media    # game data only      -> vtm-<stamp>-nomedia.sql.gz
+npm run backup:list             # what's on disk
+```
+
+### Why `--no-media` exists
+
+`premonition_media` and `news_media` store full-resolution images as BLOBs:
+
+| table | rows | size |
+| --- | ---: | ---: |
+| premonition_media | 38 | 349.5 MB |
+| news_media | 36 | 21.5 MB |
+| **everything else combined** | ~12,600 | **~12 MB** |
+
+So a full dump is ~400 MB and a `--no-media` dump is ~2.4 MB, for the same
+chronicle data. A nightly 400 MB backup would fill the Plesk box in days, and
+those 74 images barely change.
+
+A partial backup is never disguised as a full one: the filename carries
+`-nomedia`, the file header says `*** PARTIAL BACKUP ***` and names the omitted
+tables, and each skipped table is marked in place with
+`-- row data intentionally omitted (N rows)`. **Take a full `npm run backup`
+before anything risky.**
+
+### Nightly job
+
+`jobs/index.js` schedules one at 03:30 with `--no-media`, prunes anything past
+the retention window, and fires an ntfy alert if it fails.
+
+```env
+BACKUP_SCHEDULE_ENABLED=true      # set false to turn it off
+BACKUP_SCHEDULE_CRON=30 3 * * *
+BACKUP_SCHEDULE_FULL=false        # true = include media every night (~400 MB)
+BACKUP_DIR=./backups              # gitignored
+BACKUP_RETENTION_DAYS=14          # 0 disables pruning
+BACKUP_MEDIA_TABLES=premonition_media,news_media
+```
+
+Backups are written to disk on the same machine as the database, which protects
+against a bad migration or a mistaken `DELETE` — **not** against losing the box.
+Copy them off-site if that matters.
+
+---
+
+## Schema versions (migrations)
+
+Migrations are numbered files in `migrations/list/`, and applied ones are
+recorded in the `schema_migrations` table. `initDatabase()` runs pending ones on
+every boot, so a deploy is self-applying; `npm run migrate` does the same by
+hand, and `npm run migrate:status` shows where you stand:
+
+```
+  applied   0011_avatar_thumb_urls             2026-09-05T00:47:41.000Z
+  applied   0012_performance_indexes           2026-09-08T22:55:01.000Z
+  PENDING   0013_something_new
+  orphaned  0008_chat_message_reactions        (recorded, but no file on disk)
+```
+
+### Applying to another server (production)
+
+Deploying the code and restarting is enough — `initDatabase()` applies anything
+pending on boot. If you'd rather run a change by hand in phpMyAdmin first,
+`migrations/sql/` holds a hand-runnable equivalent for migrations where that is
+useful (e.g. `0012_performance_indexes.sql`). Those files are idempotent, run
+STEP 0 as a read-only inspection before changing anything, and do not replace the
+`.js` migration — the app still records itself in `schema_migrations` afterwards.
+
+### Writing one
+
+Create `migrations/list/00NN_short_name.js` exporting **exactly this shape**:
+
+```js
+module.exports = {
+  name: '00NN_short_name',      // must match, and must never change once applied
+  async up(pool) {
+    await pool.query('ALTER TABLE ...');
+  },
+};
+```
+
+The runner skips anything that doesn't have both `name` and `up`, and it does so
+**silently** — `0010_downtime_read.js` exported a bare function for weeks and was
+skipped on every single boot without ever being recorded. Check
+`npm run migrate:status` after adding one.
+
+Two more rules the schema_migrations table can't enforce for you:
+
+- **Never renumber an applied migration.** `name` is the key. Renaming a file
+  that has already run makes the runner treat it as new and apply it a second
+  time — that is what the `orphaned 0008_chat_message_reactions` row above is.
+- **Make `up()` idempotent** where you can (check `information_schema` or
+  `SHOW COLUMNS` first). If a migration throws partway it is *not* recorded, so
+  the next boot retries it from the top.
+
+---
 ## Swagger / OpenAPI
 
 - Local: `http://localhost:3001/api-docs`

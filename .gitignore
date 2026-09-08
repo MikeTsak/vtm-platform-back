@@ -43,3 +43,6 @@ Thumbs.db
 package-lock.json
 yarn.lock
 pnpm-lock.yaml
+
+# Database backups (scripts/backup-db.js)
+backups/
