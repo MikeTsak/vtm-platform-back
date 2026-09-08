@@ -3,6 +3,9 @@ const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder
 const { log } = require('./logger');
 const pool = require('./db');
 const { getSetting, setSetting } = require('./utils/settings');
+// The !roll command called computeV5Outcome without ever importing it, so it
+// threw ReferenceError. Same shared implementation the API routes use.
+const { computeV5Outcome } = require('./services/dice');
 // AI disabled for memory optimization
 const axios = require('axios');
 const sharp = require('sharp');

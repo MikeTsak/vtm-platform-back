@@ -54,16 +54,13 @@ const doc = {
 };
 
 const outputFile = './swagger_output.json';
+// Scanned files, derived from the route manifest so a new route module is
+// documented automatically instead of silently missing from /api-docs.
+const { ROUTE_MODULES } = require('./routes');
 const routes = [
   './server.fastify.js',
-  './routes/auth.js',
-  './routes/characters.js',
-  './routes/dashboard.fastify.js',
-  './routes/dashboard.js',
-  './routes/index.fastify.js',
-  './routes/index.js',
-  './routes/users.fastify.js',
-  './routes/users.js'
+  './app.js',
+  ...ROUTE_MODULES.map((m) => `./routes/${m.path.replace(/^\.\//, '')}.js`),
 ];
 
 // Generate swagger_output.json

@@ -1,6 +1,6 @@
 # VTM Platform (V5 LARP) — Backend
 
-Express + MariaDB backend API for the **Vampire: The Masquerade V5 LARP** platform.
+Fastify + MariaDB backend API for the **Vampire: The Masquerade V5 LARP** platform.
 
 It provides authentication, character management, XP economy (including discipline power assignment), downtimes, domains/claims, and admin tooling (users, XP tools, and NPCs).
 
@@ -202,14 +202,61 @@ CREATE TABLE IF NOT EXISTS domain_claims (
 
 ## Project layout
 
-(High level — see the repo for exact filenames)
+The API is a Fastify app assembled from plugins. `server.fastify.js` only
+sequences the boot; it contains no routes.
 
 ```
-server.js            # Express app + routes
-db.js                # mysql2 pool (promise)
-authMiddleware.js    # JWT auth + requireAdmin
-swagger.config.js    # OpenAPI config (if enabled)
+server.fastify.js          # entry point: env -> app -> socket.io -> jobs -> listen
+app.js                     # builds the Fastify instance (no listen, no side effects)
+realtime.js                # socket.io: auth, rooms, chat relay; decorates fastify.io
+db.js                      # mysql2 pool (promise)
+authMiddleware.fastify.js  # authRequired / requireAdmin
+
+config/                # environment-derived configuration
+  cors.js              #   origin allowlist, shared by HTTP + SSE + socket.io
+
+plugins/               # Fastify infrastructure (fastify-plugin wrapped, root scope)
+  observability.js     #   request logging, admin no-store, error handler, onClose
+  security.js          #   multipart, helmet, cors, cookie, static, compression
+  docs.js              #   swagger + /api-docs
+
+routes/                # one plugin per feature
+  index.js             #   the route manifest + shared dependency bundle
+  chat.js  news.js  hunts.js  domainClaims.js  liveSessions.js  ...  (38 modules)
+
+services/              # shared, route-agnostic logic
+  push.js  discord.js  email.js  media.js  dice.js  guards.js
+  format.js  news.js  sse.js  banner.js  logTail.js  token.js
+  liveSession.js  domainOverlays.js
+
+jobs/                  # every cron/interval in the process, started by startJobs()
+utils/                 # small pure helpers (settings, sanitize, xpCost, clans, ...)
+migrations/            # schema creation + migration runner
+tests/                 # vitest integration tests (see tests/setup/testApp.js)
 ```
+
+### Adding a route
+
+1. Create `routes/<feature>.js`:
+
+   ```js
+   module.exports = async function (fastify, opts) {
+     const { pool, log, authRequired } = opts;
+
+     fastify.get('/api/thing', { preHandler: [authRequired] }, async (req, reply) => {
+       // ...
+     });
+   };
+   ```
+
+2. Add it to `ROUTE_MODULES` in `routes/index.js`.
+
+That is the whole wiring — Swagger picks the module up from the same manifest.
+
+`opts` carries only what a test may want to substitute: the pool, the logger,
+the auth guards, the rate limiters, and the external clients. Anything
+stateless (pure helpers, config, settings access) should be `require()`d
+directly by the module that uses it rather than threaded through `opts`.
 
 ---
 
