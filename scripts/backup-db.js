@@ -35,7 +35,9 @@
 //     BACKUP_RETENTION_DAYS   default: 14   (0 disables pruning)
 //     BACKUP_MEDIA_TABLES     default: premonition_media,news_media
 
-require('dotenv').config();
+// Load .env from the application root, not the current working directory, so
+// this works from a cron entry, a Plesk scheduled task, or any other cwd.
+require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
@@ -109,8 +111,11 @@ function prune(dir) {
   return removed;
 }
 
-async function backup({ quiet = false, skipMedia = false } = {}) {
+// onProgress({ phase, table, rows, index, total, skipped }) is called as each
+// table completes, so callers (the admin SSE runner) can stream progress.
+async function backup({ quiet = false, skipMedia = false, onProgress } = {}) {
   const say = quiet ? () => {} : (...a) => console.log(...a);
+  const report = typeof onProgress === 'function' ? onProgress : () => {};
   const skipData = new Set(skipMedia ? MEDIA_TABLES : []);
   const dir = backupDir();
   fs.mkdirSync(dir, { recursive: true });
@@ -169,9 +174,12 @@ async function backup({ quiet = false, skipMedia = false } = {}) {
      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME`,
   );
   const tables = tableRows.map((r) => r.n);
+  report({ phase: 'start', total: tables.length });
 
   let totalRows = 0;
+  let index = 0;
   for (const table of tables) {
+    index++;
     const [[create]] = await conn.query(`SHOW CREATE TABLE \`${table}\``);
     const ddl = create['Create Table'];
 
@@ -181,11 +189,15 @@ async function backup({ quiet = false, skipMedia = false } = {}) {
       const [[{ n: skipped }]] = await conn.query(`SELECT COUNT(*) AS n FROM \`${table}\``);
       await write(`-- row data intentionally omitted (${skipped} rows)\n`);
       say(`  ${table.padEnd(32)} STRUCTURE ONLY (${skipped} rows omitted)`);
+      report({ phase: 'table', table, rows: skipped, index, total: tables.length, skipped: true });
       continue;
     }
 
     const [[{ n: count }]] = await conn.query(`SELECT COUNT(*) AS n FROM \`${table}\``);
-    if (count === 0) continue;
+    if (count === 0) {
+      report({ phase: 'table', table, rows: 0, index, total: tables.length, skipped: false });
+      continue;
+    }
     totalRows += count;
 
     // Stream rather than loading the whole table into memory, and flush by
@@ -219,6 +231,7 @@ async function backup({ quiet = false, skipMedia = false } = {}) {
     }
     await flush();
     say(`  ${table.padEnd(32)} ${count} rows`);
+    report({ phase: 'table', table, rows: count, index, total: tables.length, skipped: false });
   }
 
   await write(`\nSET FOREIGN_KEY_CHECKS = 1;\n`);

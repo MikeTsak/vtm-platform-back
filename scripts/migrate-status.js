@@ -7,7 +7,9 @@
 // every boot, so in normal operation there is never anything pending — this is
 // for checking after a deploy, or before touching the database by hand.
 
-require('dotenv').config();
+// Load .env from the application root, not the current working directory, so
+// this works from a cron entry, a Plesk scheduled task, or any other cwd.
+require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const fs = require('fs');
 const path = require('path');
 const pool = require('../db');

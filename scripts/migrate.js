@@ -9,7 +9,9 @@
 // schema_migrations bookkeeping. It is still there as `migrate:legacy`, but
 // nothing calls it in normal operation.)
 
-require('dotenv').config();
+// Load .env from the application root, not the current working directory, so
+// this works from a cron entry, a Plesk scheduled task, or any other cwd.
+require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const pool = require('../db');
 const { runMigrations } = require('../migrations/runner');
 
