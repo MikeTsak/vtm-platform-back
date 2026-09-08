@@ -309,6 +309,38 @@ module.exports = async function (fastify, opts) {
   // INVENTORY ROUTES
   // ==========================================
 
+  // Mirrors the enum on inventory_items.item_type. Anything else makes
+  // MariaDB raise 'Data truncated for column', which surfaced as a 500;
+  // a bad type is the caller's mistake, so answer 400.
+  const ITEM_TYPES = ['Relic', 'Artifact', 'Blood Magic', 'Weapon', 'Armor', 'Mundane'];
+
+  // A data: URL is pushed to the image CDN and replaced by its https URL.
+  // Anything else (an existing CDN url, or null) is passed through.
+  const resolveItemImage = async (image, charId) => {
+    if (!image || !String(image).startsWith('data:image')) return image || null;
+    try {
+      const base64Data = image.split(';base64,').pop();
+      const buffer = Buffer.from(base64Data, 'base64');
+      const extMatch = image.match(/data:image\/([a-zA-Z0-9]+);/);
+      const ext = extMatch ? extMatch[1] : 'jpeg';
+      const result = await imageClient.uploadImage(buffer, `inventory_${charId}_${Date.now()}.${ext}`);
+      if (result && result.success) return result.url;
+      log.warn('Inventory image upload failed, setting to null');
+      return null;
+    } catch (err) {
+      log.err('Error uploading inventory image', { error: err.message });
+      return null;
+    }
+  };
+
+  // quantity is optional, but 0 and negatives are meaningless for an
+  // inventory row. `quantity || 1` also turned a deliberate 0 into 1,
+  // so be explicit about the floor.
+  const normaliseQty = (q) => {
+    const n = Number(q);
+    return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+  };
+
   // GET: Fetch a character's inventory (owner or admin — mirrors POST/PUT/DELETE below)
   fastify.get('/api/characters/:id/inventory', { preHandler: [authRequired] }, async (req, reply) => {
     // Prevent ghost caching of items
@@ -338,6 +370,9 @@ module.exports = async function (fastify, opts) {
     const { name, item_type, description, mechanic_notes, quantity, image, researched } = req.body;
 
     if (!name) return reply.status(400).json({ error: 'Item name is required' });
+    if (item_type && !ITEM_TYPES.includes(item_type)) {
+      return reply.status(400).json({ error: `Invalid item type. Expected one of: ${ITEM_TYPES.join(', ')}` });
+    }
 
     try {
       if (req.user.role !== 'admin') {
@@ -345,31 +380,12 @@ module.exports = async function (fastify, opts) {
         if (!charRows.length) return reply.status(403).json({ error: 'Unauthorized' });
       }
 
-      let finalImage = image || null;
-      if (image && image.startsWith('data:image')) {
-        try {
-          const base64Data = image.split(';base64,').pop();
-          const buffer = Buffer.from(base64Data, 'base64');
-          const extMatch = image.match(/data:image\/([a-zA-Z0-9]+);/);
-          const ext = extMatch ? extMatch[1] : 'jpeg';
-          const filename = `inventory_${charId}_${Date.now()}.${ext}`;
-          const result = await imageClient.uploadImage(buffer, filename);
-          if (result && result.success) {
-            finalImage = result.url;
-          } else {
-            log.warn('Inventory image upload failed, setting to null');
-            finalImage = null;
-          }
-        } catch (err) {
-          log.err('Error uploading inventory image', { error: err.message });
-          finalImage = null;
-        }
-      }
+      const finalImage = await resolveItemImage(image, charId);
 
       const [r] = await pool.query(
         `INSERT INTO inventory_items (character_id, name, item_type, description, mechanic_notes, quantity, image, researched) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [charId, name, item_type || 'Mundane', description || null, mechanic_notes || null, quantity || 1, finalImage, researched ? 1 : 0]
+        [charId, name, item_type || 'Mundane', description || null, mechanic_notes || null, normaliseQty(quantity), finalImage, researched ? 1 : 0]
       );
 
       const [[newItem]] = await pool.query('SELECT * FROM inventory_items WHERE id = ?', [r.insertId]);
@@ -387,6 +403,9 @@ module.exports = async function (fastify, opts) {
     const { name, item_type, description, mechanic_notes, quantity, image, researched } = req.body;
 
     if (!name) return reply.status(400).json({ error: 'Item name is required' });
+    if (item_type && !ITEM_TYPES.includes(item_type)) {
+      return reply.status(400).json({ error: `Invalid item type. Expected one of: ${ITEM_TYPES.join(', ')}` });
+    }
 
     try {
       if (req.user.role !== 'admin') {
@@ -394,35 +413,31 @@ module.exports = async function (fastify, opts) {
         if (!charRows.length) return reply.status(403).json({ error: 'Unauthorized' });
       }
 
-      let finalImage = image || null;
-      if (image && image.startsWith('data:image')) {
-        try {
-          const base64Data = image.split(';base64,').pop();
-          const buffer = Buffer.from(base64Data, 'base64');
-          const extMatch = image.match(/data:image\/([a-zA-Z0-9]+);/);
-          const ext = extMatch ? extMatch[1] : 'jpeg';
-          const filename = `inventory_${charId}_${Date.now()}.${ext}`;
-          const result = await imageClient.uploadImage(buffer, filename);
-          if (result && result.success) {
-            finalImage = result.url;
-          } else {
-            log.warn('Inventory image upload failed, setting to null');
-            finalImage = null;
-          }
-        } catch (err) {
-          log.err('Error uploading inventory image', { error: err.message });
-          finalImage = null;
-        }
+      // An absent `image` key means 'leave the picture alone'; an explicit
+      // null clears it. Previously any PUT without the field silently wiped
+      // the image, because `image || null` cannot tell the two apart.
+      let finalImage;
+      if (!Object.prototype.hasOwnProperty.call(req.body || {}, 'image')) {
+        const [[current]] = await pool.query('SELECT image FROM inventory_items WHERE id=? AND character_id=?', [itemId, charId]);
+        if (!current) return reply.status(404).json({ error: 'Item not found' });
+        finalImage = current.image;
+      } else {
+        finalImage = await resolveItemImage(image, charId);
       }
 
-      await pool.query(
+      const [result] = await pool.query(
         `UPDATE inventory_items 
        SET name=?, item_type=?, description=?, mechanic_notes=?, quantity=?, image=?, researched=? 
        WHERE id=? AND character_id=?`,
-        [name, item_type || 'Mundane', description || null, mechanic_notes || null, quantity || 1, finalImage, researched ? 1 : 0, itemId, charId]
+        [name, item_type || 'Mundane', description || null, mechanic_notes || null, normaliseQty(quantity), finalImage, researched ? 1 : 0, itemId, charId]
       );
 
-      reply.send({ success: true });
+      // affectedRows 0 means the id/character pair matched nothing — a wrong
+      // id used to answer 200, so the client believed a lost edit had saved.
+      if (!result.affectedRows) return reply.status(404).json({ error: 'Item not found' });
+
+      const [[updated]] = await pool.query('SELECT * FROM inventory_items WHERE id = ?', [itemId]);
+      reply.send({ success: true, item: updated });
     } catch (e) {
       log.err('Failed to update inventory item', { message: e.message });
       reply.status(500).json({ error: 'Failed to update item' });
@@ -440,7 +455,8 @@ module.exports = async function (fastify, opts) {
         if (!charRows.length) return reply.status(403).json({ error: 'Unauthorized' });
       }
 
-      await pool.query('DELETE FROM inventory_items WHERE id=? AND character_id=?', [itemId, charId]);
+      const [result] = await pool.query('DELETE FROM inventory_items WHERE id=? AND character_id=?', [itemId, charId]);
+      if (!result.affectedRows) return reply.status(404).json({ error: 'Item not found' });
       reply.send({ success: true });
     } catch (e) {
       log.err('Failed to delete inventory item', { message: e.message });

@@ -670,6 +670,13 @@ module.exports = async function (fastify, opts) {
         return reply.status(400).send({ error: 'Invalid reaction parameters' });
       }
 
+      // emoji is varchar(32). Without this a longer body is silently
+      // truncated (or 500s under strict mode) instead of being rejected —
+      // the client only ever sends a short emoji or a ':Clan_Name:' token.
+      if (typeof emoji !== 'string' || emoji.length > 32) {
+        return reply.status(400).send({ error: 'Invalid reaction' });
+      }
+
       // Toggle reaction: delete if exists, otherwise insert
       const [existing] = await pool.query(
         'SELECT id FROM chat_message_reactions WHERE message_table = ? AND message_id = ? AND user_id = ? AND emoji = ?',

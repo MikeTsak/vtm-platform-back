@@ -12,7 +12,7 @@ const { backup, listBackups, backupDir } = require('../scripts/backup-db');
 const APP_ROOT = path.join(__dirname, '..');
 
 module.exports = async function (fastify, opts) {
-  const { log, authRequired, requireAdmin } = opts;
+  const { pool, log, authRequired, requireAdmin } = opts;
 
   // Admin: Run Migrations Stream (SSE)
 
@@ -395,5 +395,62 @@ module.exports = async function (fastify, opts) {
       .header('Content-Disposition', `attachment; filename="${name}"`)
       .header('Content-Length', fs.statSync(full).size);
     return reply.send(fs.createReadStream(full));
+  });
+
+  /* ------------------------------------------------------------------
+   * Schema versions
+   *
+   * The equivalent of phpMyAdmin's Tracking tab for this application.
+   * phpMyAdmin's own tracking only records statements it executes itself,
+   * so it never sees our schema changes — those are applied by
+   * migrations/runner.js at boot. schema_migrations is the real record.
+   * ------------------------------------------------------------------ */
+  fastify.get('/api/admin/schema-versions', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    const LIST_DIR = path.join(APP_ROOT, 'migrations', 'list');
+
+    let applied = new Map();
+    try {
+      const [rows] = await pool.query('SELECT name, applied_at FROM schema_migrations ORDER BY name');
+      applied = new Map(rows.map((r) => [r.name, r.applied_at]));
+    } catch (e) {
+      // Before the first run the table does not exist yet; that is not an error.
+      if (e.code !== 'ER_NO_SUCH_TABLE') {
+        log.err('Failed to read schema_migrations', { error: e.message });
+        return reply.status(500).send({ error: 'Failed to read schema versions' });
+      }
+    }
+
+    const files = fs.existsSync(LIST_DIR)
+      ? fs.readdirSync(LIST_DIR).filter((f) => f.endsWith('.js')).sort()
+      : [];
+
+    const nameOf = (file) => {
+      try {
+        const mod = require(path.join(LIST_DIR, file));
+        return (mod && mod.name) || file.replace(/\.js$/, '');
+      } catch (e) {
+        return file.replace(/\.js$/, '');
+      }
+    };
+
+    const versions = files.map((file) => {
+      const name = nameOf(file);
+      const at = applied.get(name);
+      return { name, file, applied: Boolean(at), applied_at: at || null };
+    });
+
+    // Recorded in the database but with no file on disk — a deleted or
+    // renamed migration. Harmless, but worth surfacing rather than hiding.
+    const known = new Set(versions.map((v) => v.name));
+    const orphaned = [...applied.keys()]
+      .filter((n) => !known.has(n))
+      .map((n) => ({ name: n, applied_at: applied.get(n) }));
+
+    return reply.send({
+      database: process.env.DB_NAME,
+      versions,
+      orphaned,
+      pending: versions.filter((v) => !v.applied).length,
+    });
   });
 };
