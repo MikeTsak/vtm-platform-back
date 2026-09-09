@@ -98,10 +98,11 @@ module.exports = async function (fastify, opts) {
 
   // GET /api/auth/me
   fastify.get('/me', { preHandler: [authRequired] }, async (req, reply) => {
-    const [rows] = await fastify.db.query('SELECT ui_sounds_enabled FROM users WHERE id = ?', [req.user.id]);
+    const [rows] = await fastify.db.query('SELECT ui_sounds_enabled, theme FROM users WHERE id = ?', [req.user.id]);
     const ui_sounds_enabled = rows.length > 0 ? !!rows[0].ui_sounds_enabled : true;
+    const theme = rows.length > 0 ? (rows[0].theme || null) : null;
     log.auth('Auth me', { id: req.user.id, email: req.user.email, role: req.user.role });
-    reply.send({ user: { ...req.user, ui_sounds_enabled } });
+    reply.send({ user: { ...req.user, ui_sounds_enabled, theme } });
   });
 
   // POST /api/auth/forgot
@@ -198,6 +199,11 @@ module.exports = async function (fastify, opts) {
   fastify.put('/theme', { preHandler: [authRequired] }, async (req, reply) => {
     const { theme } = req.body;
     if (!theme) return reply.status(400).send({ error: 'Theme is required' });
+
+    const ALLOWED_THEMES = ['clan', 'camarilla', 'schrecknet', 'anarch', 'Giannakis'];
+    if (!ALLOWED_THEMES.includes(theme)) {
+      return reply.status(400).send({ error: 'Unknown theme' });
+    }
 
     await fastify.db.query('UPDATE users SET theme = ? WHERE id = ?', [theme, req.user.id]);
     reply.send({ success: true, theme });
