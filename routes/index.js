@@ -27,6 +27,7 @@ const ROUTE_MODULES = [
   { name: 'users', path: './users', prefix: '/api/users' },
   { name: 'characters', path: './characters' },
   { name: 'character-xp', path: './characterXp' },
+  { name: 'discipline-access', path: './disciplineAccess' },
   { name: 'wiki', path: './wiki' },
 
   { name: 'system', path: './system' },

@@ -100,6 +100,17 @@ function buildTestApp(pool) {
     authRequired,
   });
 
+  app.register(require('../../routes/disciplineAccess'), {
+    pool,
+    log: testLog,
+    authRequired,
+    requireAdmin,
+    broadcastNtfyAlert: noop,
+    // sendPushNotification intentionally omitted — the route calls it via
+    // `?.()`, so leaving it undefined here exercises that no-op path rather
+    // than needing a fake implementation.
+  });
+
   app.register(require('../../routes/coteries'), {
     pool,
     log: testLog,

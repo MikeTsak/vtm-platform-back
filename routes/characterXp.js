@@ -26,6 +26,25 @@ module.exports = async function (fastify, opts) {
       return reply.status(400).json({ error: 'Create a character first' });
     }
 
+    // Out-of-clan disciplines are only purchasable once an ST has unlocked
+    // them for this character (see routes/disciplineAccess.js) — everything
+    // else (in-clan, Caitiff's "any discipline", power selection) is
+    // unrestricted, same as before.
+    if (type === 'discipline' && disciplineKind === 'other') {
+      const [[access]] = await pool.query(
+        'SELECT max_level FROM discipline_access WHERE character_id=? AND discipline=?',
+        [ch.id, target]
+      );
+      if (!access || Number(access.max_level) < Number(newLevel)) {
+        log.warn('XP spend blocked: discipline not unlocked', { user_id: req.user.id, target, newLevel, cap: access?.max_level ?? null });
+        return reply.status(403).json({
+          error: access
+            ? `Your Storyteller has only unlocked ${target} up to level ${access.max_level}.`
+            : `${target} isn't unlocked for your character. Ask your Storyteller, or send a request from the Disciplines tab.`,
+        });
+      }
+    }
+
     // Determine cost (special-case free power assignment)
     let cost = 0;
     try {
