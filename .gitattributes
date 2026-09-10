@@ -1,0 +1,11 @@
+# Keep shell scripts LF-only — they run on the Linux (Plesk) server and a
+# CRLF shebang line breaks them.
+*.sh            text eol=lf
+deploy/**       text eol=lf
+
+# Normalize line endings for the rest of the source tree.
+*.js            text
+*.mjs           text
+*.cjs           text
+*.json          text
+*.md            text

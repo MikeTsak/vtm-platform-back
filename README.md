@@ -85,6 +85,8 @@ numbered migrations in `migrations/list/`.
 | --- | --- |
 | `dev` | Regenerate the Swagger spec, then run under nodemon |
 | `start` | Regenerate the Swagger spec, then run once |
+| `deploy` | Trigger the Plesk pull, wait for `after-pull.sh` + the restart, verify — after you `git push` (see [Deploying](#deploying)) |
+| `deploy:restart` | Bounce the live app only — FTP-touches `tmp/restart.txt`, no pull |
 | `test` / `test:watch` | vitest integration + unit tests |
 | `migrate` | Apply pending migrations from `migrations/list/` |
 | `migrate:status` | Show which migrations are applied and which are pending |
@@ -574,6 +576,42 @@ against a bad migration or a mistaken `DELETE` — **not** against losing the bo
 Copy them off-site if that matters.
 
 ---
+
+## Deploying
+
+There is no build step. The server runs the code straight from a Git checkout
+(Plesk › Websites & Domains › Git), and migrations self-apply on boot
+(`initDatabase()`). A deploy is: **you push → the server pulls → it restarts**.
+
+You do the push yourself (`git push`). Then `npm run deploy` does the rest, with
+a progress bar per phase:
+
+1. **trigger** — POSTs the Plesk Git *Webhook URL* so the server pulls
+   (or, if no URL is configured, prompts you to click "Pull Updates" in Plesk)
+2. **deploying** — waits while Plesk runs `deploy/after-pull.sh`: `npm install`
+   *only if `package.json` changed in the pull*, OpenAPI regen, deploy marker,
+   then `touch tmp/restart.txt`
+3. **restarting** — waits for the process to come back; if it hasn't after a
+   grace period it touches the restart file itself over FTP (`portalback`)
+4. **verify** — `/api/health` is `ok` + DB reachable, and reports the live commit
+
+`npm run deploy -- --no-trigger` skips step 1 (for when you pulled in Plesk by
+hand). `npm run deploy:restart` is just steps 3–4 — bounce the app, no pull.
+
+Config: `back/deploy.config.json` (gitignored — copy `deploy.config.example.json`).
+
+### Plesk one-time setup
+
+- **Git panel → Additional deployment actions**: set the field to exactly
+  `sh deploy/after-pull.sh`.
+- **Git panel → Webhook URL**: copy it into `deploy.config.json` →
+  `pleskWebhookUrl` (so `npm run deploy` can trigger the pull without you
+  clicking). Optional — without it the script just prompts you to click.
+- **Node.js panel**: the application root is the same directory the repo
+  deploys into; Passenger restarts when `tmp/restart.txt` changes.
+
+`package-lock.json` is gitignored, so the server runs `npm install`, not
+`npm ci` — a no-op on the usual deploy where dependencies didn't change.
 
 ## Schema versions (migrations)
 

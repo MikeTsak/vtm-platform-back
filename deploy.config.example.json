@@ -1,0 +1,25 @@
+{
+  "_comment": "Copy to deploy.config.json (gitignored) and fill in. Used by `npm run deploy` / `npm run deploy:restart` (scripts/deploy.mjs). You push with `git push` yourself; this only triggers the Plesk pull, then watches the restart. Env overrides: DEPLOY_API_BASE, DEPLOY_BRANCH, PLESK_WEBHOOK_URL.",
+
+  "apiBase": "https://api.attlarp.gr",
+  "branch": "main",
+
+  "_pleskWebhookUrl": "The 'Webhook URL' shown in Plesk > Websites & Domains > Git for this repo. With it set, `npm run deploy` POSTs it so Plesk pulls automatically. Leave empty to instead be prompted to click 'Pull Updates' in Plesk yourself.",
+  "pleskWebhookUrl": "",
+
+  "_timing": "Only tune the progress bars / patience. expect* = how long a phase usually takes (bar fill rate). waitTimeoutSec = give-up point for the whole run.",
+  "expectDeploySec": 100,
+  "expectRestartSec": 25,
+  "waitTimeoutSec": 360,
+
+  "_ftp": "The portalback FTP account (home dir /api.attlarp.gr = the app root). Used to touch the Passenger restart file: always by `npm run deploy:restart`, and as a fallback in `npm run deploy` if the deployment action didn't restart. restartFile is relative to that home dir.",
+  "ftp": {
+    "host": "api.attlarp.gr",
+    "port": 21,
+    "user": "portalback",
+    "password": "",
+    "secure": true,
+    "tlsStrict": false,
+    "restartFile": "/tmp/restart.txt"
+  }
+}

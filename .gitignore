@@ -12,6 +12,11 @@ pnpm-debug.log*
 .env.local
 .env.*.local
 
+# Deploy — real FTP creds + deploy token, never commit (see deploy.config.example.json)
+deploy.config.json
+.restart.tmp
+public/deploy-status.json
+
 # Logs
 logs
 *.log
