@@ -59,18 +59,20 @@ const nowIso = () => new Date().toISOString();
 
 /* --------------------------------------------------------- restart-only --- */
 if (RESTART_ONLY) {
+  const base = await health();
+  console.log(`  api ${base ? `up ${base.uptime}s (started ${base.startedAt})` : 'not responding'}`);
   process.stdout.write('  FTP: touching restart file … ');
   await ftpRestart();
   console.log('done');
   const t0 = Date.now();
-  const bar = mkBar('restart');
-  const good = await waitFor(RESTART_EXPECT_S, t0, async () => {
+  const bar = mkBar('restart', RESTART_EXPECT_S);
+  const good = await waitFor(t0, Math.max(90_000, RESTART_EXPECT_S * 3000), async () => {
     const h = await health();
     bar.tick(Date.now() - t0, h ? `up ${h.uptime}s · db ${h.db ? 'ok' : '…'}` : 'restarting…');
-    return h && h.ok && h.db && h.startedAt && new Date(h.startedAt).getTime() > t0 - 8000;
+    return h && h.ok && h.db && restarted(base, h);
   });
   bar.done(good);
-  console.log(good ? '\n  restarted and healthy.\n' : '\n  no healthy response yet — check the API.\n');
+  console.log(good ? '\n  restarted and healthy.\n' : '\n  no restart detected — the app may not have picked up tmp/restart.txt.\n');
   process.exit(good ? 0 : 2);
 }
 
@@ -99,6 +101,9 @@ console.log('');
 
 /* ----------------------------------------------------------- 1: trigger --- */
 const triggeredAt = Date.now();
+const baseHealth = await health();
+const baseMarker = await marker();
+if (baseHealth) console.log(`  api now: up ${baseHealth.uptime}s  marker: ${baseMarker?.short || 'none'}`);
 
 if (NO_TRIGGER) {
   console.log('  1/3  trigger        skipped (--no-trigger)');
@@ -119,14 +124,14 @@ if (NO_TRIGGER) {
 /* ------------------------------------------------ 2: wait for the deploy --- */
 console.log('');
 const deployStart = Date.now();
-const bar1 = mkBar('2/3  deploying');
+const bar1 = mkBar('2/3  deploying', DEPLOY_EXPECT_S);
 let sawMarker = null;
 let sawRestart = false;
 
-const deployOk = await waitFor(DEPLOY_EXPECT_S, deployStart, async () => {
+const deployOk = await waitFor(deployStart, HARD_TIMEOUT_MS, async () => {
   const [h, m] = await Promise.all([health(), marker()]);
-  if (m && new Date(m.at).getTime() > triggeredAt - 15000) sawMarker = m;
-  if (h && h.startedAt && new Date(h.startedAt).getTime() > triggeredAt - 8000) sawRestart = true;
+  if (m && (!baseMarker || m.at !== baseMarker.at)) sawMarker = m;   // marker refreshed
+  if (restarted(baseHealth, h)) sawRestart = true;                    // or it already bounced
   const note = sawMarker
     ? `pulled ${sawMarker.short} · deps ${sawMarker.deps}`
     : h ? `waiting… (api up ${h.uptime}s)` : 'waiting…';
@@ -144,12 +149,12 @@ if (!deployOk) {
 /* --------------------------------------------------- 3: wait for restart --- */
 console.log('');
 const restartStart = Date.now();
-const bar2 = mkBar('3/3  restarting');
+const bar2 = mkBar('3/3  restarting', RESTART_EXPECT_S);
 let ftpKicked = false;
 
-const restartOk = await waitFor(RESTART_EXPECT_S, restartStart, async () => {
+const restartOk = await waitFor(restartStart, Math.max(120_000, HARD_TIMEOUT_MS - (Date.now() - triggeredAt)), async () => {
   const h = await health();
-  const back = h && h.ok && h.db && h.startedAt && new Date(h.startedAt).getTime() > triggeredAt - 8000;
+  const back = h && h.ok && h.db && restarted(baseHealth, h);
   bar2.tick(Date.now() - restartStart, h ? (back ? `up ${h.uptime}s · db ok` : `restarting… (${h.uptime}s)`) : 'restarting…');
   // Fallback: after-pull.sh should have touched tmp/restart.txt. If we've
   // waited well past normal and it hasn't restarted, do it ourselves.
@@ -198,6 +203,16 @@ async function health() {
   }
 }
 
+// Has the process bounced since `base`? Compared against a baseline captured
+// before we triggered — no wall-clock math, so local/server clock skew is
+// irrelevant. If the API was down at baseline, any healthy response counts.
+function restarted(base, h) {
+  if (!h) return false;
+  if (!base) return h.ok;
+  if (base.startedAt && h.startedAt) return h.startedAt !== base.startedAt;
+  return h.uptime < base.uptime;
+}
+
 async function marker() {
   try {
     const r = await fetch(`${API}/public/deploy-status.json?_=${Date.now()}`);
@@ -209,12 +224,15 @@ async function marker() {
   }
 }
 
-// Poll `check()` every 2s until it returns true or the hard timeout hits.
-// `expectS` only drives how the progress bar fills.
-async function waitFor(expectS, startedAt, check) {
-  while (Date.now() - startedAt < HARD_TIMEOUT_MS && Date.now() - triggeredAt < HARD_TIMEOUT_MS) {
+// Poll `check()` every 2s until it returns true or `maxMs` elapses.
+async function waitFor(startedAt, maxMs, check) {
+  while (Date.now() - startedAt < maxMs) {
     let done = false;
-    try { done = await check(); } catch { /* keep waiting */ }
+    try {
+      done = await check();
+    } catch (e) {
+      if (process.env.DEPLOY_DEBUG) console.error('  [debug] poll error:', e.message);
+    }
     if (done) return true;
     await sleep(2000);
   }
@@ -223,7 +241,7 @@ async function waitFor(expectS, startedAt, check) {
 
 // A progress bar that fills toward `expectS` but never completes until you
 // call .done() — so a slow phase keeps crawling instead of sitting at 100%.
-function mkBar(label) {
+function mkBar(label, expectS = 60) {
   const tty = process.stdout.isTTY;
   let b;
   if (tty) {
