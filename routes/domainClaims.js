@@ -3,8 +3,10 @@
 // Domain claims on the Athens map: player requests, Court adjudication,
 // safety ratings, and the player-contributed codex.
 
+const { isDomainManager, requireDomainManager, listDomainManagers } = require('../services/domainManagers');
+
 module.exports = async function (fastify, opts) {
-  const { pool, log, authRequired, requireAdmin, requireCourt, sendPushNotification } = opts;
+  const { pool, log, authRequired, requireAdmin, sendPushNotification } = opts;
 
   /* -------------------- Domain Claims -------------------- */
   /** List all claims (public for logged-in users) */
@@ -138,6 +140,59 @@ module.exports = async function (fastify, opts) {
     reply.send({ ok: true });
   });
 
+  /* -------------------- Domain Stewards (who may run the map) -------------------- */
+
+  /** Any logged-in user: the roster of Domain Stewards, and whether *I* am one.
+   *  The dossier "Requests" tab shows this list read-only. */
+  fastify.get('/api/domain-claims/managers', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const managers = await listDomainManagers();
+      reply.send({
+        managers,
+        me: {
+          isAdmin: req.user.role === 'admin',
+          canManageDomains: await isDomainManager(req.user.id, req.user.role),
+        },
+      });
+    } catch (err) {
+      log.err('GET /api/domain-claims/managers failed', { error: err.message });
+      reply.status(500).json({ error: 'Database error fetching Domain Stewards' });
+    }
+  });
+
+  /** Admin only: add a Domain Steward. */
+  fastify.post('/api/domain-claims/managers', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    const userId = Number(req.body?.user_id);
+    if (!Number.isInteger(userId)) return reply.status(400).json({ error: 'user_id (int) is required' });
+    try {
+      const [[u]] = await pool.query('SELECT id FROM users WHERE id=?', [userId]);
+      if (!u) return reply.status(404).json({ error: 'User not found' });
+      await pool.query(
+        'INSERT IGNORE INTO domain_manager_grants (user_id, granted_by) VALUES (?,?)',
+        [userId, req.user.id],
+      );
+      log.adm('Domain Steward added', { user_id: userId, by: req.user.id });
+      reply.send({ ok: true, managers: await listDomainManagers() });
+    } catch (err) {
+      log.err('POST /api/domain-claims/managers failed', { error: err.message });
+      reply.status(500).json({ error: 'Database error adding Domain Steward' });
+    }
+  });
+
+  /** Admin only: remove a Domain Steward. */
+  fastify.delete('/api/domain-claims/managers/:userId', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    const userId = Number(req.params.userId);
+    if (!Number.isInteger(userId)) return reply.status(400).json({ error: 'bad user id' });
+    try {
+      await pool.query('DELETE FROM domain_manager_grants WHERE user_id=?', [userId]);
+      log.adm('Domain Steward removed', { user_id: userId, by: req.user.id });
+      reply.send({ ok: true, managers: await listDomainManagers() });
+    } catch (err) {
+      log.err('DELETE /api/domain-claims/managers/:userId failed', { error: err.message });
+      reply.status(500).json({ error: 'Database error removing Domain Steward' });
+    }
+  });
+
   /* -------------------- Domain Claim Requests -------------------- */
 
   /** Public (any logged-in user): pending + recently-resolved requests across all divisions */
@@ -215,8 +270,8 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  /** Court/admin: approve or reject a pending request */
-  fastify.post('/api/domain-claims/requests/:requestId/:action', { preHandler: [authRequired, requireCourt] }, async (req, reply) => {
+  /** Domain Steward / admin: approve or reject a pending request */
+  fastify.post('/api/domain-claims/requests/:requestId/:action', { preHandler: [authRequired, requireDomainManager] }, async (req, reply) => {
   const { requestId, action } = req.params;
     if (action !== 'approve' && action !== 'reject') {
       return reply.status(400).json({ error: 'action must be approve or reject' });
@@ -315,10 +370,10 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  /* -------------------- Court-Level Domain Assignment -------------------- */
+  /* -------------------- Steward-Level Domain Assignment -------------------- */
 
-  /** Court/admin: list active characters + non-disabled NPCs for the assign dropdowns */
-  fastify.get('/api/court/characters-and-npcs', { preHandler: [authRequired, requireCourt] }, async (req, reply) => {
+  /** Domain Steward / admin: list active characters + non-disabled NPCs for the assign dropdowns */
+  fastify.get('/api/court/characters-and-npcs', { preHandler: [authRequired, requireDomainManager] }, async (req, reply) => {
     try {
       const [characters] = await pool.query(
         `SELECT c.id, c.name, c.clan, u.display_name AS player_name
@@ -340,8 +395,8 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  /** Court/admin: directly assign a division to a character or NPC, or unassign it */
-  fastify.post('/api/court/domain-claims/:division/assign', { preHandler: [authRequired, requireCourt] }, async (req, reply) => {
+  /** Domain Steward / admin: directly assign a division to a character or NPC, or unassign it */
+  fastify.post('/api/court/domain-claims/:division/assign', { preHandler: [authRequired, requireDomainManager] }, async (req, reply) => {
     const division = Number(req.params.division);
     if (!Number.isInteger(division)) {
       return reply.status(400).send({ error: 'division must be an integer' });
@@ -426,8 +481,8 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  /** Court/admin: release a claimed division back to Unclaimed, preserving the previous owner */
-  fastify.post('/api/admin/domain-claims/:division/vacate', { preHandler: [authRequired, requireCourt] }, async (req, reply) => {
+  /** Domain Steward / admin: release a claimed division back to Unclaimed, preserving the previous owner */
+  fastify.post('/api/admin/domain-claims/:division/vacate', { preHandler: [authRequired, requireDomainManager] }, async (req, reply) => {
     const division = Number(req.params.division);
     try {
       const [[row]] = await pool.query('SELECT * FROM domain_claims WHERE division=?', [division]);
@@ -453,8 +508,8 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  /** Court/admin: incident log for a division (Storyteller-facing) */
-  fastify.get('/api/domain-claims/:division/problems', { preHandler: [authRequired, requireCourt] }, async (req, reply) => {
+  /** Domain Steward / admin: incident log for a division (Storyteller-facing) */
+  fastify.get('/api/domain-claims/:division/problems', { preHandler: [authRequired, requireDomainManager] }, async (req, reply) => {
     const division = Number(req.params.division);
     try {
       const [problems] = await pool.query(
@@ -556,15 +611,15 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  /** Author or Court/admin can remove a codex entry */
+  /** Author, Domain Steward, or admin can remove a codex entry */
   fastify.delete('/api/domain-claims/codex/:id', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const [[entry]] = await pool.query('SELECT * FROM domain_codex_entries WHERE id=?', [req.params.id]);
       if (!entry) return reply.status(404).json({ error: 'Entry not found' });
 
       const isAuthor = entry.user_id === req.user.id;
-      const isCourt = req.user.role === 'admin' || req.user.role === 'courtuser';
-      if (!isAuthor && !isCourt) return reply.status(403).json({ error: 'Not allowed to delete this entry' });
+      const canModerate = await isDomainManager(req.user.id, req.user.role);
+      if (!isAuthor && !canModerate) return reply.status(403).json({ error: 'Not allowed to delete this entry' });
 
       await pool.query('DELETE FROM domain_codex_entries WHERE id=?', [req.params.id]);
       log.dom('Domain codex entry deleted', { entry_id: req.params.id, by: req.user.id });

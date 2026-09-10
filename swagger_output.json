@@ -6947,10 +6947,16 @@
                   "humanityDelta": {
                     "example": "any"
                   },
+                  "stainsDelta": {
+                    "example": "any"
+                  },
                   "frenzyState": {
                     "example": "any"
                   },
                   "forceRouseCheck": {
+                    "example": "any"
+                  },
+                  "damage": {
                     "example": "any"
                   }
                 }
