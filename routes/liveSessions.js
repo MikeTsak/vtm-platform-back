@@ -227,6 +227,52 @@ module.exports = async function (fastify, opts) {
     }
   });
 
+  // Player -> Storyteller signals. Unlike /broadcast (admin-only) this is open to
+  // any authenticated participant, but locked to a fixed vocabulary so it can't be
+  // used as a free-text spam channel.
+  const SIGNAL_MESSAGES = {
+    hand:      (n) => `[Hand] ${n} raised their hand for the Storyteller.`,
+    rules:     (n) => `[Rules] ${n} has a rules question.`,
+    afk:       (n) => `[AFK] ${n} stepped away from the table.`,
+    back:      (n) => `[AFK] ${n} is back at the table.`,
+    blush_on:  (n) => `[Status] ${n} activated Blush of Life.`,
+    blush_off: (n) => `[Status] ${n} deactivated Blush of Life.`,
+  };
+
+  fastify.post('/api/live-session/:id/signal', { preHandler: [authRequired, moderateLimiter] }, async (req, reply) => {
+    try {
+      const internalId = await getSessionInternalId(req.params.id);
+      if (!internalId) return reply.status(404).json({ error: 'Session not found' });
+
+      const type = String(req.body?.type || '');
+      const builder = SIGNAL_MESSAGES[type];
+      if (!builder) return reply.status(400).json({ error: 'Unknown signal type' });
+
+      // Only participants (or the running ST) may signal into a session.
+      const [seat] = await pool.query(
+        `SELECT 1 FROM live_session_participants WHERE session_id=? AND user_id=?
+         UNION SELECT 1 FROM live_sessions WHERE id=? AND admin_id=?`,
+        [internalId, req.user.id, internalId, req.user.id]
+      );
+      if (!seat.length) return reply.status(403).json({ error: 'Not a participant in this session' });
+
+      const rawName = typeof req.body?.characterName === 'string' ? req.body.characterName.trim() : '';
+      const name = (rawName || req.user.display_name || 'A player').slice(0, 60);
+
+      await pool.query('INSERT INTO live_session_broadcasts (session_id, message) VALUES (?, ?)',
+        [internalId, builder(name)]);
+
+      if (req.server.io) {
+        req.server.io.to(`session_${req.params.id}`).emit('refresh_session');
+      }
+
+      reply.send({ ok: true });
+    } catch (e) {
+      log.err('Live session signal failed', { error: e.message });
+      reply.status(500).json({ error: 'Failed to send signal' });
+    }
+  });
+
   // Broadcast a message (ST/Admin) - CHANGED TO requireAdmin
   fastify.post('/api/live-session/:id/broadcast', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const internalId = await getSessionInternalId(req.params.id);
@@ -268,7 +314,7 @@ module.exports = async function (fastify, opts) {
   fastify.patch('/api/live-session/:id/players/:charId', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const charId = req.params.charId;
-      const { hungerDelta, healthSupDelta, healthAggDelta, wpSupDelta, wpAggDelta, humanityDelta, frenzyState, forceRouseCheck } = req.body;
+      const { hungerDelta, healthSupDelta, healthAggDelta, wpSupDelta, wpAggDelta, humanityDelta, stainsDelta, frenzyState, forceRouseCheck, damage } = req.body;
 
       const [rows] = await pool.query('SELECT sheet FROM characters WHERE id=?', [charId]);
       if (!rows.length) return reply.status(404).json({ error: 'Char not found' });
@@ -304,8 +350,40 @@ module.exports = async function (fastify, opts) {
         if (!sheet.willpower) sheet.willpower = { superficial: 0, aggravated: 0 };
         sheet.willpower.aggravated = Math.max(0, Number(sheet.willpower.aggravated || 0) + Number(wpAggDelta));
       }
+      if (stainsDelta !== undefined) {
+        sheet.stains = Math.max(0, Math.min(10, Number(sheet.stains || 0) + Number(stainsDelta)));
+      }
       if (frenzyState !== undefined) {
         sheet.frenzyState = frenzyState;
+      }
+
+      // Structured damage: halves Superficial (round up) and converts to
+      // Aggravated 1-to-1 once the Health track is full (V5 core).
+      if (damage && Number(damage.amount) > 0) {
+        const stamina = Number(sheet.attributes?.Stamina) || 1;
+        const fortDots = Number(sheet.disciplines?.Fortitude) || 0;
+        const fortPowers = sheet.disciplinePowers?.Fortitude;
+        const hasResilience = !Array.isArray(fortPowers) || fortPowers.length === 0
+          || fortPowers.some((p) => /resilien/i.test(String((p && (p.id || p.name)) || p)));
+        const max = Math.max(1, stamina + 3 + (hasResilience ? fortDots : 0));
+
+        if (!sheet.health) sheet.health = { superficial: 0, aggravated: 0 };
+        let sup = Math.max(0, Math.min(max, Number(sheet.health.superficial) || 0));
+        let agg = Math.max(0, Math.min(max, Number(sheet.health.aggravated) || 0));
+        const soak = Math.max(0, Number(damage.soak) || 0);
+        let amt = Math.max(0, Math.round(Number(damage.amount)));
+        const isAgg = damage.type === 'aggravated';
+        if (!isAgg) {
+          amt = Math.max(0, amt - soak);
+          if (damage.halve) amt = Math.ceil(amt / 2);
+        }
+        for (let i = 0; i < amt; i += 1) {
+          if (sup + agg < max) { if (isAgg) agg += 1; else sup += 1; }
+          else if (sup > 0) { sup -= 1; agg += 1; }
+          else agg = Math.min(max, agg + 1);
+        }
+        sheet.health.superficial = sup;
+        sheet.health.aggravated = agg;
       }
 
       if (forceRouseCheck) {
