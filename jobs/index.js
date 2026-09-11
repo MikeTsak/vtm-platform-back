@@ -12,6 +12,7 @@ const { log } = require('../logger');
 const { getSetting, setSetting } = require('../utils/settings');
 const { broadcastNtfyAlert } = require('../utils/ntfy');
 const { discordClient, sendDiscordMailNotifications } = require('../services/discord');
+const { runFeedingDecay } = require('../services/feedingDecay');
 
 // ============================================================================
 // AUTOMATED LOGISTICS - DOWNTIME DEADLINE PINGS
@@ -223,6 +224,24 @@ function scheduleNightlyBackup() {
   });
 }
 
+// ============================================================================
+// FEEDING CYCLE DECAY
+// ============================================================================
+// Daily, shortly after midnight: apply the Feeding system's cycle-end passive
+// Masquerade decay for the most recently completed 3-week cycle (see
+// services/feedingDecay.js for the actual rule and the deliberate
+// no-back-fill behavior).
+function scheduleFeedingCycleDecay() {
+  return cron.schedule('5 0 * * *', async () => {
+    try {
+      const result = await runFeedingDecay(pool, log);
+      if (result?.decayed) log.info(`Feeding decay: cycle ${result.completedCycle}, ${result.decayed} division(s) affected.`);
+    } catch (error) {
+      log.err('Feeding cycle decay cron failed', { error: error.message });
+    }
+  });
+}
+
 let started = false;
 function startJobs() {
   if (started) return;
@@ -232,6 +251,7 @@ function startJobs() {
   scheduleDailyMailCheck();
   scheduleDailySummary();
   scheduleNightlyBackup();
+  scheduleFeedingCycleDecay();
   log.start('Background jobs scheduled.');
 }
 

@@ -4,6 +4,7 @@
 // the chronicle-wide downtime configuration.
 const { getSetting, setSetting } = require('../utils/settings');
 const { startOfMonth, endOfMonth, feedingFromPredator } = require('../services/format');
+const { getCycleInfo } = require('../utils/feedingCycle');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, broadcastNtfyAlert } = opts;
@@ -199,6 +200,21 @@ module.exports = async function (fastify, opts) {
       return reply.status(400).json({ error: 'Create a character first' });
     }
 
+    // Feeding gate: this cycle's hunting roll must be resolved before any
+    // downtime action (standard or project) can be submitted.
+    const feedingEnabled = (await getSetting('feeding_enabled', 'true')) === 'true';
+    if (feedingEnabled) {
+      const anchor = await getSetting('feeding_cycle_anchor', new Date().toISOString());
+      const { cycleIndex } = getCycleInfo(anchor);
+      const [fed] = await pool.query(
+        "SELECT id FROM feedings WHERE character_id=? AND cycle_index=? AND status='resolved' LIMIT 1",
+        [ch.id, cycleIndex]
+      );
+      if (!fed.length) {
+        return reply.status(400).json({ error: 'You must feed this cycle before submitting downtime actions.' });
+      }
+    }
+
     let from = startOfMonth();
     let to = endOfMonth();
 
@@ -229,7 +245,7 @@ module.exports = async function (fastify, opts) {
       if (ch.sheet) {
         try {
           const parsed = typeof ch.sheet === 'string' ? JSON.parse(ch.sheet) : ch.sheet;
-          pred = parsed?.predatorType || null;
+          pred = parsed?.predator_type || parsed?.predatorType || null;
         } catch { }
       }
       defaultFeed = feedingFromPredator(pred);

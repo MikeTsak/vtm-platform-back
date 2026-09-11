@@ -46,6 +46,7 @@ const ROUTE_MODULES = [
   { name: 'camarilla', path: './camarilla' },
   { name: 'avatars', path: './avatars' },
   { name: 'downtimes', path: './downtimes' },
+  { name: 'feeding', path: './feeding' },
   { name: 'domains', path: './domains' },
   { name: 'domain-claims', path: './domainClaims' },
   { name: 'domain-overlays', path: './domainOverlays' },
