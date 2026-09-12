@@ -64,6 +64,7 @@ const ROUTE_MODULES = [
   { name: 'hunts', path: './hunts' },
   { name: 'admin-misc', path: './adminMisc' },
   { name: 'mechanics', path: './mechanics' },
+  { name: 'activity', path: './activity', prefix: '/api/activity' },
 ];
 
 function registerRoutes(fastify, deps) {
