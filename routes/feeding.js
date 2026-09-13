@@ -61,7 +61,11 @@ module.exports = async function (fastify, opts) {
   }
 
   async function getCurrentCycle() {
-    const anchor = await getSetting('feeding_cycle_anchor', new Date().toISOString());
+    let anchor = await getSetting('feeding_cycle_anchor', null);
+    if (!anchor || Number.isNaN(new Date(anchor).getTime())) {
+      anchor = new Date().toISOString();
+      await setSetting('feeding_cycle_anchor', anchor);
+    }
     return getCycleInfo(anchor);
   }
 
@@ -457,7 +461,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ enabled });
     } catch (err) {
       log.err('POST /api/admin/feeding/status failed', { error: err.message });
-      reply.status(500).send({ error: 'Database error updating feeding status' });
+      reply.status(500).send({ error: 'Database error updating feeding status', details: err.sqlMessage || err.message });
     }
   });
 
@@ -473,7 +477,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ log: rows });
     } catch (err) {
       log.err('GET /api/admin/feeding/log failed', { error: err.message });
-      reply.status(500).send({ error: 'Database error fetching feeding log' });
+      reply.status(500).send({ error: 'Database error fetching feeding log', details: err.sqlMessage || err.message });
     }
   });
 
@@ -485,7 +489,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true, cycleAnchor: now });
     } catch (err) {
       log.err('POST /api/admin/feeding/force-new-cycle failed', { error: err.message });
-      reply.status(500).send({ error: 'Database error resetting cycle' });
+      reply.status(500).send({ error: 'Database error resetting cycle', details: err.sqlMessage || err.message });
     }
   });
 
@@ -496,7 +500,7 @@ module.exports = async function (fastify, opts) {
       reply.send(result);
     } catch (err) {
       log.err('POST /api/admin/feeding/run-decay failed', { error: err.message });
-      reply.status(500).send({ error: 'Database error running decay' });
+      reply.status(500).send({ error: 'Database error running decay', details: err.sqlMessage || err.message });
     }
   });
 
@@ -525,7 +529,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ roster });
     } catch (err) {
       log.err('GET /api/admin/feeding/herd-roster failed', { error: err.message });
-      reply.status(500).send({ error: 'Database error fetching herd roster' });
+      reply.status(500).send({ error: 'Database error fetching herd roster', details: err.sqlMessage || err.message });
     }
   });
 
@@ -561,30 +565,52 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true, character_id, name: charRows[0].name, herdDots, herdBefore: before, herdAfter: after });
     } catch (err) {
       log.err('POST /api/admin/feeding/herd-adjust failed', { error: err.message });
-      reply.status(500).send({ error: 'Database error adjusting herd' });
+      reply.status(500).send({ error: 'Database error adjusting herd', details: err.sqlMessage || err.message });
     }
   });
 
   /* ---- Admin: Feeding stats for current cycle ---- */
   fastify.get('/api/admin/feeding/stats', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const { cycleIndex } = await getCurrentCycle();
+      const cycle = await getCurrentCycle();
+      const rawIndex = Number(cycle?.cycleIndex);
+      const cycleIndex = Number.isInteger(rawIndex) && rawIndex >= 0 ? rawIndex : 0;
       const [rows] = await pool.query(
         "SELECT outcome, COUNT(*) as cnt FROM feedings WHERE cycle_index=? AND status='resolved' GROUP BY outcome",
         [cycleIndex]
       );
-      const counts = { total: 0, success: 0, failure: 0, herd: 0, bestial_failure: 0, messy_critical: 0, critical: 0 };
+      const counts = {
+        total: 0,
+        success: 0,
+        failure: 0,
+        herd: 0,
+        bestial_failure: 0,
+        messy_critical: 0,
+        critical: 0,
+      };
+      const byOutcome = {};
       for (const r of rows) {
-        counts[r.outcome] = (counts[r.outcome] || 0) + Number(r.cnt);
-        counts.total += Number(r.cnt);
-        if (['success', 'critical', 'messy_critical', 'herd'].includes(r.outcome)) counts.success += Number(r.cnt);
-        if (['failure', 'bestial_failure'].includes(r.outcome)) counts.failure += Number(r.cnt);
+        const count = Number(r.cnt) || 0;
+        if (r.outcome) {
+          byOutcome[r.outcome] = (byOutcome[r.outcome] || 0) + count;
+        }
       }
+      counts.total = Object.values(byOutcome).reduce((a, b) => a + b, 0);
+      counts.herd = byOutcome.herd || 0;
+      counts.critical = byOutcome.critical || 0;
+      counts.messy_critical = byOutcome.messy_critical || 0;
+      counts.bestial_failure = byOutcome.bestial_failure || 0;
+      counts.success = (byOutcome.success || 0) + (byOutcome.critical || 0) + (byOutcome.messy_critical || 0) + (byOutcome.herd || 0);
+      counts.failure = (byOutcome.failure || 0) + (byOutcome.bestial_failure || 0);
+
       const pct = counts.total > 0 ? Math.round((counts.success / counts.total) * 100) : null;
       reply.send({ cycleIndex, counts, successPct: pct });
     } catch (err) {
       log.err('GET /api/admin/feeding/stats failed', { error: err.message });
-      reply.status(500).send({ error: 'Database error fetching feeding stats' });
+      reply.status(500).send({
+        error: 'Database error fetching feeding stats',
+        details: err.sqlMessage || err.message,
+      });
     }
   });
 };

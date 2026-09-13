@@ -119,6 +119,14 @@ function buildTestApp(pool) {
     broadcastNtfyAlert: noop,
   });
 
+  app.register(require('../../routes/feeding'), {
+    pool,
+    log: testLog,
+    authRequired,
+    requireAdmin,
+    sendPushNotification: noop,
+  });
+
   return app;
 }
 

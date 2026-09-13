@@ -19,10 +19,11 @@ async function getSetting(key, defaultValue = null) {
       'SELECT setting_value FROM app_settings WHERE setting_key = ?',
       [key]
     );
-    const value = row ? row.setting_value : defaultValue;
-    if (row) {
+    const hasValue = row && row.setting_value !== null && row.setting_value !== undefined && row.setting_value !== '';
+    const value = hasValue ? row.setting_value : defaultValue;
+    if (row && hasValue) {
       log.info(`💾 [cache miss] Fetched ${key} from DB and caching it.`);
-      settingsCache.set(key, value); // Only cache if it exists in DB
+      settingsCache.set(key, value); // Only cache if it exists in DB with valid value
     }
     return value;
   } catch (e) {
