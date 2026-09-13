@@ -100,6 +100,24 @@ module.exports = async function (fastify, opts) {
         [char.id, cycleIndex]
       );
 
+      // Herd background: stored in sheet.advantages.merits[] (not sheet.backgrounds[]).
+      // Some entries only have a name field (no id), so fall back to name match.
+      const sheetMerits = Array.isArray(char.sheet?.advantages?.merits) ? char.sheet.advantages.merits : [];
+      const herdEntry = sheetMerits.find(b =>
+        String(b.id || '').toLowerCase().includes('herd__herd') ||
+        String(b.name || '').toLowerCase() === 'herd'
+      );
+      const herdDots = herdEntry ? clamp(Number(herdEntry.dots) || 0, 0, 5) : 0;
+
+      // herd_current tracks the available pool (starts = dots, depletes on use, regens +1/cycle).
+      // Undefined means never used — treat as full.
+      const herdCurrent = herdDots > 0
+        ? clamp(
+            char.sheet.herd_current !== undefined ? Number(char.sheet.herd_current) : herdDots,
+            0, herdDots
+          )
+        : 0;
+
       reply.send({
         enabled: true,
         cycleIndex,
@@ -107,6 +125,8 @@ module.exports = async function (fastify, opts) {
         cycleEnd,
         predatorType,
         canAutomate,
+        herdDots,
+        herdCurrent,
         pools: pools.map((p) => ({
           pool: p.pool,
           total: getTraitValue(char.sheet, p.attribute) + getTraitValue(char.sheet, p.skill),
@@ -184,6 +204,90 @@ module.exports = async function (fastify, opts) {
     } catch (err) {
       log.err('POST /api/feeding/roll failed', { error: err.message });
       reply.status(500).json({ error: 'Database error making feeding roll' });
+    }
+  });
+
+  /* -------------------- Herd Feed (Background — no roll) -------------------- */
+  // Rule: 1 dot of Herd pool = -1 hunger, 1:1. Pool tracked in sheet.herd_current.
+  // Pool starts = herd dots, depletes on use, regens +1 per cycle (3 weeks) up to max.
+  // Hunger never drops below 1.
+  fastify.post('/api/feeding/herd-feed', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      if (!(await isFeedingEnabled())) return reply.status(400).json({ error: 'The Feeding system is currently disabled.' });
+
+      const char = await getMyCharacter(req.user.id);
+      if (!char) return reply.status(404).json({ error: 'No character found for this account.' });
+
+      const { cycleIndex } = await getCurrentCycle();
+
+      // Already fed this cycle?
+      const [existing] = await pool.query(
+        "SELECT id, status FROM feedings WHERE character_id=? AND cycle_index=? AND status IN ('pending','resolved') LIMIT 1",
+        [char.id, cycleIndex]
+      );
+      if (existing.length) {
+        return reply.status(409).json({ error: 'You already have a feeding roll for this cycle.', feedingId: existing[0].id, status: existing[0].status });
+      }
+
+      // Herd background: stored in sheet.advantages.merits[] with id or name fallback
+      const merits = Array.isArray(char.sheet?.advantages?.merits) ? char.sheet.advantages.merits : [];
+      const herdEntry = merits.find(b =>
+        String(b.id || '').toLowerCase().includes('herd__herd') ||
+        String(b.name || '').toLowerCase() === 'herd'
+      );
+      const herdDots = herdEntry ? clamp(Number(herdEntry.dots) || 0, 0, 5) : 0;
+
+      if (herdDots < 1) {
+        return reply.status(400).json({ error: 'You do not have the Herd background.' });
+      }
+
+      // herd_current: initialize to full dots if never set, then clamp to [0, dots]
+      const rawCurrent = char.sheet.herd_current !== undefined ? Number(char.sheet.herd_current) : herdDots;
+      const herdCurrent = clamp(rawCurrent, 0, herdDots);
+
+      if (herdCurrent < 1) {
+        return reply.status(400).json({ error: 'Your Herd is depleted. It restores 1 point each feeding cycle.' });
+      }
+
+      const division = Number(req.body?.division);
+      if (Number.isNaN(division) || division === 0) {
+        return reply.status(400).json({ error: 'Please select a domain to feed in.' });
+      }
+
+      // Use exactly 1 pool point → -1 hunger (floor 1), -1 herd_current
+      const currentHunger = clamp(Number(char.sheet?.hunger) ?? 1, 0, 5);
+      const reduction = currentHunger > 1 ? 1 : 0; // can only reduce if hunger > 1
+      const newHunger = currentHunger - reduction;
+      const newHerdCurrent = herdCurrent - 1;
+
+      char.sheet.hunger = newHunger;
+      char.sheet.herd_current = newHerdCurrent;
+      await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(char.sheet), char.id]);
+
+      const predatorType = getPredatorType(char.sheet) || '';
+
+      // Log as a resolved feeding with outcome 'herd'
+      await pool.query(
+        `INSERT INTO feedings
+          (character_id, division, predator_type, pool_label, dice_pool, difficulty, bonus_dice,
+           chasse_merits_applied, hunger_before, normal_dice, hunger_dice, outcome, status, cycle_index, hunger_delta, safety_delta, resolved_at)
+         VALUES (?, ?, ?, 'Herd', 0, 0, 0, '[]', ?, '[]', '[]', 'herd', 'resolved', ?, ?, 0, NOW())`,
+        [char.id, division, predatorType, currentHunger, cycleIndex, -reduction]
+      );
+
+      log.info('Herd feed used', { character_id: char.id, herdDots, herdCurrent, herdAfter: newHerdCurrent, hungerBefore: currentHunger, hungerAfter: newHunger });
+      reply.send({
+        ok: true,
+        herdDots,
+        herdCurrent: newHerdCurrent,
+        hungerBefore: currentHunger,
+        hungerAfter: newHunger,
+        hungerDelta: -reduction,
+        sheet: char.sheet,
+      });
+    } catch (err) {
+      log.err('POST /api/feeding/herd-feed failed', { error: err.message });
+      reply.status(500).json({ error: 'Database error using Herd feed' });
     }
   });
 
@@ -395,4 +499,93 @@ module.exports = async function (fastify, opts) {
       reply.status(500).json({ error: 'Database error running decay' });
     }
   });
+
+  /* ---- Admin: Herd Roster (all chars with Herd background) ---- */
+  fastify.get('/api/admin/feeding/herd-roster', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const [chars] = await pool.query('SELECT id, name, sheet FROM characters WHERE sheet IS NOT NULL');
+      const roster = [];
+      for (const row of chars) {
+        let sheet;
+        try { sheet = typeof row.sheet === 'string' ? JSON.parse(row.sheet) : row.sheet; } catch { continue; }
+        const merits = Array.isArray(sheet?.advantages?.merits) ? sheet.advantages.merits : [];
+        const herdEntry = merits.find(b =>
+          String(b.id || '').toLowerCase().includes('herd__herd') ||
+          String(b.name || '').toLowerCase() === 'herd'
+        );
+        if (!herdEntry) continue;
+        const herdDots = clamp(Number(herdEntry.dots) || 0, 0, 5);
+        if (herdDots < 1) continue;
+        const herdCurrent = sheet.herd_current !== undefined
+          ? clamp(Number(sheet.herd_current), 0, herdDots)
+          : herdDots; // never set = full
+        roster.push({ character_id: row.id, name: row.name, herdDots, herdCurrent });
+      }
+      roster.sort((a, b) => a.name.localeCompare(b.name));
+      reply.send({ roster });
+    } catch (err) {
+      log.err('GET /api/admin/feeding/herd-roster failed', { error: err.message });
+      reply.status(500).json({ error: 'Database error fetching herd roster' });
+    }
+  });
+
+  /* ---- Admin: Adjust Herd pool for a character (delta ±N) ---- */
+  // body: { character_id, delta }  e.g. { character_id: 15, delta: -1 } or { delta: 2 }
+  fastify.post('/api/admin/feeding/herd-adjust', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const { character_id, delta } = req.body || {};
+      if (!character_id || delta === undefined) return reply.status(400).json({ error: 'character_id and delta required' });
+      const d = parseInt(delta, 10);
+      if (isNaN(d) || d === 0) return reply.status(400).json({ error: 'delta must be a non-zero integer' });
+
+      const [charRows] = await pool.query('SELECT id, name, sheet FROM characters WHERE id=? LIMIT 1', [character_id]);
+      if (!charRows.length) return reply.status(404).json({ error: 'Character not found' });
+      let sheet;
+      try { sheet = typeof charRows[0].sheet === 'string' ? JSON.parse(charRows[0].sheet) : charRows[0].sheet; } catch { sheet = {}; }
+
+      const merits = Array.isArray(sheet?.advantages?.merits) ? sheet.advantages.merits : [];
+      const herdEntry = merits.find(b =>
+        String(b.id || '').toLowerCase().includes('herd__herd') ||
+        String(b.name || '').toLowerCase() === 'herd'
+      );
+      if (!herdEntry) return reply.status(400).json({ error: 'Character does not have the Herd background' });
+
+      const herdDots = clamp(Number(herdEntry.dots) || 0, 0, 5);
+      const rawCurrent = sheet.herd_current !== undefined ? Number(sheet.herd_current) : herdDots;
+      const before = clamp(rawCurrent, 0, herdDots);
+      const after = clamp(before + d, 0, herdDots);
+
+      sheet.herd_current = after;
+      await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), character_id]);
+      log.adm('Admin herd adjust', { admin: req.user.id, character_id, delta: d, before, after });
+      reply.send({ ok: true, character_id, name: charRows[0].name, herdDots, herdBefore: before, herdAfter: after });
+    } catch (err) {
+      log.err('POST /api/admin/feeding/herd-adjust failed', { error: err.message });
+      reply.status(500).json({ error: 'Database error adjusting herd' });
+    }
+  });
+
+  /* ---- Admin: Feeding stats for current cycle ---- */
+  fastify.get('/api/admin/feeding/stats', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const { cycleIndex } = await getCurrentCycle();
+      const [rows] = await pool.query(
+        "SELECT outcome, COUNT(*) as cnt FROM feedings WHERE cycle_index=? AND status='resolved' GROUP BY outcome",
+        [cycleIndex]
+      );
+      const counts = { total: 0, success: 0, failure: 0, herd: 0, bestial_failure: 0, messy_critical: 0, critical: 0 };
+      for (const r of rows) {
+        counts[r.outcome] = (counts[r.outcome] || 0) + Number(r.cnt);
+        counts.total += Number(r.cnt);
+        if (['success', 'critical', 'messy_critical', 'herd'].includes(r.outcome)) counts.success += Number(r.cnt);
+        if (['failure', 'bestial_failure'].includes(r.outcome)) counts.failure += Number(r.cnt);
+      }
+      const pct = counts.total > 0 ? Math.round((counts.success / counts.total) * 100) : null;
+      reply.send({ cycleIndex, counts, successPct: pct });
+    } catch (err) {
+      log.err('GET /api/admin/feeding/stats failed', { error: err.message });
+      reply.status(500).json({ error: 'Database error fetching feeding stats' });
+    }
+  });
 };
+

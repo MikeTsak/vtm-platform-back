@@ -4811,6 +4811,28 @@
         }
       }
     },
+    "/api/feeding/herd-feed": {
+      "post": {
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        }
+      }
+    },
     "/api/feeding/{id}/reroll": {
       "post": {
         "description": "",
