@@ -137,32 +137,32 @@ module.exports = async function (fastify, opts) {
       });
     } catch (err) {
       log.err('GET /api/feeding/status failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error fetching feeding status' });
+      reply.status(500).send({ error: 'Database error fetching feeding status' });
     }
   });
 
   /* -------------------- Roll -------------------- */
   fastify.post('/api/feeding/roll', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      if (!(await isFeedingEnabled())) return reply.status(400).json({ error: 'The Feeding system is currently disabled.' });
+      if (!(await isFeedingEnabled())) return reply.status(400).send({ error: 'The Feeding system is currently disabled.' });
 
       const char = await getMyCharacter(req.user.id);
-      if (!char) return reply.status(404).json({ error: 'No character found for this account.' });
+      if (!char) return reply.status(404).send({ error: 'No character found for this account.' });
 
       const predatorType = getPredatorType(char.sheet);
       const pools = predatorType ? (PREDATOR_HUNTING_POOLS[predatorType] || []) : [];
-      if (!predatorType) return reply.status(400).json({ error: 'Set a Predator Type on your character sheet before feeding.' });
+      if (!predatorType) return reply.status(400).send({ error: 'Set a Predator Type on your character sheet before feeding.' });
       if (!pools.length) {
-        return reply.status(400).json({ error: `${predatorType} isn't automatable for the Feeding roll. It's GM-adjudicated. Use a Monthly Action to describe your feeding instead.` });
+        return reply.status(400).send({ error: `${predatorType} isn't automatable for the Feeding roll. It's GM-adjudicated. Use a Monthly Action to describe your feeding instead.` });
       }
 
       const division = Number(req.body?.division);
       const poolIndex = Number(req.body?.poolIndex ?? 0);
       if (!Number.isInteger(poolIndex) || poolIndex < 0 || poolIndex >= pools.length) {
-        return reply.status(400).json({ error: 'Invalid hunting method selected.' });
+        return reply.status(400).send({ error: 'Invalid hunting method selected.' });
       }
       const difficulty = huntingDifficulty(division);
-      if (difficulty === null) return reply.status(400).json({ error: 'Invalid domain.' });
+      if (difficulty === null) return reply.status(400).send({ error: 'Invalid domain.' });
 
       const { cycleIndex } = await getCurrentCycle();
 
@@ -171,7 +171,7 @@ module.exports = async function (fastify, opts) {
         [char.id, cycleIndex]
       );
       if (existing.length) {
-        return reply.status(409).json({ error: 'You already have a feeding roll for this cycle.', feedingId: existing[0].id, status: existing[0].status });
+        return reply.status(409).send({ error: 'You already have a feeding roll for this cycle.', feedingId: existing[0].id, status: existing[0].status });
       }
 
       const chosenPool = pools[poolIndex];
@@ -203,7 +203,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ feeding: rows[0], projected: OUTCOME_DELTAS[outcome.tier] });
     } catch (err) {
       log.err('POST /api/feeding/roll failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error making feeding roll' });
+      reply.status(500).send({ error: 'Database error making feeding roll' });
     }
   });
 
@@ -213,10 +213,10 @@ module.exports = async function (fastify, opts) {
   // Hunger never drops below 1.
   fastify.post('/api/feeding/herd-feed', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      if (!(await isFeedingEnabled())) return reply.status(400).json({ error: 'The Feeding system is currently disabled.' });
+      if (!(await isFeedingEnabled())) return reply.status(400).send({ error: 'The Feeding system is currently disabled.' });
 
       const char = await getMyCharacter(req.user.id);
-      if (!char) return reply.status(404).json({ error: 'No character found for this account.' });
+      if (!char) return reply.status(404).send({ error: 'No character found for this account.' });
 
       const { cycleIndex } = await getCurrentCycle();
 
@@ -226,7 +226,7 @@ module.exports = async function (fastify, opts) {
         [char.id, cycleIndex]
       );
       if (existing.length) {
-        return reply.status(409).json({ error: 'You already have a feeding roll for this cycle.', feedingId: existing[0].id, status: existing[0].status });
+        return reply.status(409).send({ error: 'You already have a feeding roll for this cycle.', feedingId: existing[0].id, status: existing[0].status });
       }
 
       // Herd background: stored in sheet.advantages.merits[] with id or name fallback
@@ -238,7 +238,7 @@ module.exports = async function (fastify, opts) {
       const herdDots = herdEntry ? clamp(Number(herdEntry.dots) || 0, 0, 5) : 0;
 
       if (herdDots < 1) {
-        return reply.status(400).json({ error: 'You do not have the Herd background.' });
+        return reply.status(400).send({ error: 'You do not have the Herd background.' });
       }
 
       // herd_current: initialize to full dots if never set, then clamp to [0, dots]
@@ -246,12 +246,12 @@ module.exports = async function (fastify, opts) {
       const herdCurrent = clamp(rawCurrent, 0, herdDots);
 
       if (herdCurrent < 1) {
-        return reply.status(400).json({ error: 'Your Herd is depleted. It restores 1 point each feeding cycle.' });
+        return reply.status(400).send({ error: 'Your Herd is depleted. It restores 1 point each feeding cycle.' });
       }
 
       const division = Number(req.body?.division);
       if (Number.isNaN(division) || division === 0) {
-        return reply.status(400).json({ error: 'Please select a domain to feed in.' });
+        return reply.status(400).send({ error: 'Please select a domain to feed in.' });
       }
 
       // Use exactly 1 pool point → -1 hunger (floor 1), -1 herd_current
@@ -287,7 +287,7 @@ module.exports = async function (fastify, opts) {
       });
     } catch (err) {
       log.err('POST /api/feeding/herd-feed failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error using Herd feed' });
+      reply.status(500).send({ error: 'Database error using Herd feed' });
     }
   });
 
@@ -296,19 +296,19 @@ module.exports = async function (fastify, opts) {
     try {
       const feedingId = Number(req.params.id);
       const [rows] = await pool.query('SELECT * FROM feedings WHERE id=?', [feedingId]);
-      if (!rows.length) return reply.status(404).json({ error: 'Feeding roll not found.' });
+      if (!rows.length) return reply.status(404).send({ error: 'Feeding roll not found.' });
       const feeding = rows[0];
 
       const [charRows] = await pool.query('SELECT user_id, sheet FROM characters WHERE id=?', [feeding.character_id]);
-      if (!charRows.length) return reply.status(404).json({ error: 'Character not found.' });
+      if (!charRows.length) return reply.status(404).send({ error: 'Character not found.' });
       if (charRows[0].user_id !== req.user.id && req.user.role !== 'admin') {
-        return reply.status(403).json({ error: 'Forbidden' });
+        return reply.status(403).send({ error: 'Forbidden' });
       }
-      if (feeding.status !== 'pending') return reply.status(400).json({ error: 'This roll is already resolved.' });
-      if (feeding.wp_rerolled) return reply.status(400).json({ error: 'You have already spent Willpower on this roll.' });
+      if (feeding.status !== 'pending') return reply.status(400).send({ error: 'This roll is already resolved.' });
+      if (feeding.wp_rerolled) return reply.status(400).send({ error: 'You have already spent Willpower on this roll.' });
 
       const selected = Array.from(new Set(req.body?.selectedIndices || [])).slice(0, 3);
-      if (!selected.length) return reply.status(400).json({ error: 'Select at least one die to reroll.' });
+      if (!selected.length) return reply.status(400).send({ error: 'Select at least one die to reroll.' });
 
       let sheet = parseSheet(charRows[0].sheet);
       if (!sheet.willpower) sheet.willpower = { superficial: 0, aggravated: 0 };
@@ -316,7 +316,7 @@ module.exports = async function (fastify, opts) {
       const reso = Number(sheet.attributes?.Resolve) || 1;
       const max = comp + reso;
       const currentWp = (Number(sheet.willpower.superficial) || 0) + (Number(sheet.willpower.aggravated) || 0);
-      if (currentWp >= max) return reply.status(400).json({ error: 'Not enough Willpower.' });
+      if (currentWp >= max) return reply.status(400).send({ error: 'Not enough Willpower.' });
 
       sheet.willpower.superficial = (Number(sheet.willpower.superficial) || 0) + 1;
       await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), feeding.character_id]);
@@ -337,7 +337,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ feeding: updated[0], projected: OUTCOME_DELTAS[outcome.tier], sheet });
     } catch (err) {
       log.err('POST /api/feeding/:id/reroll failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error rerolling' });
+      reply.status(500).send({ error: 'Database error rerolling' });
     }
   });
 
@@ -346,18 +346,18 @@ module.exports = async function (fastify, opts) {
     try {
       const feedingId = Number(req.params.id);
       const [rows] = await pool.query('SELECT * FROM feedings WHERE id=?', [feedingId]);
-      if (!rows.length) return reply.status(404).json({ error: 'Feeding roll not found.' });
+      if (!rows.length) return reply.status(404).send({ error: 'Feeding roll not found.' });
       const feeding = rows[0];
 
       const [charRows] = await pool.query('SELECT id, user_id, sheet FROM characters WHERE id=?', [feeding.character_id]);
-      if (!charRows.length) return reply.status(404).json({ error: 'Character not found.' });
+      if (!charRows.length) return reply.status(404).send({ error: 'Character not found.' });
       if (charRows[0].user_id !== req.user.id && req.user.role !== 'admin') {
-        return reply.status(403).json({ error: 'Forbidden' });
+        return reply.status(403).send({ error: 'Forbidden' });
       }
-      if (feeding.status !== 'pending') return reply.status(400).json({ error: 'This roll is already resolved.' });
+      if (feeding.status !== 'pending') return reply.status(400).send({ error: 'This roll is already resolved.' });
 
       const deltas = OUTCOME_DELTAS[feeding.outcome];
-      if (!deltas) return reply.status(500).json({ error: 'Unresolved outcome on this roll.' });
+      if (!deltas) return reply.status(500).send({ error: 'Unresolved outcome on this roll.' });
 
       let sheet = parseSheet(charRows[0].sheet);
       sheet.hunger = clamp((Number(sheet.hunger) || 0) + deltas.hunger, 0, 5);
@@ -414,7 +414,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true, tier: feeding.outcome, hungerDelta: deltas.hunger, safetyDelta: deltas.safety, sheet });
     } catch (err) {
       log.err('POST /api/feeding/:id/confirm failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error confirming feeding roll' });
+      reply.status(500).send({ error: 'Database error confirming feeding roll' });
     }
   });
 
@@ -428,7 +428,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ incidents: rows });
     } catch (err) {
       log.err('GET /api/domain-incidents/mine failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error fetching incidents' });
+      reply.status(500).send({ error: 'Database error fetching incidents' });
     }
   });
 
@@ -436,15 +436,15 @@ module.exports = async function (fastify, opts) {
     try {
       const id = Number(req.params.id);
       const [rows] = await pool.query('SELECT owner_user_id FROM domain_incidents WHERE id=?', [id]);
-      if (!rows.length) return reply.status(404).json({ error: 'Not found' });
+      if (!rows.length) return reply.status(404).send({ error: 'Not found' });
       if (rows[0].owner_user_id !== req.user.id && req.user.role !== 'admin') {
-        return reply.status(403).json({ error: 'Forbidden' });
+        return reply.status(403).send({ error: 'Forbidden' });
       }
       await pool.query('UPDATE domain_incidents SET dismissed_at=NOW() WHERE id=?', [id]);
       reply.send({ ok: true });
     } catch (err) {
       log.err('PATCH /api/domain-incidents/:id/dismiss failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error dismissing incident' });
+      reply.status(500).send({ error: 'Database error dismissing incident' });
     }
   });
 
@@ -457,7 +457,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ enabled });
     } catch (err) {
       log.err('POST /api/admin/feeding/status failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error updating feeding status' });
+      reply.status(500).send({ error: 'Database error updating feeding status' });
     }
   });
 
@@ -473,7 +473,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ log: rows });
     } catch (err) {
       log.err('GET /api/admin/feeding/log failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error fetching feeding log' });
+      reply.status(500).send({ error: 'Database error fetching feeding log' });
     }
   });
 
@@ -485,7 +485,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true, cycleAnchor: now });
     } catch (err) {
       log.err('POST /api/admin/feeding/force-new-cycle failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error resetting cycle' });
+      reply.status(500).send({ error: 'Database error resetting cycle' });
     }
   });
 
@@ -496,7 +496,7 @@ module.exports = async function (fastify, opts) {
       reply.send(result);
     } catch (err) {
       log.err('POST /api/admin/feeding/run-decay failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error running decay' });
+      reply.status(500).send({ error: 'Database error running decay' });
     }
   });
 
@@ -525,7 +525,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ roster });
     } catch (err) {
       log.err('GET /api/admin/feeding/herd-roster failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error fetching herd roster' });
+      reply.status(500).send({ error: 'Database error fetching herd roster' });
     }
   });
 
@@ -534,12 +534,12 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/admin/feeding/herd-adjust', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const { character_id, delta } = req.body || {};
-      if (!character_id || delta === undefined) return reply.status(400).json({ error: 'character_id and delta required' });
+      if (!character_id || delta === undefined) return reply.status(400).send({ error: 'character_id and delta required' });
       const d = parseInt(delta, 10);
-      if (isNaN(d) || d === 0) return reply.status(400).json({ error: 'delta must be a non-zero integer' });
+      if (isNaN(d) || d === 0) return reply.status(400).send({ error: 'delta must be a non-zero integer' });
 
       const [charRows] = await pool.query('SELECT id, name, sheet FROM characters WHERE id=? LIMIT 1', [character_id]);
-      if (!charRows.length) return reply.status(404).json({ error: 'Character not found' });
+      if (!charRows.length) return reply.status(404).send({ error: 'Character not found' });
       let sheet;
       try { sheet = typeof charRows[0].sheet === 'string' ? JSON.parse(charRows[0].sheet) : charRows[0].sheet; } catch { sheet = {}; }
 
@@ -548,7 +548,7 @@ module.exports = async function (fastify, opts) {
         String(b.id || '').toLowerCase().includes('herd__herd') ||
         String(b.name || '').toLowerCase() === 'herd'
       );
-      if (!herdEntry) return reply.status(400).json({ error: 'Character does not have the Herd background' });
+      if (!herdEntry) return reply.status(400).send({ error: 'Character does not have the Herd background' });
 
       const herdDots = clamp(Number(herdEntry.dots) || 0, 0, 5);
       const rawCurrent = sheet.herd_current !== undefined ? Number(sheet.herd_current) : herdDots;
@@ -561,7 +561,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true, character_id, name: charRows[0].name, herdDots, herdBefore: before, herdAfter: after });
     } catch (err) {
       log.err('POST /api/admin/feeding/herd-adjust failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error adjusting herd' });
+      reply.status(500).send({ error: 'Database error adjusting herd' });
     }
   });
 
@@ -584,7 +584,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ cycleIndex, counts, successPct: pct });
     } catch (err) {
       log.err('GET /api/admin/feeding/stats failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error fetching feeding stats' });
+      reply.status(500).send({ error: 'Database error fetching feeding stats' });
     }
   });
 };
