@@ -30,10 +30,18 @@ async function activityRoutes(fastify, options) {
         const yyyy = dateObj.getFullYear();
         const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
         const dd = String(dateObj.getDate()).padStart(2, '0');
+        const minutes = Math.floor(r.total_seconds / 60);
+
+        let level = 0;
+        if (minutes > 0 && minutes < 15) level = 1;
+        else if (minutes >= 15 && minutes < 45) level = 2;
+        else if (minutes >= 45 && minutes < 90) level = 3;
+        else if (minutes >= 90) level = 4;
         
         return {
           date: `${yyyy}-${mm}-${dd}`,
-          count: Math.floor(r.total_seconds / 60) // convert to minutes for easier reading
+          count: minutes, // convert to minutes for easier reading
+          level
         };
       });
       
