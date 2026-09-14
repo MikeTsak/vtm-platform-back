@@ -584,20 +584,22 @@ Copy them off-site if that matters.
 The backend deploys directly to the Plesk production server via FTPS using `basic-ftp`. Migrations self-apply on boot (`initDatabase()`).
 
 Running `npm run deploy` runs the complete workflow in one single command:
-1. **auto versioning**: automatically increments the semantic version in `package.json` and updates `version.json` (bumping patch by default: `1.0.0` to `1.0.1`, etc.).
-2. **swagger autogen**: updates the OpenAPI documentation spec (`swagger_output.json`) with the new version.
-3. **file scan**: walks local backend files respecting `.gitignore` and hard exclusions (`.env*`, `node_modules`, `.git`, `deploy.config.json`, logs, backups).
-4. **delta upload**: checks remote file sizes and cached SHA1 hashes in `.deploy-manifest.json`, uploading only changed or new files.
-5. **graceful restart**: touches `/tmp/restart.txt` over FTP to trigger Phusion Passenger reload.
-6. **health verification**: polls `https://api.attlarp.gr/api/health` until the restarted server responds with active database connection, confirmed live target version, and fresh uptime.
+1. **dependency safeguard**: cross references local `package.json` dependencies against the remote server. If new packages are detected, deployment is blocked with instructions to install them on the production server first.
+2. **auto versioning**: automatically increments the semantic version in `package.json` and updates `version.json` (bumping patch by default: `1.0.0` to `1.0.1`, etc.).
+3. **swagger autogen**: updates the OpenAPI documentation spec (`swagger_output.json`) with the new version.
+4. **file scan**: walks local backend files respecting `.gitignore` and hard exclusions (`.env*`, `node_modules`, `.git`, `deploy.config.json`, logs, backups).
+5. **delta upload**: checks remote file sizes and cached SHA1 hashes in `.deploy-manifest.json`, uploading only changed or new files.
+6. **graceful restart**: touches `/tmp/restart.txt` over FTP to trigger Phusion Passenger reload.
+7. **health verification**: polls `https://api.attlarp.gr/api/health` until the restarted server responds with active database connection, confirmed live target version, and fresh uptime.
 
 ```bash
-npm run deploy            # Bump patch version, upload changed files, restart server, verify health
-npm run deploy:dry        # Dry run preview (upload nothing, no bump, no restart)
-npm run deploy:force      # Force upload all backend files
-npm run deploy:restart    # Bounce the live app directly and verify health
-npm run deploy -- --bump minor  # Bump minor version (e.g. 1.0.x to 1.1.0)
-npm run deploy -- --no-bump     # Deploy without incrementing version
+npm run deploy                    # Check deps, bump patch, upload changed files, restart server, verify health
+npm run deploy:dry                # Dry run preview (upload nothing, no bump, no restart)
+npm run deploy:force              # Force upload all backend files
+npm run deploy:restart            # Bounce the live app directly and verify health
+npm run deploy -- --bump minor    # Bump minor version (e.g. 1.0.x to 1.1.0)
+npm run deploy -- --no-bump       # Deploy without incrementing version
+npm run deploy -- --skip-deps-check # Bypass remote dependency cross-reference check
 ```
 
 Config: `back/deploy.config.json` (gitignored, see `deploy.config.example.json`).

@@ -1,13 +1,16 @@
 /**
- * Production backend FTP deployment and restart watcher with auto-versioning.
+ * Production backend FTP deployment and restart watcher with auto-versioning
+ * and remote dependency cross-referencing.
  *
  * Direct FTP deployment to Plesk server:
- *   1. Bumps semantic version in package.json and generates version.json
- *   2. Generates the latest OpenAPI spec (swagger autogen) with new version
- *   3. Scans files respecting .gitignore and safety exclusions (.env, node_modules, etc.)
- *   4. Uploads changed/new files to the server via FTPS (basic-ftp)
- *   5. Restarts Phusion Passenger (touching tmp/restart.txt over FTP)
- *   6. Verifies the production API health endpoint responds with database connected and target version live
+ *   1. Connects to FTPS and cross-references local package.json dependencies against remote
+ *      If new packages were installed locally, blocks deploy with instructions to install on server
+ *   2. Bumps semantic version in package.json and generates version.json
+ *   3. Generates the latest OpenAPI spec (swagger autogen) with new version
+ *   4. Scans files respecting .gitignore and safety exclusions (.env, node_modules, etc.)
+ *   5. Uploads changed/new files to the server via FTPS (basic-ftp)
+ *   6. Restarts Phusion Passenger (touching tmp/restart.txt over FTP)
+ *   7. Verifies the production API health endpoint responds with database connected and target version live
  *
  * Usage:
  *   npm run deploy            Upload changed files, bump patch version, restart server, verify health
@@ -16,14 +19,15 @@
  *   npm run deploy:restart    Restart the production server directly and verify health
  *
  * Flags:
- *   --dry-run, -n    Preview actions without uploading or restarting
- *   --force,   -f    Re-upload all files regardless of manifest/size match
- *   --restart-only   Only restart the server and verify health
- *   --no-restart     Upload files but skip triggering server restart
- *   --no-swagger     Skip running swagger autogen before deployment
- *   --no-bump        Skip auto-incrementing version in package.json
- *   --bump <type>    Bump type: patch (default), minor, or major
- *   --verbose, -v    Enable detailed FTP command and response logging
+ *   --dry-run, -n          Preview actions without uploading or restarting
+ *   --force,   -f          Re-upload all files regardless of manifest/size match
+ *   --restart-only         Only restart the server and verify health
+ *   --no-restart           Upload files but skip triggering server restart
+ *   --no-swagger           Skip running swagger autogen before deployment
+ *   --no-bump              Skip auto-incrementing version in package.json
+ *   --bump <type>          Bump type: patch (default), minor, or major
+ *   --skip-deps-check      Bypass remote package.json dependency cross-reference check
+ *   --verbose, -v          Enable detailed FTP command and response logging
  */
 import { Client } from 'basic-ftp';
 import cliProgress from 'cli-progress';
@@ -31,6 +35,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { Writable } from 'node:stream';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -39,6 +44,43 @@ import ignore from 'ignore';
 const execFileP = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
+
+/* ------------------------------------------------------------------ colors --- */
+const isColorSupported =
+  !process.env.NO_COLOR && (Boolean(process.stdout.isTTY) || Boolean(process.env.FORCE_COLOR));
+
+const c = {
+  red: (s) => (isColorSupported ? `\x1b[31m${s}\x1b[0m` : s),
+  green: (s) => (isColorSupported ? `\x1b[32m${s}\x1b[0m` : s),
+  yellow: (s) => (isColorSupported ? `\x1b[33m${s}\x1b[0m` : s),
+  cyan: (s) => (isColorSupported ? `\x1b[36m${s}\x1b[0m` : s),
+  bold: (s) => (isColorSupported ? `\x1b[1m${s}\x1b[0m` : s),
+  dim: (s) => (isColorSupported ? `\x1b[2m${s}\x1b[0m` : s),
+  boldRed: (s) => (isColorSupported ? `\x1b[1;31m${s}\x1b[0m` : s),
+  boldYellow: (s) => (isColorSupported ? `\x1b[1;33m${s}\x1b[0m` : s),
+  boldGreen: (s) => (isColorSupported ? `\x1b[1;32m${s}\x1b[0m` : s),
+  boldCyan: (s) => (isColorSupported ? `\x1b[1;36m${s}\x1b[0m` : s),
+};
+
+function printError(title, lines = []) {
+  console.error('\n' + c.boldRed('========================================================================'));
+  console.error(c.boldRed(`  ERROR: ${title}`));
+  console.error(c.boldRed('========================================================================'));
+  for (const line of lines) {
+    console.error(`  ${line}`);
+  }
+  console.error(c.boldRed('========================================================================\n'));
+}
+
+function printWarning(title, lines = []) {
+  console.warn('\n' + c.boldYellow('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'));
+  console.warn(c.boldYellow(`  WARNING: ${title}`));
+  console.warn(c.boldYellow('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'));
+  for (const line of lines) {
+    console.warn(`  ${line}`);
+  }
+  console.warn(c.boldYellow('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n'));
+}
 
 /* ------------------------------------------------------------------ args --- */
 const argv = process.argv.slice(2);
@@ -49,6 +91,7 @@ const RESTART_ONLY = has('--restart-only');
 const NO_RESTART = has('--no-restart');
 const NO_SWAGGER = has('--no-swagger');
 const NO_BUMP = has('--no-bump');
+const SKIP_DEPS_CHECK = has('--skip-deps-check', '--ignore-deps');
 const VERBOSE = has('--verbose', '-v');
 
 const bumpIndex = argv.findIndex((x) => x === '--bump');
@@ -94,8 +137,8 @@ const API = (process.env.DEPLOY_API_BASE || fileCfg.apiBase || 'https://api.attl
 const RESTART_EXPECT_S = Number(fileCfg.expectRestartSec || 25);
 const WAIT_TIMEOUT_MS = Number(fileCfg.waitTimeoutSec || 120) * 1000;
 
-function die(msg) {
-  console.error(`\n  deploy error: ${msg}\n`);
+function die(msg, lines = []) {
+  printError(msg, lines);
   process.exit(1);
 }
 
@@ -133,7 +176,7 @@ if (RESTART_ONLY) {
   process.exit(0);
 }
 
-/* -------------------------------------------------- auto-version bump --- */
+/* -------------------------------------------------- read local package.json --- */
 const PKG_FILE = path.join(ROOT, 'package.json');
 let pkgData = {};
 try {
@@ -143,6 +186,115 @@ try {
 }
 
 const currentVersion = pkgData.version || '1.0.0';
+const localDependencies = pkgData.dependencies || {};
+
+/* ------------------------------------------------------------- ftp client -- */
+const client = new Client(30_000);
+client.ftp.verbose = VERBOSE;
+
+const remotePathFor = (rel) => path.posix.join(REMOTE_ROOT || '/', rel);
+
+try {
+  process.stdout.write(`  connecting to ${c.boldCyan(`${USER}@${HOST}:${PORT}`)}... `);
+  await client.access({
+    host: HOST,
+    port: PORT,
+    user: USER,
+    password: PASSWORD,
+    secure: SECURE,
+    secureOptions: { rejectUnauthorized: TLS_STRICT },
+  });
+  console.log(c.green('connected'));
+} catch (err) {
+  die(`FTP connection failed: ${err.message}`, [
+    'Check host, user, password, port, and TLS options in deploy.config.json.',
+  ]);
+}
+
+/* ------------------------------- cross-reference remote package.json --- */
+async function fetchRemotePackageJson() {
+  const remotePkgPath = remotePathFor('package.json');
+  const chunks = [];
+  const writer = new Writable({
+    write(chunk, encoding, cb) {
+      chunks.push(chunk);
+      cb();
+    }
+  });
+
+  try {
+    await client.downloadTo(writer, remotePkgPath);
+    const content = Buffer.concat(chunks).toString('utf8');
+    return JSON.parse(content);
+  } catch (err) {
+    return null;
+  }
+}
+
+if (!SKIP_DEPS_CHECK) {
+  process.stdout.write('  cross referencing dependencies with remote server... ');
+  const remotePkg = await fetchRemotePackageJson();
+
+  if (!remotePkg) {
+    console.log(c.yellow('remote package.json not found (skipped diff)'));
+  } else {
+    const remoteDependencies = remotePkg.dependencies || {};
+    const missingOnServer = [];
+    const updatedOnServer = [];
+
+    for (const [pkgName, localVer] of Object.entries(localDependencies)) {
+      if (!remoteDependencies[pkgName]) {
+        missingOnServer.push({ name: pkgName, localVersion: localVer });
+      } else if (remoteDependencies[pkgName] !== localVer) {
+        updatedOnServer.push({
+          name: pkgName,
+          localVersion: localVer,
+          remoteVersion: remoteDependencies[pkgName],
+        });
+      }
+    }
+
+    if (missingOnServer.length > 0) {
+      console.log(c.boldRed('FAILED'));
+      client.close();
+      printError('DEPLOY BLOCKED: New packages detected in local package.json', [
+        c.boldYellow('The following packages are in your local dependencies but NOT installed on production:'),
+        '',
+        ...missingOnServer.map(
+          (item) => `  * ${c.boldCyan(item.name)}: local requires ${c.bold(item.localVersion)} (remote: not installed)`
+        ),
+        '',
+        c.yellow('Because node_modules is ignored during upload, deploying now would crash the production server'),
+        c.yellow('when Node tries to require missing dependencies.'),
+        '',
+        c.bold('ACTION REQUIRED ON SERVER:'),
+        '  1. Log into your production server (via Plesk Terminal or SSH)',
+        '  2. In the application root directory, install the new packages:',
+        `     ${c.boldCyan(`npm install ${missingOnServer.map((item) => `${item.name}@${item.localVersion}`).join(' ')}`)}`,
+        '  3. Then re-run: npm run deploy',
+        '',
+        c.dim('To bypass this safeguard in an emergency, run with flag: --skip-deps-check'),
+      ]);
+      process.exit(1);
+    }
+
+    if (updatedOnServer.length > 0) {
+      console.log(c.yellow('matches with version differences'));
+      printWarning('Existing dependencies have version differences on remote server', [
+        ...updatedOnServer.map(
+          (item) => `  * ${item.name}: local ${item.localVersion}, remote ${item.remoteVersion}`
+        ),
+        'Remember to run npm install on the server if features depend on updated versions.',
+      ]);
+    } else {
+      console.log(c.green(`ok (${Object.keys(localDependencies).length} packages in sync)`));
+    }
+  }
+} else {
+  printWarning('Skipped remote dependency cross reference check (--skip-deps-check flag set)');
+}
+
+/* -------------------------------------------------- auto-version bump --- */
 let targetVersion = currentVersion;
 
 if (!NO_BUMP && !DRY_RUN) {
@@ -157,12 +309,12 @@ if (!NO_BUMP && !DRY_RUN) {
     environment: 'production',
   };
   fs.writeFileSync(path.join(ROOT, 'version.json'), JSON.stringify(versionRecord, null, 2) + '\n');
-  console.log(`\n  version: updated from ${currentVersion} to ${targetVersion}`);
+  console.log(`  version: ${c.dim(currentVersion)} updated to ${c.boldCyan(targetVersion)}`);
 } else if (DRY_RUN && !NO_BUMP) {
   const previewVersion = bumpVersion(currentVersion, BUMP_TYPE);
-  console.log(`\n  dry run: version would update from ${currentVersion} to ${previewVersion}`);
+  console.log(`  dry run: version would update from ${c.dim(currentVersion)} to ${c.boldCyan(previewVersion)}`);
 } else {
-  console.log(`\n  version: ${currentVersion} (auto bump skipped)`);
+  console.log(`  version: ${c.boldCyan(currentVersion)} (auto bump skipped)`);
 }
 
 /* ----------------------------------------------------- swagger generator --- */
@@ -170,9 +322,9 @@ if (!NO_SWAGGER && !DRY_RUN) {
   try {
     process.stdout.write('  generating swagger spec... ');
     await execFileP('node', ['swagger-autogen.js'], { cwd: ROOT });
-    console.log('done');
+    console.log(c.green('done'));
   } catch (err) {
-    console.log(`skipped (warning: ${err.message})`);
+    console.log(c.yellow(`skipped (warning: ${err.message})`));
   }
 }
 
@@ -262,18 +414,12 @@ async function fileHash(filePath) {
   return crypto.createHash('sha1').update(content).digest('hex');
 }
 
-/* ------------------------------------------------------------- ftp client -- */
-const client = new Client(30_000);
-client.ftp.verbose = VERBOSE;
-
-const remotePathFor = (rel) => path.posix.join(REMOTE_ROOT || '/', rel);
-
 console.log(
-  `\n  ${DRY_RUN ? 'DRY RUN: ' : ''}deploying backend files\n` +
-    `  version: ${targetVersion}\n` +
-    `  source:  ${ROOT}\n` +
-    `  target:  ${USER}@${HOST}:${PORT}${REMOTE_ROOT || '/'} (${SECURE === true ? 'FTPS' : SECURE === 'implicit' ? 'FTPS implicit' : 'plain FTP'})\n` +
-    `  api:     ${API}\n`,
+  `\n  ${DRY_RUN ? c.boldYellow('DRY RUN: ') : ''}deploying backend files\n` +
+    `  version: ${c.boldCyan(targetVersion)}\n` +
+    `  source:  ${c.dim(ROOT)}\n` +
+    `  target:  ${c.cyan(`${USER}@${HOST}:${PORT}${REMOTE_ROOT || '/'}`)} (${SECURE === true ? 'FTPS' : SECURE === 'implicit' ? 'FTPS implicit' : 'plain FTP'})\n` +
+    `  api:     ${c.cyan(API)}\n`,
 );
 
 let uploaded = 0;
@@ -282,15 +428,6 @@ let sentBytes = 0;
 const startedAt = Date.now();
 
 try {
-  await client.access({
-    host: HOST,
-    port: PORT,
-    user: USER,
-    password: PASSWORD,
-    secure: SECURE,
-    secureOptions: { rejectUnauthorized: TLS_STRICT },
-  });
-
   // Query remote directory listing per folder
   process.stdout.write('  checking remote files... ');
   const remoteSizes = new Map();
@@ -329,7 +466,7 @@ try {
     }
   }
 
-  console.log(`${skipped} unchanged, ${plan.length} to upload\n`);
+  console.log(`${c.green(`${skipped} unchanged`)}, ${c.boldCyan(`${plan.length} to upload`)}\n`);
 
   const plannedBytes = plan.reduce((n, f) => n + f.size, 0);
 
@@ -341,50 +478,29 @@ try {
     }
     console.log(`\n  dry run total: ${plan.length} files, ${mb(plannedBytes)}\n`);
   } else {
-    const useBars = process.stdout.isTTY;
-    const bars = useBars
-      ? new cliProgress.MultiBar(
-          {
-            format: '  {bar} {percentage}% | {value_mb}/{total_mb} MB | {name}',
-            barCompleteChar: '█',
-            barIncompleteChar: '░',
-            hideCursor: true,
-            clearOnComplete: false,
-            autopadding: true,
-          },
-          cliProgress.Presets.shades_grey,
-        )
-      : null;
-
-    const fmtBar = (b, val, total, name) =>
-      b?.update(val, {
-        name,
-        value_mb: (val / 1048576).toFixed(2),
-        total_mb: (total / 1048576).toFixed(2),
+    const useBars = Boolean(process.stdout.isTTY);
+    let bar = null;
+    if (useBars) {
+      bar = new cliProgress.SingleBar(
+        {
+          format: '  uploading: [{bar}] {percentage}% | {value_mb}/{total_mb} MB',
+          barCompleteChar: '█',
+          barIncompleteChar: '░',
+          hideCursor: true,
+          clearOnComplete: false,
+        },
+        cliProgress.Presets.shades_grey,
+      );
+      bar.start(1000, 0, {
+        value_mb: '0.00',
+        total_mb: (plannedBytes / 1048576).toFixed(2),
       });
-
-    const overall = bars?.create(plannedBytes, 0, {
-      name: 'TOTAL',
-      value_mb: '0.00',
-      total_mb: (plannedBytes / 1048576).toFixed(2),
-    });
+    }
 
     const ensured = new Set();
-    let fileBar = null;
-    let currentRel = '';
-    let currentSize = 0;
-    let baseBytes = 0;
-
-    client.trackProgress((info) => {
-      if (info.type !== 'upload') return;
-      const n = Math.min(info.bytes, currentSize || info.bytes);
-      fmtBar(fileBar, n, currentSize || info.bytes, currentRel);
-      fmtBar(overall, baseBytes + n, plannedBytes, 'TOTAL');
-    });
+    let currentUploadedBytes = 0;
 
     for (const f of plan) {
-      currentRel = f.rel;
-      currentSize = f.size;
       const dir = path.posix.dirname(f.remote);
       if (dir && dir !== '/' && !ensured.has(dir)) {
         await client.ensureDir(dir);
@@ -392,13 +508,7 @@ try {
         ensured.add(dir);
       }
 
-      if (useBars) {
-        fileBar = bars.create(f.size, 0, {
-          name: f.rel,
-          value_mb: '0.00',
-          total_mb: (f.size / 1048576).toFixed(2),
-        });
-      } else {
+      if (!useBars) {
         process.stdout.write(`  uploading: ${f.rel} ... `);
       }
 
@@ -406,22 +516,28 @@ try {
 
       uploaded++;
       sentBytes += f.size;
-      baseBytes += f.size;
+      currentUploadedBytes += f.size;
       manifest[f.rel] = { hash: f.hash, size: f.size, uploadedAt: nowIso() };
 
-      if (useBars) {
-        fmtBar(fileBar, f.size, f.size, f.rel);
-        fmtBar(overall, baseBytes, plannedBytes, 'TOTAL');
-        bars.remove(fileBar);
-        fileBar = null;
+      if (useBars && bar) {
+        const frac = plannedBytes > 0 ? Math.min(1, currentUploadedBytes / plannedBytes) : 1;
+        bar.update(Math.round(frac * 1000), {
+          value_mb: (currentUploadedBytes / 1048576).toFixed(2),
+          total_mb: (plannedBytes / 1048576).toFixed(2),
+        });
       } else {
-        console.log('done');
+        console.log(c.green('done'));
       }
     }
 
-    client.trackProgress();
-    fmtBar(overall, plannedBytes, plannedBytes, 'TOTAL');
-    bars?.stop();
+    if (useBars && bar) {
+      bar.update(1000, {
+        value_mb: (plannedBytes / 1048576).toFixed(2),
+        total_mb: (plannedBytes / 1048576).toFixed(2),
+      });
+      bar.stop();
+      process.stdout.write('\n');
+    }
 
     // Save updated manifest
     try {
@@ -431,18 +547,16 @@ try {
     }
   }
 } catch (err) {
-  client.trackProgress?.();
-  console.error(`\n  deploy upload failed: ${err.message}\n`);
   client.close();
-  process.exit(1);
+  die(`deploy upload failed: ${err.message}`);
 }
 
 client.close();
 
 const uploadSecs = ((Date.now() - startedAt) / 1000).toFixed(1);
 console.log(
-  `\n  upload complete: ` +
-    `${uploaded} uploaded (${mb(sentBytes)}), ${skipped} unchanged, ${uploadSecs}s\n`,
+  `  upload complete: ` +
+    `${c.boldGreen(`${uploaded} uploaded`)} (${mb(sentBytes)}), ${c.green(`${skipped} unchanged`)}, ${uploadSecs}s\n`,
 );
 
 /* ----------------------------------------------------- server restart --- */
@@ -463,7 +577,7 @@ async function health() {
     const b = await r.json();
     return {
       ok: b.ok === true,
-      db: !!b.db,
+      db: Boolean(b.db),
       version: b.version || null,
       uptime: b.uptime_sec ?? 0,
       startedAt: b.started_at,
@@ -496,7 +610,7 @@ async function waitFor(startedAtMs, maxMs, check) {
 }
 
 function mkRestartBar(expectS = 25) {
-  const tty = process.stdout.isTTY;
+  const tty = Boolean(process.stdout.isTTY);
   let b = null;
   if (tty) {
     b = new cliProgress.SingleBar(
@@ -534,6 +648,7 @@ function mkRestartBar(expectS = 25) {
           note: good ? lastNote : 'timed out',
         });
         b.stop();
+        process.stdout.write('\n');
       } else {
         console.log(`    ${good ? 'restart verified' : 'timed out'}: ${lastNote}`);
       }
@@ -542,10 +657,10 @@ function mkRestartBar(expectS = 25) {
 }
 
 async function touchRestartFile() {
-  const c = new Client(20_000);
+  const cFtp = new Client(20_000);
   const tmpFile = path.join(ROOT, '.restart.tmp');
   try {
-    await c.access({
+    await cFtp.access({
       host: HOST,
       port: PORT,
       user: USER,
@@ -553,12 +668,12 @@ async function touchRestartFile() {
       secure: SECURE,
       secureOptions: { rejectUnauthorized: TLS_STRICT },
     });
-    await c.ensureDir(path.posix.dirname(RESTART_FILE));
-    await c.cd(REMOTE_ROOT || '/');
+    await cFtp.ensureDir(path.posix.dirname(RESTART_FILE));
+    await cFtp.cd(REMOTE_ROOT || '/');
     fs.writeFileSync(tmpFile, `restart ${nowIso()}\n`);
-    await c.uploadFrom(tmpFile, RESTART_FILE);
+    await cFtp.uploadFrom(tmpFile, RESTART_FILE);
   } finally {
-    c.close();
+    cFtp.close();
     try {
       fs.unlinkSync(tmpFile);
     } catch {
@@ -574,7 +689,7 @@ async function runRestartFlow(expectedVersion = null) {
   );
   process.stdout.write('  touching restart file over FTP... ');
   await touchRestartFile();
-  console.log('done');
+  console.log(c.green('done'));
 
   const restartBar = mkRestartBar(RESTART_EXPECT_S);
   const t0 = Date.now();
@@ -600,21 +715,25 @@ async function runRestartFlow(expectedVersion = null) {
 
   if (restartSuccess && finalHealth) {
     console.log(
-      `\n  DEPLOY SUCCESSFUL\n` +
-        `  version:        ${finalHealth.version || expectedVersion || '1.0.0'}\n` +
-        `  server restart: verified in ${totalElapsed}s\n` +
-        `  health status:  ok\n` +
-        `  database:       ok\n` +
-        `  uptime:         ${finalHealth.uptime}s\n` +
-        `  started at:     ${finalHealth.startedAt}\n` +
-        `  environment:    ${finalHealth.env}\n` +
-        `  live url:       ${API}/api/health\n`,
+      '\n' +
+        c.boldGreen('========================================================================\n') +
+        c.boldGreen('  DEPLOY SUCCESSFUL\n') +
+        c.boldGreen('========================================================================\n') +
+        `  ${c.bold('version:')}        ${c.boldCyan(finalHealth.version || expectedVersion || '1.0.0')}\n` +
+        `  ${c.bold('server restart:')} ${c.green(`verified in ${totalElapsed}s`)}\n` +
+        `  ${c.bold('health status:')}  ${c.boldGreen('ok')}\n` +
+        `  ${c.bold('database:')}       ${c.boldGreen('ok')}\n` +
+        `  ${c.bold('uptime:')}         ${finalHealth.uptime}s\n` +
+        `  ${c.bold('started at:')}     ${finalHealth.startedAt}\n` +
+        `  ${c.bold('environment:')}    ${finalHealth.env}\n` +
+        `  ${c.bold('live url:')}       ${c.cyan(`${API}/api/health`)}\n` +
+        c.boldGreen('========================================================================\n'),
     );
   } else {
-    console.error(
-      `\n  deploy warning: server did not report healthy restart after ${totalElapsed}s.\n` +
-        `  Check ${API}/api/health and Plesk Passenger error logs.\n`,
-    );
+    printError('Server did not report healthy restart', [
+      `Waited ${totalElapsed}s without confirmation of healthy restart.`,
+      `Check ${API}/api/health and Plesk Passenger error logs.`,
+    ]);
     process.exit(2);
   }
 }
