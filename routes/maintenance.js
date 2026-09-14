@@ -287,12 +287,38 @@ module.exports = async function (fastify, opts) {
     });
   });
   /* ------------------------------------------------------------------ *
+  /* ------------------------------------------------------------------
    * Database backups
    * ------------------------------------------------------------------ */
 
+  const authOrDeployToken = async (req, reply) => {
+    const deployToken = req.headers['x-deploy-token'];
+    if (deployToken && typeof deployToken === 'string' && deployToken.length >= 32) {
+      const tokenFile = path.join(APP_ROOT, 'tmp', 'deploy-backup.token');
+      try {
+        if (fs.existsSync(tokenFile)) {
+          const raw = fs.readFileSync(tokenFile, 'utf8').trim();
+          const [savedToken, timestamp] = raw.split(':');
+          const ageSec = Math.abs(Date.now() - Number(timestamp || 0)) / 1000;
+          if (savedToken && savedToken === deployToken && ageSec <= 300) {
+            try { fs.unlinkSync(tokenFile); } catch {}
+            req.user = { id: 0, role: 'admin', deploy: true };
+            return;
+          }
+        }
+      } catch (err) {
+        log.err('Error verifying deploy token', { error: err.message });
+      }
+    }
+    await authRequired(req, reply);
+    if (!reply.sent) {
+      await new Promise((resolve) => requireAdmin(req, reply, resolve));
+    }
+  };
+
   // Streams a backup as it runs. `?full=true` includes the media BLOB tables
   // (~400 MB); the default omits them (~2.4 MB) — see scripts/backup-db.js.
-  fastify.get('/api/admin/backup/stream', { preHandler: [authRequired, requireAdmin] }, (req, reply) => {
+  fastify.get('/api/admin/backup/stream', { preHandler: [authOrDeployToken] }, (req, reply) => {
     const full = String(req.query.full) === 'true';
 
     reply.hijack();
@@ -352,7 +378,7 @@ module.exports = async function (fastify, opts) {
   });
 
   // Lists what's on disk, newest first.
-  fastify.get('/api/admin/backups', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  fastify.get('/api/admin/backups', { preHandler: [authOrDeployToken] }, async (req, reply) => {
     try {
       const rows = await listBackups();
       reply.send({

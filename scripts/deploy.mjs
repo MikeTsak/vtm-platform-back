@@ -92,6 +92,9 @@ const NO_RESTART = has('--no-restart');
 const NO_SWAGGER = has('--no-swagger');
 const NO_BUMP = has('--no-bump');
 const SKIP_DEPS_CHECK = has('--skip-deps-check', '--ignore-deps');
+const BACKUP_ONLY = has('--backup-only');
+const NO_BACKUP = has('--no-backup', '--skip-backup');
+const FULL_BACKUP = has('--full-backup');
 const VERBOSE = has('--verbose', '-v');
 
 const bumpIndex = argv.findIndex((x) => x === '--bump');
@@ -292,6 +295,171 @@ if (!SKIP_DEPS_CHECK) {
   }
 } else {
   printWarning('Skipped remote dependency cross reference check (--skip-deps-check flag set)');
+}
+
+/* ------------------------------------------- production database backup --- */
+async function triggerProductionBackup({ full = false } = {}) {
+  const token = crypto.randomBytes(32).toString('hex');
+  const payload = `${token}:${Date.now()}`;
+  const remoteTokenPath = remotePathFor('tmp/deploy-backup.token');
+
+  process.stdout.write('  authorizing backup token via FTPS... ');
+  try {
+    const dir = path.posix.dirname(remoteTokenPath);
+    if (dir && dir !== '/') {
+      await client.ensureDir(dir);
+      await client.cd(REMOTE_ROOT || '/');
+    }
+    const { Readable } = await import('node:stream');
+    await client.uploadFrom(Readable.from(payload), remoteTokenPath);
+    console.log(c.green('authorized'));
+  } catch (err) {
+    console.log(c.yellow(`warning: could not write token file (${err.message})`));
+    return { ok: false, error: err.message };
+  }
+
+  process.stdout.write(`  running database backup on production (${full ? 'FULL' : 'game data'})... `);
+  const streamUrl = `${API}/api/admin/backup/stream?full=${full ? 'true' : 'false'}`;
+
+  try {
+    const res = await fetch(streamUrl, {
+      headers: {
+        'x-deploy-token': token,
+        'Accept': 'text/event-stream',
+      },
+    });
+
+    if (res.status === 401 || res.status === 403) {
+      console.log(c.yellow('skipped (server requires new code update)'));
+      printWarning('Pre deploy database backup skipped on first run', [
+        'The remote server is running an earlier release without x-deploy-token support.',
+        'This deployment will install the required route on production.',
+        'Future deployments and "npm run deploy:backup" will perform the backup automatically.',
+      ]);
+      return { ok: false, skipped: true };
+    }
+
+    if (!res.ok) {
+      console.log(c.boldRed(`HTTP ${res.status}`));
+      const text = await res.text();
+      printWarning('Database backup returned an unexpected response', [
+        `Status: ${res.status} ${res.statusText}`,
+        `Response: ${text.slice(0, 300)}`,
+      ]);
+      return { ok: false, error: text };
+    }
+
+    console.log(c.green('started'));
+
+    let backupFile = '';
+    let backupMessage = '';
+    let isFailed = false;
+    let buffer = '';
+
+    for await (const chunk of res.body) {
+      buffer += chunk.toString();
+      const parts = buffer.split(/\r?\n\r?\n/);
+      buffer = parts.pop() || '';
+
+      for (const block of parts) {
+        let eventName = 'message';
+        let dataStr = '';
+        for (const rawLine of block.split(/\r?\n/)) {
+          const line = rawLine.trim();
+          if (line.startsWith('event:')) eventName = line.slice(6).trim();
+          else if (line.startsWith('data:')) dataStr = line.slice(5).trim();
+        }
+
+        if (!dataStr) continue;
+        let parsed = null;
+        try {
+          parsed = JSON.parse(dataStr);
+        } catch {
+          parsed = dataStr;
+        }
+
+        if (eventName === 'progress' && parsed && typeof parsed === 'object') {
+          process.stdout.write(`\r  backup progress: ${c.cyan(`${parsed.current} / ${parsed.total}`)} tables`);
+        } else if (eventName === 'done' && parsed && typeof parsed === 'object') {
+          backupMessage = parsed.message || '';
+          backupFile = parsed.file || '';
+          if (parsed.failed) isFailed = true;
+        }
+      }
+    }
+
+    if (buffer.trim()) {
+      let eventName = 'message';
+      let dataStr = '';
+      for (const rawLine of buffer.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (line.startsWith('event:')) eventName = line.slice(6).trim();
+        else if (line.startsWith('data:')) dataStr = line.slice(5).trim();
+      }
+      if (dataStr) {
+        try {
+          const parsed = JSON.parse(dataStr);
+          if (eventName === 'done' && parsed && typeof parsed === 'object') {
+            backupMessage = parsed.message || '';
+            backupFile = parsed.file || '';
+            if (parsed.failed) isFailed = true;
+          }
+        } catch {}
+      }
+    }
+
+    process.stdout.write('\n');
+    if (isFailed) {
+      console.log(`  ${c.boldRed('backup failed on server:')} ${backupMessage}`);
+      return { ok: false, error: backupMessage };
+    }
+
+    if (!backupFile) {
+      try {
+        const backupEntries = await client.list(remotePathFor('backups'));
+        const sqlGzFiles = backupEntries
+          .filter((f) => f.name && f.name.endsWith('.sql.gz'))
+          .sort((a, b) => {
+            const timeA = a.modifiedAt ? new Date(a.modifiedAt).getTime() : (a.rawModifiedAt ? new Date(a.rawModifiedAt).getTime() : 0);
+            const timeB = b.modifiedAt ? new Date(b.modifiedAt).getTime() : (b.rawModifiedAt ? new Date(b.rawModifiedAt).getTime() : 0);
+            if (timeB !== timeA) return timeB - timeA;
+            return b.name.localeCompare(a.name);
+          });
+        if (sqlGzFiles.length > 0) {
+          const newest = sqlGzFiles[0];
+          backupFile = newest.name;
+          const mb = (newest.size / (1024 * 1024)).toFixed(1);
+          if (!backupMessage) {
+            backupMessage = `saved ${mb} MB`;
+          }
+        }
+      } catch {}
+    }
+
+    console.log(
+      `  ${c.boldGreen('backup complete:')} ${backupFile ? c.boldCyan(backupFile) : ''} ${backupMessage ? c.dim(`(${backupMessage})`) : ''}`
+    );
+    return { ok: true, file: backupFile, message: backupMessage };
+  } catch (err) {
+    console.log(c.boldYellow(`\n  warning: backup stream interrupted (${err.message})`));
+    return { ok: false, error: err.message };
+  }
+}
+
+if (BACKUP_ONLY) {
+  console.log(
+    `\n  ${c.boldYellow('DATABASE BACKUP:')} running ${FULL_BACKUP ? 'FULL' : 'game data'} backup on production\n` +
+      `  api:    ${c.boldCyan(API)}\n` +
+      `  target: ${c.cyan(`${USER}@${HOST}:${PORT}${REMOTE_ROOT || '/'}`)}\n`,
+  );
+  await triggerProductionBackup({ full: FULL_BACKUP });
+  client.close();
+} else {
+
+if (!NO_BACKUP && !DRY_RUN) {
+  await triggerProductionBackup({ full: FULL_BACKUP });
+} else if (DRY_RUN && !NO_BACKUP) {
+  console.log(`  dry run: would execute database backup on production (${FULL_BACKUP ? 'FULL' : 'game data'})`);
 }
 
 /* -------------------------------------------------- auto-version bump --- */
@@ -737,3 +905,5 @@ async function runRestartFlow(expectedVersion = null) {
     process.exit(2);
   }
 }
+}
+

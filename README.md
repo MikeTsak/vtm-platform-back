@@ -85,9 +85,11 @@ numbered migrations in `migrations/list/`.
 | --- | --- |
 | `dev` | Regenerate the Swagger spec, then run under nodemon |
 | `start` | Regenerate the Swagger spec, then run once |
-| `deploy` | Direct FTP upload of changed files, touches Passenger restart, verifies health |
+| `deploy` | Back up remote DB, direct FTP upload of changed files, touches Passenger restart, verifies health |
+| `deploy:backup` | Trigger remote database backup on production without uploading files |
+| `deploy:backup:full` | Trigger full remote database backup on production including media blobs |
 | `deploy:dry` | Preview files that would be uploaded without uploading or restarting |
-| `deploy:force` | Re-upload all backend files regardless of cached hash |
+| `deploy:force` | Re upload all backend files regardless of cached hash |
 | `deploy:restart` | Bounce the live app only: FTP touches `tmp/restart.txt`, verifies health |
 | `test` / `test:watch` | vitest integration + unit tests |
 | `migrate` | Apply pending migrations from `migrations/list/` |
@@ -584,22 +586,26 @@ Copy them off-site if that matters.
 The backend deploys directly to the Plesk production server via FTPS using `basic-ftp`. Migrations self-apply on boot (`initDatabase()`).
 
 Running `npm run deploy` runs the complete workflow in one single command:
-1. **dependency safeguard**: cross references local `package.json` dependencies against the remote server. If new packages are detected, deployment is blocked with instructions to install them on the production server first.
-2. **auto versioning**: automatically increments the semantic version in `package.json` and updates `version.json` (bumping patch by default: `1.0.0` to `1.0.1`, etc.).
-3. **swagger autogen**: updates the OpenAPI documentation spec (`swagger_output.json`) with the new version.
-4. **file scan**: walks local backend files respecting `.gitignore` and hard exclusions (`.env*`, `node_modules`, `.git`, `deploy.config.json`, logs, backups).
-5. **delta upload**: checks remote file sizes and cached SHA1 hashes in `.deploy-manifest.json`, uploading only changed or new files.
-6. **graceful restart**: touches `/tmp/restart.txt` over FTP to trigger Phusion Passenger reload.
-7. **health verification**: polls `https://api.attlarp.gr/api/health` until the restarted server responds with active database connection, confirmed live target version, and fresh uptime.
+1. **production database backup**: automatically triggers a native streaming backup of game data on production before touching files or reloading passenger. Bypassed with `--no-backup`.
+2. **dependency safeguard**: cross references local `package.json` dependencies against the remote server. If new packages are detected, deployment is blocked with instructions to install them on the production server first.
+3. **auto versioning**: automatically increments the semantic version in `package.json` and updates `version.json` (bumping patch by default: `1.0.0` to `1.0.1`, etc.).
+4. **swagger autogen**: updates the OpenAPI documentation spec (`swagger_output.json`) with the new version.
+5. **file scan**: walks local backend files respecting `.gitignore` and hard exclusions (`.env*`, `node_modules`, `.git`, `deploy.config.json`, logs, backups).
+6. **delta upload**: checks remote file sizes and cached SHA1 hashes in `.deploy-manifest.json`, uploading only changed or new files.
+7. **graceful restart**: touches `/tmp/restart.txt` over FTP to trigger Phusion Passenger reload.
+8. **health verification**: polls `https://api.attlarp.gr/api/health` until the restarted server responds with active database connection, confirmed live target version, and fresh uptime.
 
 ```bash
-npm run deploy                    # Check deps, bump patch, upload changed files, restart server, verify health
+npm run deploy                    # Back up DB, check deps, bump patch, upload files, restart server, verify health
+npm run deploy:backup             # Run remote production database backup on demand
+npm run deploy:backup:full        # Run full remote production database backup including media blobs
 npm run deploy:dry                # Dry run preview (upload nothing, no bump, no restart)
 npm run deploy:force              # Force upload all backend files
 npm run deploy:restart            # Bounce the live app directly and verify health
 npm run deploy -- --bump minor    # Bump minor version (e.g. 1.0.x to 1.1.0)
 npm run deploy -- --no-bump       # Deploy without incrementing version
-npm run deploy -- --skip-deps-check # Bypass remote dependency cross-reference check
+npm run deploy -- --no-backup     # Deploy without running pre deploy database backup
+npm run deploy -- --skip-deps-check # Bypass remote dependency cross reference check
 ```
 
 Config: `back/deploy.config.json` (gitignored, see `deploy.config.example.json`).

@@ -1,6 +1,6 @@
 {
   "name": "back",
-  "version": "1.0.6",
+  "version": "1.0.9",
   "private": true,
   "scripts": {
     "dev": "node swagger-autogen.js && nodemon server.fastify.js",
@@ -9,6 +9,8 @@
     "deploy:dry": "node scripts/deploy.mjs --dry-run",
     "deploy:force": "node scripts/deploy.mjs --force",
     "deploy:restart": "node scripts/deploy.mjs --restart-only",
+    "deploy:backup": "node scripts/deploy.mjs --backup-only",
+    "deploy:backup:full": "node scripts/deploy.mjs --backup-only --full-backup",
     "test": "vitest run",
     "test:watch": "vitest",
     "migrate": "node scripts/migrate.js",
