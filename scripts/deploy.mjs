@@ -351,13 +351,33 @@ async function triggerProductionBackup({ full = false } = {}) {
 
     console.log(c.green('started'));
 
+    const decoder = new TextDecoder('utf-8');
+    const useBars = Boolean(process.stdout.isTTY);
+    let bar = null;
+    let totalTables = 52;
+    let currentTable = 'initializing...';
+
+    if (useBars) {
+      bar = new cliProgress.SingleBar(
+        {
+          format: '  backup: [{bar}] {percentage}% | {value}/{total} tables | ' + c.dim('{table}'),
+          barCompleteChar: '█',
+          barIncompleteChar: '░',
+          hideCursor: true,
+          clearOnComplete: false,
+        },
+        cliProgress.Presets.shades_grey,
+      );
+      bar.start(totalTables, 0, { table: currentTable });
+    }
+
     let backupFile = '';
     let backupMessage = '';
     let isFailed = false;
     let buffer = '';
 
     for await (const chunk of res.body) {
-      buffer += chunk.toString();
+      buffer += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
       const parts = buffer.split(/\r?\n\r?\n/);
       buffer = parts.pop() || '';
 
@@ -378,8 +398,27 @@ async function triggerProductionBackup({ full = false } = {}) {
           parsed = dataStr;
         }
 
-        if (eventName === 'progress' && parsed && typeof parsed === 'object') {
-          process.stdout.write(`\r  backup progress: ${c.cyan(`${parsed.current} / ${parsed.total}`)} tables`);
+        if (eventName === 'start' && parsed && typeof parsed === 'object') {
+          if (parsed.total) {
+            totalTables = parsed.total;
+            if (bar) bar.setTotal(totalTables);
+          }
+        } else if (eventName === 'log' && typeof parsed === 'string') {
+          const match = parsed.match(/^([a-zA-Z0-9_]+):/);
+          if (match) {
+            currentTable = match[1];
+            if (bar) bar.update({ table: currentTable });
+          }
+        } else if (eventName === 'progress' && parsed && typeof parsed === 'object') {
+          if (parsed.total && parsed.total !== totalTables) {
+            totalTables = parsed.total;
+            if (bar) bar.setTotal(totalTables);
+          }
+          if (bar) {
+            bar.update(parsed.current, { table: currentTable || 'exporting' });
+          } else {
+            process.stdout.write(`\r  backup: ${parsed.current} / ${parsed.total} tables (${currentTable})`);
+          }
         } else if (eventName === 'done' && parsed && typeof parsed === 'object') {
           backupMessage = parsed.message || '';
           backupFile = parsed.file || '';
@@ -408,7 +447,14 @@ async function triggerProductionBackup({ full = false } = {}) {
       }
     }
 
-    process.stdout.write('\n');
+    if (bar) {
+      bar.update(totalTables, { table: 'complete' });
+      bar.stop();
+      process.stdout.write('\n');
+    } else {
+      process.stdout.write('\n');
+    }
+
     if (isFailed) {
       console.log(`  ${c.boldRed('backup failed on server:')} ${backupMessage}`);
       return { ok: false, error: backupMessage };
@@ -651,7 +697,7 @@ try {
     if (useBars) {
       bar = new cliProgress.SingleBar(
         {
-          format: '  uploading: [{bar}] {percentage}% | {value_mb}/{total_mb} MB',
+          format: '  uploading: [{bar}] {percentage}% | {value_mb}/{total_mb} MB | ' + c.dim('{file}'),
           barCompleteChar: '█',
           barIncompleteChar: '░',
           hideCursor: true,
@@ -662,6 +708,7 @@ try {
       bar.start(1000, 0, {
         value_mb: '0.00',
         total_mb: (plannedBytes / 1048576).toFixed(2),
+        file: 'starting...',
       });
     }
 
@@ -678,9 +725,24 @@ try {
 
       if (!useBars) {
         process.stdout.write(`  uploading: ${f.rel} ... `);
+      } else if (bar) {
+        const base = currentUploadedBytes;
+        client.trackProgress((info) => {
+          const currentTransferred = base + (info.bytesOverall || 0);
+          const frac = plannedBytes > 0 ? Math.min(1, currentTransferred / plannedBytes) : 1;
+          bar.update(Math.round(frac * 1000), {
+            value_mb: (currentTransferred / 1048576).toFixed(2),
+            total_mb: (plannedBytes / 1048576).toFixed(2),
+            file: f.rel,
+          });
+        });
       }
 
       await client.uploadFrom(f.local, f.remote);
+
+      if (useBars && bar) {
+        client.trackProgress();
+      }
 
       uploaded++;
       sentBytes += f.size;
@@ -692,6 +754,7 @@ try {
         bar.update(Math.round(frac * 1000), {
           value_mb: (currentUploadedBytes / 1048576).toFixed(2),
           total_mb: (plannedBytes / 1048576).toFixed(2),
+          file: f.rel,
         });
       } else {
         console.log(c.green('done'));
@@ -702,6 +765,7 @@ try {
       bar.update(1000, {
         value_mb: (plannedBytes / 1048576).toFixed(2),
         total_mb: (plannedBytes / 1048576).toFixed(2),
+        file: 'complete',
       });
       bar.stop();
       process.stdout.write('\n');
