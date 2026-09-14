@@ -172,6 +172,12 @@ module.exports = async function (fastify, opts) {
       });
     }
 
+    rows.forEach(r => {
+      if (r.status && r.status.toLowerCase().startsWith('approved')) {
+        r.status = 'approved';
+      }
+    });
+
     log.dt('List mine', { user_id: req.user.id, count: rows.length });
     reply.send({ downtimes: rows });
   });
@@ -275,13 +281,27 @@ module.exports = async function (fastify, opts) {
 
   fastify.patch('/api/admin/downtimes/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   const { status, gm_notes, gm_resolution } = req.body;
-    const allowed = ['submitted', 'approved', 'rejected', 'resolved', 'Needs a Scene', 'Resolved in scene'];
-    if (status && !allowed.includes(status)) return reply.status(400).json({ error: 'Bad status' });
+    const allowed = [
+      'submitted',
+      'approved',
+      'Approved: Kikos',
+      'Approved: Mike',
+      'rejected',
+      'resolved',
+      'Needs a Scene',
+      'Resolved in scene'
+    ];
+    let normalizedStatus = status;
+    if (status) {
+      const match = allowed.find(a => a.toLowerCase() === String(status).trim().toLowerCase());
+      if (!match) return reply.status(400).json({ error: 'Bad status' });
+      normalizedStatus = match;
+    }
 
     const fields = [];
     const vals = [];
 
-    if (status) { fields.push('status=?'); vals.push(status); }
+    if (normalizedStatus) { fields.push('status=?'); vals.push(normalizedStatus); }
     if (typeof gm_notes === 'string') { fields.push('gm_notes=?'); vals.push(gm_notes); }
     if (typeof gm_resolution === 'string') { fields.push('gm_resolution=?'); vals.push(gm_resolution); }
 
