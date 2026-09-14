@@ -154,7 +154,7 @@ async function activityRoutes(fastify, options) {
         totalMinutes: rows.reduce((acc, r) => acc + Math.round((r.duration_seconds || 0) / 60), 0),
         activeUserCount: userMap.size,
         hourly,
-        users: Array.from(userMap.values()),
+        users: Array.from(userMap.values()).sort((a, b) => b.totalMinutes - a.totalMinutes),
       });
     } catch (error) {
       log.err('Error in GET /api/activity/day-stats:', { error: error.message });
