@@ -85,8 +85,10 @@ numbered migrations in `migrations/list/`.
 | --- | --- |
 | `dev` | Regenerate the Swagger spec, then run under nodemon |
 | `start` | Regenerate the Swagger spec, then run once |
-| `deploy` | Trigger the Plesk pull, wait for `after-pull.sh` + the restart, verify — after you `git push` (see [Deploying](#deploying)) |
-| `deploy:restart` | Bounce the live app only — FTP-touches `tmp/restart.txt`, no pull |
+| `deploy` | Direct FTP upload of changed files, touches Passenger restart, verifies health |
+| `deploy:dry` | Preview files that would be uploaded without uploading or restarting |
+| `deploy:force` | Re-upload all backend files regardless of cached hash |
+| `deploy:restart` | Bounce the live app only: FTP touches `tmp/restart.txt`, verifies health |
 | `test` / `test:watch` | vitest integration + unit tests |
 | `migrate` | Apply pending migrations from `migrations/list/` |
 | `migrate:status` | Show which migrations are applied and which are pending |
@@ -579,39 +581,26 @@ Copy them off-site if that matters.
 
 ## Deploying
 
-There is no build step. The server runs the code straight from a Git checkout
-(Plesk › Websites & Domains › Git), and migrations self-apply on boot
-(`initDatabase()`). A deploy is: **you push → the server pulls → it restarts**.
+The backend deploys directly to the Plesk production server via FTPS using `basic-ftp`. Migrations self-apply on boot (`initDatabase()`).
 
-You do the push yourself (`git push`). Then `npm run deploy` does the rest, with
-a progress bar per phase:
+Running `npm run deploy` runs the complete workflow in one single command:
+1. **auto versioning**: automatically increments the semantic version in `package.json` and updates `version.json` (bumping patch by default: `1.0.0` to `1.0.1`, etc.).
+2. **swagger autogen**: updates the OpenAPI documentation spec (`swagger_output.json`) with the new version.
+3. **file scan**: walks local backend files respecting `.gitignore` and hard exclusions (`.env*`, `node_modules`, `.git`, `deploy.config.json`, logs, backups).
+4. **delta upload**: checks remote file sizes and cached SHA1 hashes in `.deploy-manifest.json`, uploading only changed or new files.
+5. **graceful restart**: touches `/tmp/restart.txt` over FTP to trigger Phusion Passenger reload.
+6. **health verification**: polls `https://api.attlarp.gr/api/health` until the restarted server responds with active database connection, confirmed live target version, and fresh uptime.
 
-1. **trigger** — POSTs the Plesk Git *Webhook URL* so the server pulls
-   (or, if no URL is configured, prompts you to click "Pull Updates" in Plesk)
-2. **deploying** — waits while Plesk runs `deploy/after-pull.sh`: `npm install`
-   *only if `package.json` changed in the pull*, OpenAPI regen, deploy marker,
-   then `touch tmp/restart.txt`
-3. **restarting** — waits for the process to come back; if it hasn't after a
-   grace period it touches the restart file itself over FTP (`portalback`)
-4. **verify** — `/api/health` is `ok` + DB reachable, and reports the live commit
+```bash
+npm run deploy            # Bump patch version, upload changed files, restart server, verify health
+npm run deploy:dry        # Dry run preview (upload nothing, no bump, no restart)
+npm run deploy:force      # Force upload all backend files
+npm run deploy:restart    # Bounce the live app directly and verify health
+npm run deploy -- --bump minor  # Bump minor version (e.g. 1.0.x to 1.1.0)
+npm run deploy -- --no-bump     # Deploy without incrementing version
+```
 
-`npm run deploy -- --no-trigger` skips step 1 (for when you pulled in Plesk by
-hand). `npm run deploy:restart` is just steps 3–4 — bounce the app, no pull.
-
-Config: `back/deploy.config.json` (gitignored — copy `deploy.config.example.json`).
-
-### Plesk one-time setup
-
-- **Git panel → Additional deployment actions**: set the field to exactly
-  `sh deploy/after-pull.sh`.
-- **Git panel → Webhook URL**: copy it into `deploy.config.json` →
-  `pleskWebhookUrl` (so `npm run deploy` can trigger the pull without you
-  clicking). Optional — without it the script just prompts you to click.
-- **Node.js panel**: the application root is the same directory the repo
-  deploys into; Passenger restarts when `tmp/restart.txt` changes.
-
-`package-lock.json` is gitignored, so the server runs `npm install`, not
-`npm ci` — a no-op on the usual deploy where dependencies didn't change.
+Config: `back/deploy.config.json` (gitignored, see `deploy.config.example.json`).
 
 ## Schema versions (migrations)
 

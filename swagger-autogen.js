@@ -1,10 +1,17 @@
 const swaggerAutogen = require('swagger-autogen')({ openapi: '3.0.0' });
 const path = require('path');
 
+let pkgVersion = '1.0.0';
+try {
+  pkgVersion = require('./package.json').version || '1.0.0';
+} catch {
+  /* fallback */
+}
+
 const doc = {
   info: {
     title: 'Erebus Portal API',
-    version: '1.0.0',
+    version: pkgVersion,
     description: 'API documentation for the Vampire: The Masquerade RPG portal.',
   },
   servers: [

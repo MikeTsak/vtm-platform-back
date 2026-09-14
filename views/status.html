@@ -28,7 +28,7 @@
 </head>
 <body>
   <h1>{{APP_NAME}} : <span class="{{SYSTEM_CLASS}}">{{SYSTEM_STATUS}}</span></h1>
-  <div class="subtitle">Version: {{GIT_HASH}} | Environment: {{NODE_ENV}} | Refreshed at {{NOW}}</div>
+  <div class="subtitle">Version: v{{APP_VERSION}} | Environment: {{NODE_ENV}} | Refreshed at {{NOW}}</div>
 
   {{ERRORS}}
 
@@ -39,7 +39,7 @@
       <div class="row"><div class="k">Uptime</div><div class="v">{{UPTIME}}</div></div>
       <div class="row"><div class="k">Node.js</div><div class="v">{{NODE_VERSION}}</div></div>
       <div class="row"><div class="k">V8 Version</div><div class="v">{{V8_VERSION}}</div></div>
-      <div class="row"><div class="k">Git Hash</div><div class="v">{{GIT_HASH}}</div></div>
+      <div class="row"><div class="k">Version</div><div class="v">v{{APP_VERSION}}</div></div>
       <div class="row">{{API_DOCS_LINK}}</div>
     </div>
 

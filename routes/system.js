@@ -29,10 +29,18 @@ module.exports = async function (fastify, opts) {
       const [rows] = await pool.query('SELECT 1 AS ok');
       const dbOk = rows?.[0]?.ok === 1;
 
+      let version = '1.0.0';
+      try {
+        version = require('../package.json').version || '1.0.0';
+      } catch {
+        /* fallback */
+      }
+
       reply.header('Cache-Control', 'no-store');
       return reply.send({
         ok: true,
         db: dbOk,
+        version,
         env: process.env.NODE_ENV || 'stable',
         uptime_sec: Math.floor(process.uptime()),
         started_at: startedAt.toISOString(),
@@ -178,7 +186,7 @@ module.exports = async function (fastify, opts) {
         };
       }
 
-      // Git Hash
+      // Version & Git Hash (falls back to version when deployed without .git)
       try {
         const gitHead = fs.readFileSync(path.join(process.cwd(), '.git', 'HEAD'), 'utf8').trim();
         let gitHash = 'unknown';
@@ -190,7 +198,7 @@ module.exports = async function (fastify, opts) {
         }
         enhancedInfo.app.gitHash = gitHash;
       } catch (e) {
-        enhancedInfo.app.gitHash = 'unknown';
+        enhancedInfo.app.gitHash = `v${enhancedInfo.app.version || '1.0.0'}`;
       }
 
       // Socket.io Info
@@ -317,7 +325,7 @@ module.exports = async function (fastify, opts) {
       .replace('{{SYSTEM_CLASS}}', systemClass)
       .replace('{{SYSTEM_STATUS}}', systemStatus)
       .replaceAll('{{APP_NAME}}', 'Erebus API')
-      .replace('{{APP_VERSION}}', (enhancedInfo.app || {}).version || '0.0.0')
+      .replaceAll('{{APP_VERSION}}', (enhancedInfo.app || {}).version || '1.0.0')
       .replace('{{NODE_ENV}}', process.env.NODE_ENV || 'stable')
       .replace('{{STARTED_AT}}', formatDate(startedAt))
       .replace('{{NOW}}', formatDate(new Date()))

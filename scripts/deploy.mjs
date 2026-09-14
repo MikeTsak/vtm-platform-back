@@ -1,211 +1,479 @@
 /**
- * Backend deploy watcher.
+ * Production backend FTP deployment and restart watcher with auto-versioning.
  *
- * You push manually (`git push`). This then:
- *   1. tells the Plesk server to pull       (Git webhook, or you click "Pull")
- *   2. waits for the pull + npm + restart    (deploy/after-pull.sh does these)
- *   3. verifies the API came back healthy on the new commit
- * with a progress bar for each phase.
+ * Direct FTP deployment to Plesk server:
+ *   1. Bumps semantic version in package.json and generates version.json
+ *   2. Generates the latest OpenAPI spec (swagger autogen) with new version
+ *   3. Scans files respecting .gitignore and safety exclusions (.env, node_modules, etc.)
+ *   4. Uploads changed/new files to the server via FTPS (basic-ftp)
+ *   5. Restarts Phusion Passenger (touching tmp/restart.txt over FTP)
+ *   6. Verifies the production API health endpoint responds with database connected and target version live
  *
- *   npm run deploy               trigger pull, watch it land
- *   npm run deploy -- --no-trigger   skip step 1 (you'll pull in Plesk yourself)
- *   npm run deploy:restart       just bounce the app (FTP touch tmp/restart.txt)
+ * Usage:
+ *   npm run deploy            Upload changed files, bump patch version, restart server, verify health
+ *   npm run deploy:dry        Dry run preview (upload nothing, no bump, no restart)
+ *   npm run deploy:force      Re-upload all candidate files regardless of cached hash
+ *   npm run deploy:restart    Restart the production server directly and verify health
  *
- * There is no build step; migrations self-apply on boot.
- * Config: back/deploy.config.json (gitignored) — see deploy.config.example.json.
+ * Flags:
+ *   --dry-run, -n    Preview actions without uploading or restarting
+ *   --force,   -f    Re-upload all files regardless of manifest/size match
+ *   --restart-only   Only restart the server and verify health
+ *   --no-restart     Upload files but skip triggering server restart
+ *   --no-swagger     Skip running swagger autogen before deployment
+ *   --no-bump        Skip auto-incrementing version in package.json
+ *   --bump <type>    Bump type: patch (default), minor, or major
+ *   --verbose, -v    Enable detailed FTP command and response logging
  */
+import { Client } from 'basic-ftp';
+import cliProgress from 'cli-progress';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import fs from 'node:fs';
-import path from 'node:path';
-import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
-import cliProgress from 'cli-progress';
+import ignore from 'ignore';
 
 const execFileP = promisify(execFile);
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(__dirname, '..');
 
 /* ------------------------------------------------------------------ args --- */
 const argv = process.argv.slice(2);
-const has = (...n) => n.some((x) => argv.includes(x));
-const NO_TRIGGER = has('--no-trigger');
+const has = (...names) => names.some((n) => argv.includes(n));
+const DRY_RUN = has('--dry-run', '-n');
+const FORCE = has('--force', '-f');
 const RESTART_ONLY = has('--restart-only');
+const NO_RESTART = has('--no-restart');
+const NO_SWAGGER = has('--no-swagger');
+const NO_BUMP = has('--no-bump');
+const VERBOSE = has('--verbose', '-v');
+
+const bumpIndex = argv.findIndex((x) => x === '--bump');
+const BUMP_TYPE =
+  bumpIndex !== -1 && argv[bumpIndex + 1] ? argv[bumpIndex + 1].toLowerCase() : 'patch';
 
 /* ---------------------------------------------------------------- config --- */
-const CFG = path.join(ROOT, 'deploy.config.json');
-if (!fs.existsSync(CFG)) {
-  die('no deploy.config.json — copy deploy.config.example.json to deploy.config.json and fill it in.');
+const CONFIG_FILE = path.join(ROOT, 'deploy.config.json');
+let fileCfg = {};
+if (fs.existsSync(CONFIG_FILE)) {
+  try {
+    fileCfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+  } catch (err) {
+    die(`deploy.config.json is not valid JSON: ${err.message}`);
+  }
+} else {
+  die('no deploy.config.json found. Create back/deploy.config.json with your FTP credentials.');
 }
-let cfg;
-try {
-  cfg = JSON.parse(fs.readFileSync(CFG, 'utf8'));
-} catch (e) {
-  die(`deploy.config.json is not valid JSON: ${e.message}`);
-}
-const API = (process.env.DEPLOY_API_BASE || cfg.apiBase || 'https://api.attlarp.gr').replace(/\/+$/, '');
-const BRANCH = process.env.DEPLOY_BRANCH || cfg.branch || 'main';
-const WEBHOOK = process.env.PLESK_WEBHOOK_URL || cfg.pleskWebhookUrl || '';
-const DEPLOY_EXPECT_S = Number(cfg.expectDeploySec || 100); // pull + npm + swagger
-const RESTART_EXPECT_S = Number(cfg.expectRestartSec || 25);
-const HARD_TIMEOUT_MS = Number(cfg.waitTimeoutSec || 360) * 1000;
+
+const ftpCfg = fileCfg.ftp || {};
+const pick = (envKey, ftpKey, rootKey, fallback) => {
+  if (process.env[envKey] !== undefined) return process.env[envKey];
+  if (ftpCfg[ftpKey] !== undefined) return ftpCfg[ftpKey];
+  if (fileCfg[rootKey] !== undefined) return fileCfg[rootKey];
+  return fallback;
+};
+const asBool = (v, dflt) =>
+  v === undefined || v === '' ? dflt : !/^(0|false|no|off)$/i.test(String(v));
+
+const HOST = pick('FTP_HOST', 'host', 'host');
+const PORT = Number(pick('FTP_PORT', 'port', 'port', 21));
+const USER = pick('FTP_USER', 'user', 'user');
+const PASSWORD = pick('FTP_PASSWORD', 'password', 'password');
+const SECURE = /^implicit$/i.test(String(pick('FTP_SECURE', 'secure', 'secure', 'true')))
+  ? 'implicit'
+  : asBool(pick('FTP_SECURE', 'secure', 'secure', 'true'), true);
+const TLS_STRICT = asBool(pick('FTP_TLS_STRICT', 'tlsStrict', 'tlsStrict', 'false'), false);
+const REMOTE_ROOT =
+  '/' + String(pick('FTP_REMOTE_DIR', 'remoteDir', 'remoteDir', '/')).replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+const RESTART_FILE =
+  '/' + String(pick('FTP_RESTART_FILE', 'restartFile', 'restartFile', '/tmp/restart.txt')).replace(/\\/g, '/').replace(/^\/+/, '');
+const API = (process.env.DEPLOY_API_BASE || fileCfg.apiBase || 'https://api.attlarp.gr').replace(/\/+$/, '');
+const RESTART_EXPECT_S = Number(fileCfg.expectRestartSec || 25);
+const WAIT_TIMEOUT_MS = Number(fileCfg.waitTimeoutSec || 120) * 1000;
 
 function die(msg) {
-  console.error(`\n  deploy: ${msg}\n`);
+  console.error(`\n  deploy error: ${msg}\n`);
   process.exit(1);
 }
-const git = async (...a) => (await execFileP('git', a, { cwd: ROOT })).stdout.trim();
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const mb = (b) => `${(b / 1048576).toFixed(2)} MB`;
+const kb = (b) => `${(b / 1024).toFixed(1)} KB`;
 const nowIso = () => new Date().toISOString();
 
-/* --------------------------------------------------------- restart-only --- */
-if (RESTART_ONLY) {
-  const base = await health();
-  console.log(`  api ${base ? `up ${base.uptime}s (started ${base.startedAt})` : 'not responding'}`);
-  process.stdout.write('  FTP: touching restart file … ');
-  await ftpRestart();
-  console.log('done');
-  const t0 = Date.now();
-  const bar = mkBar('restart', RESTART_EXPECT_S);
-  const good = await waitFor(t0, Math.max(90_000, RESTART_EXPECT_S * 3000), async () => {
-    const h = await health();
-    bar.tick(Date.now() - t0, h ? `up ${h.uptime}s · db ${h.db ? 'ok' : '…'}` : 'restarting…');
-    return h && h.ok && h.db && restarted(base, h);
-  });
-  bar.done(good);
-  console.log(good ? '\n  restarted and healthy.\n' : '\n  no restart detected — the app may not have picked up tmp/restart.txt.\n');
-  process.exit(good ? 0 : 2);
+function bumpVersion(current, type = 'patch') {
+  const clean = String(current || '1.0.0').trim().replace(/^v/i, '');
+  const parts = clean.split('.').map((p) => parseInt(p, 10));
+  while (parts.length < 3) parts.push(0);
+  let [major, minor, patch] = parts.map((n) => (isNaN(n) ? 0 : n));
+  if (type === 'major') {
+    major += 1;
+    minor = 0;
+    patch = 0;
+  } else if (type === 'minor') {
+    minor += 1;
+    patch = 0;
+  } else {
+    patch += 1;
+  }
+  return `${major}.${minor}.${patch}`;
 }
 
 /* ------------------------------------------------------------- preflight --- */
-const branchNow = await git('rev-parse', '--abbrev-ref', 'HEAD');
-if (branchNow !== BRANCH) die(`on branch "${branchNow}", expected "${BRANCH}" (set "branch" in deploy.config.json to change).`);
+for (const [k, v] of Object.entries({ host: HOST, user: USER, password: PASSWORD })) {
+  if (!v) die(`"${k}" is empty in deploy.config.json or FTP_* environment variables.`);
+}
 
-const localSha = await git('rev-parse', 'HEAD');
-let originSha = '';
+/* --------------------------------------------------------- restart-only --- */
+if (RESTART_ONLY) {
+  await runRestartFlow();
+  process.exit(0);
+}
+
+/* -------------------------------------------------- auto-version bump --- */
+const PKG_FILE = path.join(ROOT, 'package.json');
+let pkgData = {};
 try {
-  await execFileP('git', ['fetch', 'origin', BRANCH, '--quiet'], { cwd: ROOT });
-  originSha = await git('rev-parse', `origin/${BRANCH}`);
-} catch {
-  console.log('  (could not fetch origin — assuming your push already landed)');
+  pkgData = JSON.parse(fs.readFileSync(PKG_FILE, 'utf8'));
+} catch (err) {
+  die(`Could not read package.json: ${err.message}`);
 }
-const target = (originSha || localSha).slice(0, 7);
 
-console.log(`\n  ${API}   branch ${BRANCH}`);
-console.log(`  local  ${localSha.slice(0, 7)}${localSha === originSha ? '  (matches origin)' : ''}`);
-if (originSha) console.log(`  origin ${originSha.slice(0, 7)}  <- this is what will deploy`);
-if (originSha && originSha !== localSha) {
-  const ahead = await git('rev-list', '--count', `origin/${BRANCH}..HEAD`).catch(() => '?');
-  if (ahead !== '0') console.log(`\n  ! you have ${ahead} unpushed commit(s). Run "git push" first if you want them live.`);
-}
-console.log('');
+const currentVersion = pkgData.version || '1.0.0';
+let targetVersion = currentVersion;
 
-/* ----------------------------------------------------------- 1: trigger --- */
-const triggeredAt = Date.now();
-const baseHealth = await health();
-const baseMarker = await marker();
-if (baseHealth) console.log(`  api now: up ${baseHealth.uptime}s  marker: ${baseMarker?.short || 'none'}`);
+if (!NO_BUMP && !DRY_RUN) {
+  targetVersion = bumpVersion(currentVersion, BUMP_TYPE);
+  pkgData.version = targetVersion;
+  fs.writeFileSync(PKG_FILE, JSON.stringify(pkgData, null, 2) + '\n');
 
-if (NO_TRIGGER) {
-  console.log('  1/3  trigger        skipped (--no-trigger)');
-} else if (WEBHOOK) {
-  process.stdout.write('  1/3  trigger        POST Plesk webhook … ');
-  const r = await fetch(WEBHOOK, { method: 'POST' }).catch((e) => ({ ok: false, _err: e.message }));
-  if (r._err) { console.log('failed'); die(`could not reach the webhook: ${r._err}`); }
-  console.log(r.ok ? 'accepted' : `HTTP ${r.status} (Plesk often replies non-2xx here — continuing)`);
+  const versionRecord = {
+    version: targetVersion,
+    bump: BUMP_TYPE,
+    deployed_at: nowIso(),
+    environment: 'production',
+  };
+  fs.writeFileSync(path.join(ROOT, 'version.json'), JSON.stringify(versionRecord, null, 2) + '\n');
+  console.log(`\n  version: updated from ${currentVersion} to ${targetVersion}`);
+} else if (DRY_RUN && !NO_BUMP) {
+  const previewVersion = bumpVersion(currentVersion, BUMP_TYPE);
+  console.log(`\n  dry run: version would update from ${currentVersion} to ${previewVersion}`);
 } else {
-  console.log('  1/3  trigger        no pleskWebhookUrl set');
-  if (process.stdin.isTTY) {
-    await prompt('       → open Plesk › Websites & Domains › Git, click "Pull Updates", then press Enter…');
+  console.log(`\n  version: ${currentVersion} (auto bump skipped)`);
+}
+
+/* ----------------------------------------------------- swagger generator --- */
+if (!NO_SWAGGER && !DRY_RUN) {
+  try {
+    process.stdout.write('  generating swagger spec... ');
+    await execFileP('node', ['swagger-autogen.js'], { cwd: ROOT });
+    console.log('done');
+  } catch (err) {
+    console.log(`skipped (warning: ${err.message})`);
+  }
+}
+
+/* --------------------------------------------------------- scan files --- */
+const HARD_IGNORES = [
+  '.git',
+  '.git/**',
+  'node_modules',
+  'node_modules/**',
+  '.env',
+  '.env.*',
+  '**/.env*',
+  'deploy.config.json',
+  '.deploy-manifest.json',
+  '.restart.tmp',
+  'backups',
+  'backups/**',
+  'logs',
+  'logs/**',
+  'dist',
+  'dist/**',
+  'build',
+  'build/**',
+  'coverage',
+  'coverage/**',
+  '.vscode',
+  '.vscode/**',
+  '.idea',
+  '.idea/**',
+  'tmp',
+  'tmp/**',
+  '*.log',
+  '*.tmp',
+  '.DS_Store',
+  'Thumbs.db',
+];
+
+const ig = ignore();
+const gitignorePath = path.join(ROOT, '.gitignore');
+if (fs.existsSync(gitignorePath)) {
+  ig.add(fs.readFileSync(gitignorePath, 'utf8'));
+}
+ig.add(HARD_IGNORES);
+
+async function walk(dir, baseDir) {
+  const entries = await fsp.readdir(dir, { withFileTypes: true });
+  const results = [];
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    const rel = path.relative(baseDir, full).split(path.sep).join('/');
+    const relForIgnore = entry.isDirectory() ? `${rel}/` : rel;
+
+    if (ig.ignores(relForIgnore) || ig.ignores(rel)) continue;
+
+    if (entry.isDirectory()) {
+      results.push(...(await walk(full, baseDir)));
+    } else if (entry.isFile()) {
+      const stat = await fsp.stat(full);
+      results.push({
+        rel,
+        local: full,
+        size: stat.size,
+        mtime: stat.mtimeMs,
+      });
+    }
+  }
+  return results;
+}
+
+const localFiles = await walk(ROOT, ROOT);
+if (localFiles.length === 0) die('No backend files found to deploy.');
+
+// Local manifest for accurate delta caching
+const MANIFEST_FILE = path.join(ROOT, '.deploy-manifest.json');
+let manifest = {};
+if (fs.existsSync(MANIFEST_FILE) && !FORCE) {
+  try {
+    manifest = JSON.parse(fs.readFileSync(MANIFEST_FILE, 'utf8'));
+  } catch {
+    manifest = {};
+  }
+}
+
+// Compute sha1 hash for each file
+async function fileHash(filePath) {
+  const content = await fsp.readFile(filePath);
+  return crypto.createHash('sha1').update(content).digest('hex');
+}
+
+/* ------------------------------------------------------------- ftp client -- */
+const client = new Client(30_000);
+client.ftp.verbose = VERBOSE;
+
+const remotePathFor = (rel) => path.posix.join(REMOTE_ROOT || '/', rel);
+
+console.log(
+  `\n  ${DRY_RUN ? 'DRY RUN: ' : ''}deploying backend files\n` +
+    `  version: ${targetVersion}\n` +
+    `  source:  ${ROOT}\n` +
+    `  target:  ${USER}@${HOST}:${PORT}${REMOTE_ROOT || '/'} (${SECURE === true ? 'FTPS' : SECURE === 'implicit' ? 'FTPS implicit' : 'plain FTP'})\n` +
+    `  api:     ${API}\n`,
+);
+
+let uploaded = 0;
+let skipped = 0;
+let sentBytes = 0;
+const startedAt = Date.now();
+
+try {
+  await client.access({
+    host: HOST,
+    port: PORT,
+    user: USER,
+    password: PASSWORD,
+    secure: SECURE,
+    secureOptions: { rejectUnauthorized: TLS_STRICT },
+  });
+
+  // Query remote directory listing per folder
+  process.stdout.write('  checking remote files... ');
+  const remoteSizes = new Map();
+  const listedDirs = new Set();
+  async function remoteSizeOf(remoteAbs) {
+    const dir = path.posix.dirname(remoteAbs);
+    if (!listedDirs.has(dir)) {
+      listedDirs.add(dir);
+      try {
+        for (const item of await client.list(dir)) {
+          if (item.isFile) remoteSizes.set(path.posix.join(dir, item.name), item.size);
+        }
+      } catch {
+        /* remote directory does not exist yet */
+      }
+    }
+    return remoteSizes.get(remoteAbs) ?? -1;
+  }
+
+  const plan = [];
+  const currentHashes = new Map();
+
+  for (const f of localFiles) {
+    const hash = await fileHash(f.local);
+    currentHashes.set(f.rel, hash);
+    const remote = remotePathFor(f.rel);
+    const remoteSize = !FORCE ? await remoteSizeOf(remote) : -1;
+
+    const matchesRemote = remoteSize === f.size;
+    const matchesManifest = manifest[f.rel] && manifest[f.rel].hash === hash;
+
+    if (!FORCE && matchesRemote && matchesManifest) {
+      skipped++;
+    } else {
+      plan.push({ ...f, remote, hash });
+    }
+  }
+
+  console.log(`${skipped} unchanged, ${plan.length} to upload\n`);
+
+  const plannedBytes = plan.reduce((n, f) => n + f.size, 0);
+
+  if (plan.length === 0) {
+    console.log('  nothing to upload: remote files are already up to date.\n');
+  } else if (DRY_RUN) {
+    for (const f of plan) {
+      console.log(`  would upload: ${f.rel} (${kb(f.size)})`);
+    }
+    console.log(`\n  dry run total: ${plan.length} files, ${mb(plannedBytes)}\n`);
   } else {
-    console.log('       → click "Pull Updates" in Plesk now.');
+    const useBars = process.stdout.isTTY;
+    const bars = useBars
+      ? new cliProgress.MultiBar(
+          {
+            format: '  {bar} {percentage}% | {value_mb}/{total_mb} MB | {name}',
+            barCompleteChar: '█',
+            barIncompleteChar: '░',
+            hideCursor: true,
+            clearOnComplete: false,
+            autopadding: true,
+          },
+          cliProgress.Presets.shades_grey,
+        )
+      : null;
+
+    const fmtBar = (b, val, total, name) =>
+      b?.update(val, {
+        name,
+        value_mb: (val / 1048576).toFixed(2),
+        total_mb: (total / 1048576).toFixed(2),
+      });
+
+    const overall = bars?.create(plannedBytes, 0, {
+      name: 'TOTAL',
+      value_mb: '0.00',
+      total_mb: (plannedBytes / 1048576).toFixed(2),
+    });
+
+    const ensured = new Set();
+    let fileBar = null;
+    let currentRel = '';
+    let currentSize = 0;
+    let baseBytes = 0;
+
+    client.trackProgress((info) => {
+      if (info.type !== 'upload') return;
+      const n = Math.min(info.bytes, currentSize || info.bytes);
+      fmtBar(fileBar, n, currentSize || info.bytes, currentRel);
+      fmtBar(overall, baseBytes + n, plannedBytes, 'TOTAL');
+    });
+
+    for (const f of plan) {
+      currentRel = f.rel;
+      currentSize = f.size;
+      const dir = path.posix.dirname(f.remote);
+      if (dir && dir !== '/' && !ensured.has(dir)) {
+        await client.ensureDir(dir);
+        await client.cd(REMOTE_ROOT || '/');
+        ensured.add(dir);
+      }
+
+      if (useBars) {
+        fileBar = bars.create(f.size, 0, {
+          name: f.rel,
+          value_mb: '0.00',
+          total_mb: (f.size / 1048576).toFixed(2),
+        });
+      } else {
+        process.stdout.write(`  uploading: ${f.rel} ... `);
+      }
+
+      await client.uploadFrom(f.local, f.remote);
+
+      uploaded++;
+      sentBytes += f.size;
+      baseBytes += f.size;
+      manifest[f.rel] = { hash: f.hash, size: f.size, uploadedAt: nowIso() };
+
+      if (useBars) {
+        fmtBar(fileBar, f.size, f.size, f.rel);
+        fmtBar(overall, baseBytes, plannedBytes, 'TOTAL');
+        bars.remove(fileBar);
+        fileBar = null;
+      } else {
+        console.log('done');
+      }
+    }
+
+    client.trackProgress();
+    fmtBar(overall, plannedBytes, plannedBytes, 'TOTAL');
+    bars?.stop();
+
+    // Save updated manifest
+    try {
+      fs.writeFileSync(MANIFEST_FILE, JSON.stringify(manifest, null, 2));
+    } catch {
+      /* non-fatal */
+    }
   }
+} catch (err) {
+  client.trackProgress?.();
+  console.error(`\n  deploy upload failed: ${err.message}\n`);
+  client.close();
+  process.exit(1);
 }
 
-/* ------------------------------------------------ 2: wait for the deploy --- */
-console.log('');
-const deployStart = Date.now();
-const bar1 = mkBar('2/3  deploying', DEPLOY_EXPECT_S);
-let sawMarker = null;
-let sawRestart = false;
+client.close();
 
-const deployOk = await waitFor(deployStart, HARD_TIMEOUT_MS, async () => {
-  const [h, m] = await Promise.all([health(), marker()]);
-  if (m && (!baseMarker || m.at !== baseMarker.at)) sawMarker = m;   // marker refreshed
-  if (restarted(baseHealth, h)) sawRestart = true;                    // or it already bounced
-  const note = sawMarker
-    ? `pulled ${sawMarker.short} · deps ${sawMarker.deps}`
-    : h ? `waiting… (api up ${h.uptime}s)` : 'waiting…';
-  bar1.tick(Date.now() - deployStart, note);
-  return !!sawMarker || sawRestart;
-});
-bar1.done(deployOk);
+const uploadSecs = ((Date.now() - startedAt) / 1000).toFixed(1);
+console.log(
+  `\n  upload complete: ` +
+    `${uploaded} uploaded (${mb(sentBytes)}), ${skipped} unchanged, ${uploadSecs}s\n`,
+);
 
-if (!deployOk) {
-  fail(`the server never reported a pull after ${Math.round((Date.now() - deployStart) / 1000)}s.\n` +
-    `  Check the Plesk Git deploy log. If "Additional deployment actions" isn't set to\n` +
-    `  "sh deploy/after-pull.sh", set that and retry.`);
+/* ----------------------------------------------------- server restart --- */
+if (DRY_RUN || NO_RESTART) {
+  if (NO_RESTART) console.log('  server restart skipped (--no-restart flag set).\n');
+  process.exit(0);
 }
 
-/* --------------------------------------------------- 3: wait for restart --- */
-console.log('');
-const restartStart = Date.now();
-const bar2 = mkBar('3/3  restarting', RESTART_EXPECT_S);
-let ftpKicked = false;
+await runRestartFlow(targetVersion);
 
-const restartOk = await waitFor(restartStart, Math.max(120_000, HARD_TIMEOUT_MS - (Date.now() - triggeredAt)), async () => {
-  const h = await health();
-  const back = h && h.ok && h.db && restarted(baseHealth, h);
-  bar2.tick(Date.now() - restartStart, h ? (back ? `up ${h.uptime}s · db ok` : `restarting… (${h.uptime}s)`) : 'restarting…');
-  // Fallback: after-pull.sh should have touched tmp/restart.txt. If we've
-  // waited well past normal and it hasn't restarted, do it ourselves.
-  if (!back && !ftpKicked && Date.now() - restartStart > (RESTART_EXPECT_S + 20) * 1000) {
-    ftpKicked = true;
-    ftpRestart().then(() => bar2.note('sent restart over FTP')).catch(() => {});
-  }
-  return back;
-});
-bar2.done(restartOk);
-
-/* ---------------------------------------------------------------- verify --- */
-const h = await health();
-const m = await marker();
-const took = Math.round((Date.now() - triggeredAt) / 1000);
-console.log('');
-if (restartOk && h) {
-  const sha = m?.short || 'unknown';
-  const match = originSha ? (sha === target || sha === 'unknown') : true;
-  console.log(`  deployed in ${took}s`);
-  console.log(`    commit   ${sha}${sha !== 'unknown' && originSha && sha !== target ? `  ! expected ${target}` : ''}`);
-  console.log(`    health   ok · db ${h.db ? 'ok' : 'DOWN'} · uptime ${h.uptime}s`);
-  console.log(`    api      ${API}/\n`);
-  process.exit(match && h.db ? 0 : 2);
-}
-fail(`API did not come back healthy within ${Math.round(HARD_TIMEOUT_MS / 1000)}s. Check ${API}/ and the Plesk logs.`);
-
-/* -------------------------------------------------------------- helpers --- */
-function fail(msg) {
-  console.error(`\n  deploy incomplete: ${msg}\n`);
-  process.exit(2);
-}
-
-async function prompt(q) {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  await new Promise((res) => rl.question(q + ' ', () => { rl.close(); res(); }));
-}
-
+/* ------------------------------------------------------------- helpers --- */
 async function health() {
   try {
-    const r = await fetch(`${API}/api/health?_=${Date.now()}`, { headers: { accept: 'application/json' } });
+    const r = await fetch(`${API}/api/health?_=${Date.now()}`, {
+      headers: { accept: 'application/json' },
+    });
+    if (!r.ok) return null;
     const b = await r.json();
-    return { ok: b.ok === true, db: !!b.db, uptime: b.uptime_sec ?? 0, startedAt: b.started_at };
+    return {
+      ok: b.ok === true,
+      db: !!b.db,
+      version: b.version || null,
+      uptime: b.uptime_sec ?? 0,
+      startedAt: b.started_at,
+      env: b.env || 'unknown',
+    };
   } catch {
     return null;
   }
 }
 
-// Has the process bounced since `base`? Compared against a baseline captured
-// before we triggered — no wall-clock math, so local/server clock skew is
-// irrelevant. If the API was down at baseline, any healthy response counts.
 function restarted(base, h) {
   if (!h) return false;
   if (!base) return h.ok;
@@ -213,25 +481,13 @@ function restarted(base, h) {
   return h.uptime < base.uptime;
 }
 
-async function marker() {
-  try {
-    const r = await fetch(`${API}/public/deploy-status.json?_=${Date.now()}`);
-    if (!r.ok) return null;
-    const b = await r.json();
-    return b && b.at ? b : null;
-  } catch {
-    return null;
-  }
-}
-
-// Poll `check()` every 2s until it returns true or `maxMs` elapses.
-async function waitFor(startedAt, maxMs, check) {
-  while (Date.now() - startedAt < maxMs) {
+async function waitFor(startedAtMs, maxMs, check) {
+  while (Date.now() - startedAtMs < maxMs) {
     let done = false;
     try {
       done = await check();
-    } catch (e) {
-      if (process.env.DEPLOY_DEBUG) console.error('  [debug] poll error:', e.message);
+    } catch {
+      /* ignore poll errors */
     }
     if (done) return true;
     await sleep(2000);
@@ -239,61 +495,126 @@ async function waitFor(startedAt, maxMs, check) {
   return false;
 }
 
-// A progress bar that fills toward `expectS` but never completes until you
-// call .done() — so a slow phase keeps crawling instead of sitting at 100%.
-function mkBar(label, expectS = 60) {
+function mkRestartBar(expectS = 25) {
   const tty = process.stdout.isTTY;
-  let b;
+  let b = null;
   if (tty) {
     b = new cliProgress.SingleBar(
-      { format: `  ${label}  [{bar}] {pct}%  {note}`, barCompleteChar: '█', barIncompleteChar: '░', hideCursor: true, linewrap: false },
+      {
+        format: '  restarting: [{bar}] {pct}% | {note}',
+        barCompleteChar: '█',
+        barIncompleteChar: '░',
+        hideCursor: true,
+        linewrap: false,
+      },
       cliProgress.Presets.shades_grey,
     );
-    b.start(1000, 0, { pct: '0', note: '' });
+    b.start(1000, 0, { pct: '0', note: 'touching restart file' });
   } else {
-    console.log(`  ${label} …`);
+    console.log('  restarting server...');
   }
   let lastNote = '';
   return {
     tick(elapsedMs, note) {
       lastNote = note || lastNote;
       const frac = Math.min(0.96, elapsedMs / 1000 / expectS);
-      if (tty) b.update(Math.round(frac * 1000), { pct: String(Math.round(frac * 100)), note: lastNote });
-      else process.stdout.write(`    ${Math.round(elapsedMs / 1000)}s  ${lastNote}\n`);
+      if (tty) {
+        b.update(Math.round(frac * 1000), {
+          pct: String(Math.round(frac * 100)),
+          note: lastNote,
+        });
+      } else {
+        process.stdout.write(`    ${Math.round(elapsedMs / 1000)}s: ${lastNote}\n`);
+      }
     },
-    note(n) { lastNote = n; if (tty) b.update({ note: n }); else console.log(`    ${n}`); },
     done(good) {
-      if (tty) { b.update(1000, { pct: good ? '100' : '—', note: good ? lastNote : 'timed out' }); b.stop(); }
-      else console.log(`    ${good ? 'done' : 'timed out'} — ${lastNote}`);
+      if (tty) {
+        b.update(1000, {
+          pct: good ? '100' : 'timed out',
+          note: good ? lastNote : 'timed out',
+        });
+        b.stop();
+      } else {
+        console.log(`    ${good ? 'restart verified' : 'timed out'}: ${lastNote}`);
+      }
     },
   };
 }
 
-async function ftpRestart() {
-  const f = cfg.ftp || {};
-  for (const k of ['host', 'user', 'password']) {
-    if (!f[k]) die(`ftp.${k} missing in deploy.config.json.`);
-  }
-  let Client;
-  try {
-    ({ Client } = await import('basic-ftp'));
-  } catch {
-    die('needs "basic-ftp": run  npm i -D basic-ftp  in back/.');
-  }
-  const restartFile = ('/' + (f.restartFile || '/tmp/restart.txt').replace(/^\/+/, ''));
+async function touchRestartFile() {
   const c = new Client(20_000);
   const tmpFile = path.join(ROOT, '.restart.tmp');
   try {
     await c.access({
-      host: f.host, port: f.port || 21, user: f.user, password: f.password,
-      secure: f.secure !== false, secureOptions: { rejectUnauthorized: !!f.tlsStrict },
+      host: HOST,
+      port: PORT,
+      user: USER,
+      password: PASSWORD,
+      secure: SECURE,
+      secureOptions: { rejectUnauthorized: TLS_STRICT },
     });
-    await c.ensureDir(path.posix.dirname(restartFile));
-    await c.cd('/');
+    await c.ensureDir(path.posix.dirname(RESTART_FILE));
+    await c.cd(REMOTE_ROOT || '/');
     fs.writeFileSync(tmpFile, `restart ${nowIso()}\n`);
-    await c.uploadFrom(tmpFile, restartFile);
+    await c.uploadFrom(tmpFile, RESTART_FILE);
   } finally {
     c.close();
-    try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+    try {
+      fs.unlinkSync(tmpFile);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+async function runRestartFlow(expectedVersion = null) {
+  const baseHealth = await health();
+  console.log(
+    `  api baseline: ${baseHealth ? `v${baseHealth.version || 'legacy'}, up ${baseHealth.uptime}s (started ${baseHealth.startedAt})` : 'not responding'}`,
+  );
+  process.stdout.write('  touching restart file over FTP... ');
+  await touchRestartFile();
+  console.log('done');
+
+  const restartBar = mkRestartBar(RESTART_EXPECT_S);
+  const t0 = Date.now();
+
+  const restartSuccess = await waitFor(t0, WAIT_TIMEOUT_MS, async () => {
+    const h = await health();
+    const isRestarted = restarted(baseHealth, h);
+    const isTargetVer = !expectedVersion || (h && h.version === expectedVersion);
+    const back = h && h.ok && h.db && isRestarted && isTargetVer;
+    const note = h
+      ? back
+        ? `v${h.version || expectedVersion}, up ${h.uptime}s, db: ok`
+        : `restarting, v${h.version || '...'}, up ${h.uptime}s`
+      : 'restarting...';
+    restartBar.tick(Date.now() - t0, note);
+    return back;
+  });
+
+  restartBar.done(restartSuccess);
+
+  const finalHealth = await health();
+  const totalElapsed = Math.round((Date.now() - t0) / 1000);
+
+  if (restartSuccess && finalHealth) {
+    console.log(
+      `\n  DEPLOY SUCCESSFUL\n` +
+        `  version:        ${finalHealth.version || expectedVersion || '1.0.0'}\n` +
+        `  server restart: verified in ${totalElapsed}s\n` +
+        `  health status:  ok\n` +
+        `  database:       ok\n` +
+        `  uptime:         ${finalHealth.uptime}s\n` +
+        `  started at:     ${finalHealth.startedAt}\n` +
+        `  environment:    ${finalHealth.env}\n` +
+        `  live url:       ${API}/api/health\n`,
+    );
+  } else {
+    console.error(
+      `\n  deploy warning: server did not report healthy restart after ${totalElapsed}s.\n` +
+        `  Check ${API}/api/health and Plesk Passenger error logs.\n`,
+    );
+    process.exit(2);
   }
 }
