@@ -2,16 +2,39 @@ const pool = require('../db');
 const { log } = require('../logger');
 const { authRequired, requireAdmin } = require('../authMiddleware.fastify');
 
+function getAthensHour(dateInput) {
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return 0;
+  const hourStr = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Athens',
+    hour: '2-digit',
+    hour12: false,
+  }).format(d);
+  const h = parseInt(hourStr, 10);
+  return isNaN(h) ? 0 : h;
+}
+
+function getAthensDate(dateInput) {
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return '';
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Athens',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+}
+
 async function activityRoutes(fastify, options) {
   fastify.get('/stats', { preHandler: [authRequired, requireAdmin] }, async (request, reply) => {
     try {
       const { userId } = request.query;
       let query = `
         SELECT 
-          DATE(session_start) as date, 
-          SUM(duration_seconds) as total_seconds,
-          COUNT(DISTINCT user_id) as active_users,
-          COUNT(id) as session_count
+          id,
+          user_id,
+          session_start,
+          duration_seconds
         FROM user_sessions
       `;
       const params = [];
@@ -21,34 +44,44 @@ async function activityRoutes(fastify, options) {
         params.push(userId);
       }
       
-      query += ` GROUP BY DATE(session_start) ORDER BY date ASC`;
+      query += ` ORDER BY session_start ASC`;
       
       const [rows] = await pool.query(query, params);
       
-      // Convert to format required by react-activity-calendar:
-      // { date: 'YYYY-MM-DD', count: N }
-      const data = rows.map(r => {
-        // MySQL DATE() returns a Date object in mysql2 by default, or a string.
-        // Let's ensure it's a YYYY-MM-DD string.
-        const dateObj = new Date(r.date);
-        const yyyy = dateObj.getFullYear();
-        const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
-        const dd = String(dateObj.getDate()).padStart(2, '0');
-        const minutes = Math.floor(r.total_seconds / 60);
+      // Group sessions strictly by Athens Greece calendar date
+      const dayMap = new Map();
+      for (const r of rows) {
+        const dateStr = getAthensDate(r.session_start);
+        if (!dateStr) continue;
+        if (!dayMap.has(dateStr)) {
+          dayMap.set(dateStr, {
+            date: dateStr,
+            totalSeconds: 0,
+            activeUsers: new Set(),
+            sessionCount: 0,
+          });
+        }
+        const entry = dayMap.get(dateStr);
+        entry.totalSeconds += (r.duration_seconds || 0);
+        entry.activeUsers.add(r.user_id);
+        entry.sessionCount += 1;
+      }
 
+      const data = Array.from(dayMap.values()).map(entry => {
+        const minutes = Math.floor(entry.totalSeconds / 60);
         let level = 0;
         if (minutes > 0 && minutes < 15) level = 1;
         else if (minutes >= 15 && minutes < 45) level = 2;
         else if (minutes >= 45 && minutes < 90) level = 3;
         else if (minutes >= 90 && minutes < 180) level = 4;
         else if (minutes >= 180) level = 5;
-        
+
         return {
-          date: `${yyyy}-${mm}-${dd}`,
-          count: minutes, // convert to minutes for easier reading
+          date: entry.date,
+          count: minutes,
           level,
-          activeUsers: Number(r.active_users) || 1,
-          sessionCount: Number(r.session_count) || 1
+          activeUsers: entry.activeUsers.size,
+          sessionCount: entry.sessionCount,
         };
       });
       
@@ -66,6 +99,7 @@ async function activityRoutes(fastify, options) {
         return reply.status(400).send({ error: 'Date query parameter is required' });
       }
 
+      // Fetch window of +/- 1 day to ensure timezone boundary coverage
       let query = `
         SELECT 
           us.id,
@@ -77,9 +111,10 @@ async function activityRoutes(fastify, options) {
           us.duration_seconds
         FROM user_sessions us
         LEFT JOIN users u ON u.id = us.user_id
-        WHERE DATE(us.session_start) = ?
+        WHERE us.session_start >= DATE_SUB(?, INTERVAL 1 DAY)
+          AND us.session_start <= DATE_ADD(?, INTERVAL 1 DAY)
       `;
-      const params = [date];
+      const params = [date, date];
 
       if (userId && userId !== 'global' && userId !== 'none') {
         query += ` AND us.user_id = ?`;
@@ -88,9 +123,12 @@ async function activityRoutes(fastify, options) {
 
       query += ` ORDER BY us.session_start ASC`;
 
-      const [rows] = await pool.query(query, params);
+      const [allRows] = await pool.query(query, params);
 
-      // 24-hour slots: 0 to 23
+      // Filter rows whose session_start belongs to the requested Athens calendar date
+      const rows = allRows.filter(r => getAthensDate(r.session_start) === date);
+
+      // 24-hour slots: 00:00 to 23:00 Athens Time
       const hourly = Array.from({ length: 24 }, (_, hour) => ({
         hour,
         label: `${String(hour).padStart(2, '0')}:00`,
@@ -105,8 +143,8 @@ async function activityRoutes(fastify, options) {
       for (const row of rows) {
         const start = new Date(row.session_start);
         const end = new Date(row.last_active);
-        const startHour = isNaN(start.getTime()) ? 0 : start.getHours();
-        const endHour = isNaN(end.getTime()) ? startHour : end.getHours();
+        const startHour = getAthensHour(start);
+        const endHour = Math.max(startHour, getAthensHour(end));
 
         const totalMin = Math.max(1, Math.round((row.duration_seconds || 0) / 60));
         const hourSpan = Math.max(1, endHour - startHour + 1);
