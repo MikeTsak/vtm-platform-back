@@ -14,7 +14,7 @@ const { getSetting, setSetting } = require('../utils/settings');
 const { getCycleInfo } = require('../utils/feedingCycle');
 const { huntingDifficulty } = require('../data/huntingDifficulty');
 const { chasseBonus } = require('../data/chasseMerits');
-const { PREDATOR_HUNTING_POOLS } = require('../data/predatorHuntingPools');
+const { PREDATOR_HUNTING_POOLS, PREDATOR_SPECIALTIES } = require('../data/predatorHuntingPools');
 const { rollDice, computeFeedingOutcome, OUTCOME_DELTAS } = require('../services/feedingDice');
 const { pickFlavor } = require('../data/predatorFlavor');
 const { runFeedingDecay } = require('../services/feedingDecay');
@@ -47,6 +47,36 @@ function getTraitValue(sheet, traitName) {
   }
   if (sheet?.disciplines?.[traitName] !== undefined) return Number(sheet.disciplines[traitName]) || 0;
   return 0;
+}
+
+function hasRelevantSpecialty(sheet, predatorType, chosenSkill) {
+  if (!sheet || !predatorType || !chosenSkill) return false;
+  
+  const granted = PREDATOR_SPECIALTIES[predatorType] || [];
+  const relevantGrantedSpecs = granted
+    .filter(s => s.toLowerCase().startsWith(chosenSkill.toLowerCase() + ':'))
+    .map(s => s.split(':')[1].trim().toLowerCase());
+  
+  if (relevantGrantedSpecs.length === 0) return false;
+
+  if (Array.isArray(sheet.specialties)) {
+    for (const specStr of sheet.specialties) {
+      if (typeof specStr === 'string' && specStr.toLowerCase().startsWith(chosenSkill.toLowerCase() + ':')) {
+        const specName = specStr.split(':')[1].trim().toLowerCase();
+        if (relevantGrantedSpecs.includes(specName)) return true;
+      }
+    }
+  }
+
+  if (sheet.skills && sheet.skills[chosenSkill] && Array.isArray(sheet.skills[chosenSkill].specialties)) {
+    for (const specName of sheet.skills[chosenSkill].specialties) {
+      if (typeof specName === 'string' && relevantGrantedSpecs.includes(specName.trim().toLowerCase())) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 const clamp = (v, min, max) => Math.max(min, Math.min(max, Number(v) || 0));
@@ -131,10 +161,17 @@ module.exports = async function (fastify, opts) {
         canAutomate,
         herdDots,
         herdCurrent,
-        pools: pools.map((p) => ({
-          pool: p.pool,
-          total: getTraitValue(char.sheet, p.attribute) + getTraitValue(char.sheet, p.skill),
-        })),
+          pools: pools.map((p) => {
+            let specBonus = 0;
+            if (hasRelevantSpecialty(char.sheet, predatorType, p.skill)) {
+              specBonus = 1;
+            }
+            return {
+              pool: p.pool,
+              total: getTraitValue(char.sheet, p.attribute) + getTraitValue(char.sheet, p.skill) + specBonus,
+              specialtyBonus: specBonus
+            };
+          }),
         myDivision,
         pending: pendingRows[0] || null,
         resolvedThisCycle: resolvedRows[0] || null,
@@ -180,8 +217,12 @@ module.exports = async function (fastify, opts) {
 
       const chosenPool = pools[poolIndex];
       const basePool = getTraitValue(char.sheet, chosenPool.attribute) + getTraitValue(char.sheet, chosenPool.skill);
+      let specialtyBonus = 0;
+      if (hasRelevantSpecialty(char.sheet, predatorType, chosenPool.skill)) {
+        specialtyBonus = 1;
+      }
       const { bonusDice, meritsApplied } = chasseBonus(division, predatorType);
-      const totalPool = clamp(basePool + bonusDice, 0, 30);
+      const totalPool = clamp(basePool + specialtyBonus + bonusDice, 0, 30);
 
       const hunger = clamp(char.sheet?.hunger ?? 1, 0, 5);
       const hungerCount = Math.min(totalPool, hunger);

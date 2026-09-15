@@ -77,4 +77,25 @@ const PREDATOR_HUNTING_POOLS = {
   'Tithe Collector': [],
 };
 
-module.exports = { PREDATOR_HUNTING_POOLS };
+const PREDATOR_SPECIALTIES = {
+  'Alleycat': ['Intimidation: Stickups', 'Brawl: Grappling'],
+  'Bagger': ['Larceny: Lock Picking', 'Streetwise: Black Market'],
+  'Blood Leech': ['Brawl: Kindred', 'Stealth: Against Kindred'],
+  'Cleaver': ['Persuasion: Gaslighting', 'Subterfuge: Coverups'],
+  'Consensualist': ['Medicine: Phlebotomy', 'Persuasion: Vessels'],
+  'Farmer': ['Animal Ken: specific animal', 'Survival: Hunting'],
+  'Osiris': ['Occult: specific tradition', 'Performance: specific entertainment field'],
+  'Sandman': ['Medicine: Anesthetics', 'Stealth: Break-in'],
+  'Scene Queen': ['Etiquette: specific scene', 'Leadership: specific scene', 'Streetwise: specific scene'],
+  'Siren': ['Persuasion: Seduction', 'Subterfuge: Seduction'],
+  'Extortionist': ['Intimidation: Coercion', 'Larceny: Security'],
+  'Graverobber': ['Occult: Grave Rituals', 'Medicine: Cadavers'],
+  'Roadside Killer': ['Survival: the road', 'Investigation: vampire cant'],
+  'Grim Reaper': ['Awareness: Death', 'Larceny: Forgery'],
+  'Montero': ['Leadership: Hunting Pack', 'Stealth: Stakeout'],
+  'Pursuer': ['Investigation: Profiling', 'Stealth: Shadowing'],
+  'Trapdoor': ['Persuasion: Marketing', 'Stealth: Ambushes or Traps'],
+  'Tithe Collector': ['Intimidation: Kindred', 'Leadership: Kindred']
+};
+
+module.exports = { PREDATOR_HUNTING_POOLS, PREDATOR_SPECIALTIES };
