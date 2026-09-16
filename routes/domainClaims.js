@@ -557,6 +557,208 @@ module.exports = async function (fastify, opts) {
     }
   });
 
+  /* -------------------- Domain Guests (hospitality, beyond the owner) -------------------- */
+
+  /** Any logged-in user: characters + non-disabled NPCs for the guest picker.
+   *  Same shape as /api/court/characters-and-npcs but open to every player —
+   *  extending hospitality is the domain owner's call, not a Steward power. */
+  fastify.get('/api/domain-claims/roster', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const [characters] = await pool.query(
+        `SELECT c.id, c.name, c.clan, u.display_name AS player_name
+       FROM characters c
+       JOIN users u ON u.id = c.user_id
+       ORDER BY c.name ASC`
+      );
+      const [npcs] = await pool.query(
+        `SELECT id, name, clan
+       FROM npcs
+       WHERE (is_disabled IS NULL OR is_disabled = 0)
+         AND (is_deceased IS NULL OR is_deceased = 0)
+       ORDER BY name ASC`
+      );
+      reply.send({ characters, npcs });
+    } catch (err) {
+      log.err('GET /api/domain-claims/roster failed', { error: err.message });
+      reply.status(500).send({ error: 'Database error fetching roster' });
+    }
+  });
+
+  /** Any logged-in user: every guest across every division in one query — the
+   *  map needs this for all claimed divisions at once, not just the one
+   *  currently open in the dossier, so it can't reuse the per-division route. */
+  fastify.get('/api/domain-claims/guests', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const [rows] = await pool.query(`
+        SELECT g.id, g.division, g.note, g.character_id, g.npc_id,
+               c.name AS character_name, c.clan AS character_clan, c.user_id AS character_user_id,
+               ((cu.avatar_url IS NOT NULL OR cu.avatar_url_thumb IS NOT NULL)) AS char_has_avatar,
+               n.name AS npc_name, n.clan AS npc_clan,
+               ((n.avatar_url IS NOT NULL OR n.avatar_url_thumb IS NOT NULL)) AS npc_has_avatar
+        FROM domain_guests g
+        LEFT JOIN characters c ON c.id = g.character_id
+        LEFT JOIN users cu ON cu.id = c.user_id
+        LEFT JOIN npcs n ON n.id = g.npc_id
+        ORDER BY g.division, g.created_at ASC
+      `);
+      const guests = rows.map(r => ({
+        id: r.id,
+        division: r.division,
+        note: r.note,
+        character_id: r.character_id,
+        npc_id: r.npc_id,
+        user_id: r.character_user_id || null,
+        name: r.character_name || r.npc_name || 'Unknown',
+        clan: r.character_clan || r.npc_clan || null,
+        isNpc: !!r.npc_id,
+        has_avatar: !!(r.char_has_avatar || r.npc_has_avatar),
+      }));
+      reply.send({ guests });
+    } catch (err) {
+      log.err('GET /api/domain-claims/guests failed', { error: err.message });
+      reply.status(500).json({ error: 'Database error fetching guests' });
+    }
+  });
+
+  // Domain owner (their linked character) OR a Domain Steward/admin may manage
+  // who's hosted in a division. Centralised here since both the guest routes
+  // and their `me.canManage` flag need the identical check.
+  async function resolveGuestManager(req, division) {
+    if (await isDomainManager(req.user.id, req.user.role)) return true;
+    const [[claim]] = await pool.query('SELECT owner_character_id FROM domain_claims WHERE division=?', [division]);
+    if (!claim || !claim.owner_character_id) return false;
+    const [[owner]] = await pool.query('SELECT user_id FROM characters WHERE id=?', [claim.owner_character_id]);
+    return !!owner && owner.user_id === req.user.id;
+  }
+
+  /** Anyone logged in can see who's being hosted in a division. */
+  fastify.get('/api/domain-claims/:division/guests', { preHandler: [authRequired] }, async (req, reply) => {
+    const division = Number(req.params.division);
+    if (!Number.isInteger(division)) return reply.status(400).json({ error: 'division must be an integer' });
+    try {
+      const [rows] = await pool.query(`
+        SELECT g.id, g.division, g.note, g.created_at, g.character_id, g.npc_id,
+               c.name AS character_name, c.clan AS character_clan, cu.id AS character_user_id,
+               n.name AS npc_name, n.clan AS npc_clan
+        FROM domain_guests g
+        LEFT JOIN characters c ON c.id = g.character_id
+        LEFT JOIN users cu ON cu.id = c.user_id
+        LEFT JOIN npcs n ON n.id = g.npc_id
+        WHERE g.division = ?
+        ORDER BY g.created_at ASC
+      `, [division]);
+      const guests = rows.map(r => ({
+        id: r.id,
+        division: r.division,
+        note: r.note,
+        created_at: r.created_at,
+        character_id: r.character_id,
+        npc_id: r.npc_id,
+        name: r.character_name || r.npc_name || 'Unknown',
+        clan: r.character_clan || r.npc_clan || null,
+        isNpc: !!r.npc_id,
+        // lets a guest recognise (and later remove) their own entry
+        isSelf: !!(r.character_user_id && r.character_user_id === req.user.id),
+      }));
+      const canManage = await resolveGuestManager(req, division);
+      reply.send({ guests, me: { canManage } });
+    } catch (err) {
+      log.err('GET /api/domain-claims/:division/guests failed', { error: err.message });
+      reply.status(500).json({ error: 'Database error fetching guests' });
+    }
+  });
+
+  /** Domain owner or Steward/admin: declare a character or NPC as hosted here. */
+  fastify.post('/api/domain-claims/:division/guests', { preHandler: [authRequired] }, async (req, reply) => {
+    const division = Number(req.params.division);
+    if (!Number.isInteger(division)) return reply.status(400).json({ error: 'division must be an integer' });
+
+    const { character_id, npc_id, note } = req.body || {};
+    if (character_id != null && npc_id != null) {
+      return reply.status(400).json({ error: 'Provide character_id OR npc_id, not both' });
+    }
+    if (character_id == null && npc_id == null) {
+      return reply.status(400).json({ error: 'Provide character_id or npc_id' });
+    }
+    if (typeof note === 'string' && note.length > 255) {
+      return reply.status(400).json({ error: 'note must be 255 characters or fewer' });
+    }
+
+    try {
+      const [[claim]] = await pool.query(
+        'SELECT owner_character_id, owner_npc_id, is_abaton FROM domain_claims WHERE division=?',
+        [division]
+      );
+      if (!claim || (!claim.owner_character_id && !claim.owner_npc_id && !claim.is_abaton)) {
+        return reply.status(409).json({ error: 'Only a claimed domain can host guests' });
+      }
+      if (!(await resolveGuestManager(req, division))) {
+        return reply.status(403).json({ error: 'Only the domain\'s owner or a Domain Steward can add guests' });
+      }
+
+      let charId = null, npcId = null;
+      if (character_id != null) {
+        const cid = Number(character_id);
+        if (!Number.isInteger(cid)) return reply.status(400).json({ error: 'character_id must be an integer' });
+        const [[ch]] = await pool.query('SELECT id FROM characters WHERE id=?', [cid]);
+        if (!ch) return reply.status(404).json({ error: 'Character not found' });
+        charId = cid;
+      } else {
+        const nid = Number(npc_id);
+        if (!Number.isInteger(nid)) return reply.status(400).json({ error: 'npc_id must be an integer' });
+        const [[npc]] = await pool.query('SELECT id FROM npcs WHERE id=?', [nid]);
+        if (!npc) return reply.status(404).json({ error: 'NPC not found' });
+        npcId = nid;
+      }
+
+      const [[dupe]] = await pool.query(
+        'SELECT id FROM domain_guests WHERE division=? AND character_id <=> ? AND npc_id <=> ?',
+        [division, charId, npcId]
+      );
+      if (dupe) return reply.status(409).json({ error: 'Already listed as a guest of this domain' });
+
+      await pool.query(
+        'INSERT INTO domain_guests (division, character_id, npc_id, note, added_by) VALUES (?,?,?,?,?)',
+        [division, charId, npcId, (typeof note === 'string' && note.trim()) ? note.trim() : null, req.user.id]
+      );
+      log.dom('Domain guest added', { division, character_id: charId, npc_id: npcId, by: req.user.id });
+      reply.send({ ok: true });
+    } catch (err) {
+      log.err('POST /api/domain-claims/:division/guests failed', { error: err.message });
+      reply.status(500).json({ error: 'Database error adding guest' });
+    }
+  });
+
+  /** Domain owner, Steward/admin, or the guest themself: remove a guest entry. */
+  fastify.delete('/api/domain-claims/:division/guests/:guestId', { preHandler: [authRequired] }, async (req, reply) => {
+    const division = Number(req.params.division);
+    const guestId = Number(req.params.guestId);
+    if (!Number.isInteger(division) || !Number.isInteger(guestId)) {
+      return reply.status(400).json({ error: 'bad parameters' });
+    }
+    try {
+      const [[guest]] = await pool.query(
+        `SELECT g.id, g.character_id, c.user_id AS character_user_id
+         FROM domain_guests g LEFT JOIN characters c ON c.id = g.character_id
+         WHERE g.id=? AND g.division=?`,
+        [guestId, division]
+      );
+      if (!guest) return reply.status(404).json({ error: 'Guest entry not found' });
+
+      const isSelf = guest.character_user_id != null && guest.character_user_id === req.user.id;
+      if (!isSelf && !(await resolveGuestManager(req, division))) {
+        return reply.status(403).json({ error: 'Only the domain\'s owner, a Domain Steward, or the guest themself can remove this' });
+      }
+
+      await pool.query('DELETE FROM domain_guests WHERE id=?', [guestId]);
+      log.dom('Domain guest removed', { division, guest_id: guestId, by: req.user.id });
+      reply.send({ ok: true });
+    } catch (err) {
+      log.err('DELETE /api/domain-claims/:division/guests/:guestId failed', { error: err.message });
+      reply.status(500).json({ error: 'Database error removing guest' });
+    }
+  });
+
   /* -------------------- Domain Codex (player-contributed lore) -------------------- */
 
   /** Anyone logged in can read a division's codex entries */
