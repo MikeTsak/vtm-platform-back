@@ -9,8 +9,20 @@ const axios = require('axios');
 // no CORS header. That's fine for a plain <img>, but the Domains map reads
 // avatar pixels into a WebGL texture (deck.gl IconLayer) and a canvas — that
 // needs the bytes served same-origin. Call the endpoint with ?raw=1 and it
-// proxies the CDN image through instead of redirecting. Falls back to the
-// redirect if the upstream fetch fails.
+// proxies the CDN image through instead of redirecting.
+//
+// A ?raw=1 caller opted out of the redirect specifically because it can't use
+// one (its fetch() runs in 'cors' mode with no credentials, and a 302 to a
+// host with no CORS header is opaque and unusable). Falling back to that same
+// redirect on proxy failure — the previous behavior — silently reintroduces
+// the exact failure it asked to avoid: the client gets what looks like a
+// normal response but can never actually read it. On a slow/lossy mobile
+// connection the round trip here (client → this server → CDN → this server)
+// is far more likely to blow the 10s upstream timeout than on a fast desktop
+// link, so this path fires disproportionately on mobile — that's the "avatars
+// never load on my phone" bug. A real failure status lets the client's own
+// retry wrapper (fetchAvatarWithRetry) try again through the same working
+// channel instead of being funneled into a dead end every time.
 async function sendAvatar(reply, log, targetUrl, wantRaw) {
   if (wantRaw) {
     try {
@@ -19,7 +31,8 @@ async function sendAvatar(reply, log, targetUrl, wantRaw) {
       reply.header('Cache-Control', 'public, max-age=86400');
       return reply.send(Buffer.from(up.data));
     } catch (err) {
-      log.warn('Avatar raw proxy failed; redirecting instead', { url: targetUrl, error: err.message });
+      log.warn('Avatar raw proxy failed', { url: targetUrl, error: err.message });
+      return reply.status(502).send('Avatar proxy failed');
     }
   }
   reply.header('Cache-Control', 'public, max-age=86400');
