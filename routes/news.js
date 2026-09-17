@@ -335,7 +335,7 @@ module.exports = async function (fastify, opts) {
               const outletNames = {
                 'ERT': 'ERT News', 'SKAI': 'SKAI.gr', 'ALPHA': 'Alpha News',
                 'MEGA': 'Mega Gegonota', 'KATHIMERINI': 'Kathimerini',
-                'GOSSIP': 'Gossip-tv', 'OPENTV': 'Open TV'
+                'GOSSIP': 'Gossip-tv', 'OPENTV': 'Open TV', 'ALTER': 'Alter Channel'
               };
               const sourceName = outletNames[theme] || theme || 'Unknown';
               broadcast += `\n**Source:** ${sourceName}`;
@@ -408,7 +408,7 @@ module.exports = async function (fastify, opts) {
         const outletNames = {
           'ERT': 'ERT News', 'SKAI': 'SKAI.gr', 'ALPHA': 'Alpha News',
           'MEGA': 'Mega Gegonota', 'KATHIMERINI': 'Kathimerini',
-          'GOSSIP': 'Gossip-tv', 'OPENTV': 'Open TV'
+          'GOSSIP': 'Gossip-tv', 'OPENTV': 'Open TV', 'ALTER': 'Alter Channel'
         };
         const sourceName = outletNames[theme] || theme || 'Unknown';
         broadcast += `\n**Source:** ${sourceName}`;
