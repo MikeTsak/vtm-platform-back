@@ -337,8 +337,25 @@ module.exports = async function (fastify, opts) {
                 'MEGA': 'Mega Gegonota', 'KATHIMERINI': 'Kathimerini',
                 'GOSSIP': 'Gossip-tv', 'OPENTV': 'Open TV', 'ALTER': 'Alter Channel'
               };
+              const outletEmojiKeys = {
+                'ERT': 'outlet_ert', 'SKAI': 'outlet_skai', 'ALPHA': 'outlet_alpha',
+                'MEGA': 'outlet_mega', 'KATHIMERINI': 'outlet_kathimerini',
+                'GOSSIP': 'outlet_gossip', 'OPENTV': 'outlet_opentv', 'ALTER': 'outlet_alter'
+              };
               const sourceName = outletNames[theme] || theme || 'Unknown';
-              broadcast += `\n**Source:** ${sourceName}`;
+              let emojiTag = '';
+              try {
+                const emojiIdsRaw = await getSetting('discord_emoji_ids', '{}');
+                const emojiMap = JSON.parse(emojiIdsRaw || '{}');
+                const emojiKey = outletEmojiKeys[theme];
+                if (emojiKey && emojiMap[emojiKey]) {
+                  const val = String(emojiMap[emojiKey]).trim();
+                  if (val.startsWith('<') && val.endsWith('>')) emojiTag = val;
+                  else if (/^\d+$/.test(val)) emojiTag = `<:${emojiKey}:${val}>`;
+                }
+              } catch (_) {}
+
+              broadcast += `\n**Source:** ${emojiTag ? `${emojiTag} ` : ''}${sourceName}`;
               broadcast += `\n**Read the full article:**\n${articleLink}`;
             } else {
               const sig = await getAuthorSignature(req.user.id, pool);
@@ -410,8 +427,25 @@ module.exports = async function (fastify, opts) {
           'MEGA': 'Mega Gegonota', 'KATHIMERINI': 'Kathimerini',
           'GOSSIP': 'Gossip-tv', 'OPENTV': 'Open TV', 'ALTER': 'Alter Channel'
         };
+        const outletEmojiKeys = {
+          'ERT': 'outlet_ert', 'SKAI': 'outlet_skai', 'ALPHA': 'outlet_alpha',
+          'MEGA': 'outlet_mega', 'KATHIMERINI': 'outlet_kathimerini',
+          'GOSSIP': 'outlet_gossip', 'OPENTV': 'outlet_opentv', 'ALTER': 'outlet_alter'
+        };
         const sourceName = outletNames[theme] || theme || 'Unknown';
-        broadcast += `\n**Source:** ${sourceName}`;
+        let emojiTag = '';
+        try {
+          const emojiIdsRaw = await getSetting('discord_emoji_ids', '{}');
+          const emojiMap = JSON.parse(emojiIdsRaw || '{}');
+          const emojiKey = outletEmojiKeys[theme];
+          if (emojiKey && emojiMap[emojiKey]) {
+            const val = String(emojiMap[emojiKey]).trim();
+            if (val.startsWith('<') && val.endsWith('>')) emojiTag = val;
+            else if (/^\d+$/.test(val)) emojiTag = `<:${emojiKey}:${val}>`;
+          }
+        } catch (_) {}
+
+        broadcast += `\n**Source:** ${emojiTag ? `${emojiTag} ` : ''}${sourceName}`;
         broadcast += `\n**Read the full article:**\n${articleLink}`;
       } else {
         const sig = await getAuthorSignature(entry.author_id, pool);

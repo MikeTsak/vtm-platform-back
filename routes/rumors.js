@@ -81,14 +81,26 @@ module.exports = async function (fastify, opts) {
             const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
             const rumorLink = `${appBase}/rumors`;
 
+            let emojiTag = '';
+            try {
+              const emojiIdsRaw = await getSetting('discord_emoji_ids', '{}');
+              const emojiMap = JSON.parse(emojiIdsRaw || '{}');
+              if (emojiMap['item_rumor']) {
+                const val = String(emojiMap['item_rumor']).trim();
+                if (val.startsWith('<') && val.endsWith('>')) emojiTag = val;
+                else if (/^\d+$/.test(val)) emojiTag = `<:item_rumor:${val}>`;
+              }
+            } catch (_) {}
+
             const prefix = discord_prefix || "🤫 A new whisper echoes in the night...";
+            const prefixWithEmoji = (emojiTag && !prefix.includes(emojiTag)) ? `${emojiTag} ${prefix}` : prefix;
 
             let plainBody = safeBody.replace(/<[^>]*>?/gm, '').trim();
             if (plainBody.length > 1500) {
               plainBody = plainBody.substring(0, 1500) + '...';
             }
 
-            const broadcast = `# ${prefix}\n\n**${title}**\n\n_${plainBody}_\n\n**Investigate the Rumors:**\n${rumorLink}`;
+            const broadcast = `# ${prefixWithEmoji}\n\n**${title}**\n\n_${plainBody}_\n\n**Investigate the Rumors:**\n${rumorLink}`;
 
             await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, {
               content: broadcast
@@ -137,14 +149,26 @@ module.exports = async function (fastify, opts) {
       const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
       const rumorLink = `${appBase}/rumors`;
 
+      let emojiTag = '';
+      try {
+        const emojiIdsRaw = await getSetting('discord_emoji_ids', '{}');
+        const emojiMap = JSON.parse(emojiIdsRaw || '{}');
+        if (emojiMap['item_rumor']) {
+          const val = String(emojiMap['item_rumor']).trim();
+          if (val.startsWith('<') && val.endsWith('>')) emojiTag = val;
+          else if (/^\d+$/.test(val)) emojiTag = `<:item_rumor:${val}>`;
+        }
+      } catch (_) {}
+
       const prefix = req.body?.discord_prefix || "🤫 A new whisper echoes in the night...";
+      const prefixWithEmoji = (emojiTag && !prefix.includes(emojiTag)) ? `${emojiTag} ${prefix}` : prefix;
 
       let plainBody = body.replace(/<[^>]*>?/gm, '').trim();
       if (plainBody.length > 1500) {
         plainBody = plainBody.substring(0, 1500) + '...';
       }
 
-      const broadcast = `# ${prefix}\n\n**${title}**\n\n_${plainBody}_\n\n**Investigate the Rumors:**\n${rumorLink}`;
+      const broadcast = `# ${prefixWithEmoji}\n\n**${title}**\n\n_${plainBody}_\n\n**Investigate the Rumors:**\n${rumorLink}`;
 
       await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, {
         content: broadcast

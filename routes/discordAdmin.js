@@ -1,8 +1,46 @@
 // routes/discordAdmin.js
 //
 // Discord bot configuration, connectivity tests, and manual DMs.
+const axios = require('axios');
 const { getSetting, setSetting, clearSettingCache } = require('../utils/settings');
 const { discordClient, sendDiscordMailNotifications } = require('../services/discord');
+
+const KNOWN_EMOJI_KEYS = [
+  'outlet_alpha', 'outlet_alter', 'outlet_ert', 'outlet_gossip',
+  'outlet_kathimerini', 'outlet_mega', 'outlet_opentv', 'outlet_skai',
+  'item_rumor'
+];
+
+async function autoDiscoverDiscordEmojis() {
+  const token = process.env.DISCORD_BOT_TOKEN;
+  if (!token) return {};
+
+  try {
+    const guildsRes = await axios.get('https://discord.com/api/v10/users/@me/guilds', {
+      headers: { Authorization: `Bot ${token}` },
+      timeout: 5000
+    });
+
+    const discovered = {};
+    for (const guild of guildsRes.data || []) {
+      try {
+        const emojisRes = await axios.get(`https://discord.com/api/v10/guilds/${guild.id}/emojis`, {
+          headers: { Authorization: `Bot ${token}` },
+          timeout: 5000
+        });
+
+        for (const emoji of emojisRes.data || []) {
+          if (KNOWN_EMOJI_KEYS.includes(emoji.name)) {
+            discovered[emoji.name] = emoji.id;
+          }
+        }
+      } catch (_) {}
+    }
+    return discovered;
+  } catch (_) {
+    return {};
+  }
+}
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin } = opts;
@@ -21,6 +59,29 @@ module.exports = async function (fastify, opts) {
       const notify_news = await getSetting('discord_notify_news', 'true') === 'true';
       const notify_prems = await getSetting('discord_notify_prems', 'true') === 'true';
       const ai_enabled = await getSetting('giannakis_ai_enabled', 'true') === 'true';
+      const emojiIdsRaw = await getSetting('discord_emoji_ids', '{}');
+      let emoji_ids = {};
+      try {
+        emoji_ids = JSON.parse(emojiIdsRaw || '{}');
+      } catch (err) {
+        emoji_ids = {};
+      }
+
+      // Auto-detect any missing emoji keys from connected Discord servers
+      const hasMissing = KNOWN_EMOJI_KEYS.some(k => !emoji_ids[k]);
+      if (hasMissing) {
+        const discovered = await autoDiscoverDiscordEmojis();
+        let changed = false;
+        for (const [k, id] of Object.entries(discovered)) {
+          if (!emoji_ids[k]) {
+            emoji_ids[k] = id;
+            changed = true;
+          }
+        }
+        if (changed) {
+          await setSetting('discord_emoji_ids', JSON.stringify(emoji_ids));
+        }
+      }
 
       clearSettingCache('discord_bot_last_heartbeat');
       clearSettingCache('discord_bot_name');
@@ -36,6 +97,7 @@ module.exports = async function (fastify, opts) {
         notify_news,
         notify_prems,
         ai_enabled,
+        discord_emoji_ids: emoji_ids,
         bot_status: isOnline ? 'Online' : 'Offline',
         bot_name: botName
       });
@@ -45,12 +107,34 @@ module.exports = async function (fastify, opts) {
     }
   });
 
+  // Auto-sync Discord custom emojis from all servers the bot is in
+  fastify.post('/api/admin/discord/sync-emojis', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const discovered = await autoDiscoverDiscordEmojis();
+      const emojiIdsRaw = await getSetting('discord_emoji_ids', '{}');
+      let emoji_ids = {};
+      try {
+        emoji_ids = JSON.parse(emojiIdsRaw || '{}');
+      } catch (_) {
+        emoji_ids = {};
+      }
+      const merged = { ...emoji_ids, ...discovered };
+      await setSetting('discord_emoji_ids', JSON.stringify(merged));
+      log.ok('Synced discord custom emojis', { count: Object.keys(discovered).length });
+      reply.send({ success: true, discord_emoji_ids: merged, count: Object.keys(discovered).length });
+    } catch (e) {
+      log.err('Sync discord emojis failed', { message: e.message });
+      reply.status(500).json({ error: 'Failed to sync emojis from Discord' });
+    }
+  });
+
   // Update Discord settings
   fastify.post('/api/admin/discord/config', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const {
         discord_channel_id, discord_schedule_time,
-        discord_enabled, notify_mail, notify_news, notify_prems, ai_enabled
+        discord_enabled, notify_mail, notify_news, notify_prems, ai_enabled,
+        discord_emoji_ids
       } = req.body;
 
       if (discord_channel_id !== undefined) await setSetting('discord_channel_id', String(discord_channel_id).trim());
@@ -67,6 +151,12 @@ module.exports = async function (fastify, opts) {
       if (notify_news !== undefined) await setSetting('discord_notify_news', String(notify_news));
       if (notify_prems !== undefined) await setSetting('discord_notify_prems', String(notify_prems));
       if (ai_enabled !== undefined) await setSetting('giannakis_ai_enabled', String(ai_enabled));
+      if (discord_emoji_ids !== undefined) {
+        const payload = typeof discord_emoji_ids === 'object' && discord_emoji_ids !== null
+          ? JSON.stringify(discord_emoji_ids)
+          : String(discord_emoji_ids);
+        await setSetting('discord_emoji_ids', payload);
+      }
 
       log.adm('Updated Discord settings', { admin_id: req.user.id });
       reply.send({ ok: true });

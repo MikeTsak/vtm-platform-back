@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <rect width="128" height="128" rx="24" fill="#004d99" stroke="#ffffff" stroke-width="3"/>
+  <circle cx="64" cy="64" r="44" fill="#ffffff"/>
+  <text x="64" y="74" font-family="Arial Black, Arial, sans-serif" font-size="22" font-weight="900" fill="#004d99" text-anchor="middle" letter-spacing="1">ΣΚΑΪ</text>
+</svg>
