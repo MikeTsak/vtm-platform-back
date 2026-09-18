@@ -3,7 +3,7 @@
 // Malkavian premonitions: Storyteller authoring and delivery, player inbox,
 // and the attached media.
 const { getSetting } = require('../utils/settings');
-const { discordClient } = require('../services/discord');
+const { sendDiscordDM } = require('../services/discord');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, imageClient } = opts;
@@ -178,7 +178,7 @@ module.exports = async function (fastify, opts) {
         const discordEnabled = await getSetting('discord_enabled', 'true') === 'true';
         const notifyPrems = await getSetting('discord_notify_prems', 'true') === 'true';
 
-        if (discordEnabled && notifyPrems && discordClient?.isReady()) {
+        if (discordEnabled && notifyPrems && process.env.DISCORD_BOT_TOKEN) {
           try {
             const [userRows] = await pool.query(
               `SELECT discord_id, display_name FROM users WHERE id IN (?) AND discord_id IS NOT NULL AND discord_id != ''`,
@@ -190,20 +190,17 @@ module.exports = async function (fastify, opts) {
 
             for (const row of userRows) {
               try {
-                const discordUser = await discordClient.users.fetch(row.discord_id);
-                if (discordUser) {
-                  let dmMsg = `🧠 **A sudden vision pierces your mind...**\n\n`;
-                  if (content_text) dmMsg += `_${content_text}_\n`;
+                let dmMsg = `🧠 **A sudden vision pierces your mind...**\n\n`;
+                if (content_text) dmMsg += `_${content_text}_\n`;
 
-                  if (content_type === 'image' || content_type === 'video') {
-                    dmMsg += `\n👁️ **View Vision:** https://portal.attlarp.gr/media/${premonitionId}`;
-                  } else if (content_url) {
-                    dmMsg += `\n🔗 ${content_url}`;
-                  }
-
-                  await discordUser.send(dmMsg);
-                  log.ok(`Premonition DM sent to ${row.display_name}`);
+                if (content_type === 'image' || content_type === 'video') {
+                  dmMsg += `\n👁️ **View Vision:** https://portal.attlarp.gr/media/${premonitionId}`;
+                } else if (content_url) {
+                  dmMsg += `\n🔗 ${content_url}`;
                 }
+
+                await sendDiscordDM(row.discord_id, dmMsg);
+                log.ok(`Premonition DM sent to ${row.display_name}`);
               } catch (dmErr) {
                 log.warn(`Failed to DM Discord user ${row.discord_id} (${row.display_name})`, { error: dmErr.message });
               }
@@ -211,12 +208,10 @@ module.exports = async function (fastify, opts) {
           } catch (dbErr) {
             log.err('Failed to fetch Discord IDs for premonitions', { error: dbErr.message });
           }
-        } else {
-          // This log will appear if the bot skips the DM process entirely
-          log.warn('Discord DM Skipped: Feature is toggled OFF or Bot is not ready.', {
+        } else if (!discordEnabled || !notifyPrems) {
+          log.warn('Discord Premonition DM Skipped: Feature is toggled OFF.', {
             enabled: discordEnabled,
-            notify: notifyPrems,
-            ready: discordClient?.isReady()
+            notify: notifyPrems
           });
         }
         // ------------------------------------

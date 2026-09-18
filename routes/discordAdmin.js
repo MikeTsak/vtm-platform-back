@@ -3,7 +3,12 @@
 // Discord bot configuration, connectivity tests, and manual DMs.
 const axios = require('axios');
 const { getSetting, setSetting, clearSettingCache } = require('../utils/settings');
-const { discordClient, sendDiscordMailNotifications } = require('../services/discord');
+const {
+  getDiscordClient,
+  sendDiscordDM,
+  sendDiscordChannelMessage,
+  sendDiscordMailNotifications
+} = require('../services/discord');
 
 const KNOWN_EMOJI_KEYS = [
   'outlet_alpha', 'outlet_alter', 'outlet_ert', 'outlet_gossip',
@@ -172,30 +177,27 @@ module.exports = async function (fastify, opts) {
       const { type } = req.params;
       const channelId = await getSetting('discord_channel_id', null);
 
-      if (!discordClient?.isReady()) {
-        return reply.status(503).json({ error: 'Discord bot is currently offline.' });
+      if (!process.env.DISCORD_BOT_TOKEN) {
+        return reply.status(503).json({ error: 'Discord bot token is not configured on the server.' });
       }
 
       if (type === 'mail') {
-        await sendDiscordMailNotifications(true); // Pass true to force the test
+        await sendDiscordMailNotifications(true);
         return reply.send({ ok: true, message: 'Mail test triggered.' });
       }
 
       if (type === 'news') {
         if (!channelId) return reply.status(400).json({ error: 'No channel configured.' });
-        const channel = await discordClient.channels.fetch(channelId);
-        await channel.send("📰 **TEST BROADCAST** 📰\n\nThis is a test of the Erebus News Network emergency broadcast system.");
+        await sendDiscordChannelMessage(channelId, "📰 **TEST BROADCAST** 📰\n\nThis is a test of the Erebus News Network emergency broadcast system.");
         return reply.send({ ok: true, message: 'News test broadcast sent.' });
       }
 
       if (type === 'premonition') {
-        // Find the admin's discord ID to send them a test DM
         const [[adminRow]] = await pool.query('SELECT discord_id FROM users WHERE id=?', [req.user.id]);
         if (!adminRow?.discord_id) {
           return reply.status(400).json({ error: 'You must link your Discord ID in the Users tab to receive a test premonition.' });
         }
-        const discordUser = await discordClient.users.fetch(adminRow.discord_id);
-        await discordUser.send("🧠 **TEST VISION**\n\nThe shadows whisper to you: *The system is functioning perfectly.*");
+        await sendDiscordDM(adminRow.discord_id, "🧠 **TEST VISION**\n\nThe shadows whisper to you: *The system is functioning perfectly.*");
         return reply.send({ ok: true, message: 'Test premonition sent to your DMs.' });
       }
 
@@ -209,11 +211,14 @@ module.exports = async function (fastify, opts) {
   // Hard Restart the Bot Connection
   fastify.post('/api/admin/discord/restart', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      if (discordClient && process.env.DISCORD_BOT_TOKEN) {
+      const client = getDiscordClient();
+      if (client && process.env.DISCORD_BOT_TOKEN) {
         log.adm('Admin requested Discord bot restart', { admin_id: req.user.id });
-        discordClient.destroy();
-        await discordClient.login(process.env.DISCORD_BOT_TOKEN);
+        client.destroy();
+        await client.login(process.env.DISCORD_BOT_TOKEN);
         reply.send({ ok: true, message: "Bot connection restarted successfully." });
+      } else if (process.env.DISCORD_BOT_TOKEN) {
+        reply.send({ ok: true, message: "Bot token is active and operational via REST." });
       } else {
         reply.status(400).json({ error: "Bot is not configured." });
       }
@@ -231,8 +236,8 @@ module.exports = async function (fastify, opts) {
         return reply.status(400).json({ error: 'User and message are required.' });
       }
 
-      if (!discordClient?.isReady()) {
-        return reply.status(503).json({ error: 'Discord bot is currently offline.' });
+      if (!process.env.DISCORD_BOT_TOKEN) {
+        return reply.status(503).json({ error: 'Discord bot token is not configured on the server.' });
       }
 
       // Lookup the user's Discord ID
@@ -241,15 +246,19 @@ module.exports = async function (fastify, opts) {
         return reply.status(400).json({ error: `${user?.display_name || 'User'} has not linked their Discord ID yet.` });
       }
 
-      // Fetch the user on Discord and send the DM
-      const discordUser = await discordClient.users.fetch(user.discord_id);
-      await discordUser.send(`🦇 **Message from the Storytellers:**\n\n${message}`);
+      // Send the DM via unified helper
+      await sendDiscordDM(user.discord_id, `🦇 **Message from the Storytellers:**\n\n${message}`);
 
       log.adm('Admin sent custom Discord DM', { admin_id: req.user.id, target_user: user_id });
       reply.send({ ok: true, message: `DM successfully sent to ${user.display_name}.` });
     } catch (e) {
-      log.err('Failed to send custom Discord DM', { error: e.message });
-      reply.status(500).json({ error: 'Failed to send DM.' });
+      log.err('Failed to send custom Discord DM', { error: e.message, response: e.response?.data });
+      if (e.code === 50007 || e.response?.data?.code === 50007) {
+        return reply.status(400).json({
+          error: 'Cannot send DM: This player has direct messages disabled in their Discord privacy settings or does not share a mutual server with the bot.'
+        });
+      }
+      reply.status(500).json({ error: e.response?.data?.message || e.message || 'Failed to send DM.' });
     }
   });
 };

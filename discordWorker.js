@@ -625,3 +625,9 @@ if (commandText === 'whoami') {
   } 
 });
 }
+
+module.exports = {
+  getClient: () => discordClient,
+  getLoginError: () => discordLoginError
+};
+

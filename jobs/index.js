@@ -11,7 +11,7 @@ const pool = require('../db');
 const { log } = require('../logger');
 const { getSetting, setSetting } = require('../utils/settings');
 const { broadcastNtfyAlert } = require('../utils/ntfy');
-const { discordClient, sendDiscordMailNotifications } = require('../services/discord');
+const { sendDiscordDM, sendDiscordMailNotifications } = require('../services/discord');
 const { runFeedingDecay } = require('../services/feedingDecay');
 
 // ============================================================================
@@ -39,8 +39,8 @@ function scheduleDowntimeDeadlinePings() {
         // attached there is nobody to DM, so don't run the scan at all.
         // (Previously this queried for players and then threw a swallowed
         // ReferenceError on an undefined `client` for every one of them.)
-        if (!discordClient?.isReady()) {
-          log.info('Downtime deadline is in 48h, but no Discord client is attached here — skipping DMs.');
+        if (!process.env.DISCORD_BOT_TOKEN) {
+          log.info('Downtime deadline is in 48h, but no Discord bot token is configured on the server — skipping DMs.');
           return;
         }
 
@@ -65,12 +65,8 @@ function scheduleDowntimeDeadlinePings() {
           if (!u.discord_id) continue;
 
           try {
-            const discordUser = await discordClient.users.fetch(u.discord_id);
-            if (discordUser) {
-              const warningMessage = `Hello ${u.char_name || 'there'}, this is an automated reminder. The server for actions (Downtimes) closes in 48 hours. Please submit your actions to avoid an AFK penalty.`;
-
-              await discordUser.send(warningMessage);
-            }
+            const warningMessage = `Hello ${u.char_name || 'there'}, this is an automated reminder. The server for actions (Downtimes) closes in 48 hours. Please submit your actions to avoid an AFK penalty.`;
+            await sendDiscordDM(u.discord_id, warningMessage);
           } catch (dmErr) {
             log.warn(`Could not send DM to Discord ID: ${u.discord_id}`, { err: dmErr.message });
           }
@@ -131,7 +127,7 @@ function scheduleMassReleasePings() {
 let lastDailyCheckDate = '';
 function scheduleDailyMailCheck() {
   return setInterval(async () => {
-    if (!discordClient?.isReady()) return;
+    if (!process.env.DISCORD_BOT_TOKEN) return;
 
     try {
       // 1. Get Settings from DB
