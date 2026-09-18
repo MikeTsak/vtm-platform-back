@@ -3,6 +3,7 @@
 // News and announcements: public feed, sitemap, authoring, per-theme
 // permissions, media, and broadcast.
 const axios = require('axios');
+const sharp = require('sharp');
 const { getSetting } = require('../utils/settings');
 const { sanitizeRichText } = require('../utils/sanitize');
 const { xmlEscape, getAuthorSignature } = require('../services/news');
@@ -134,11 +135,25 @@ module.exports = async function (fastify, opts) {
       if (!fileData) return reply.status(400).send({ error: 'File required' });
 
       const originalname = fileData.filename || 'upload';
-      const mimetype = fileData.mimetype || 'application/octet-stream';
-      const buffer = await fileData.toBuffer();
+      const rawBuffer = await fileData.toBuffer();
+      let buffer = rawBuffer;
+      let mimetype = fileData.mimetype || 'application/octet-stream';
+      let ext = originalname ? originalname.split('.').pop() : 'bin';
+
+      // The CDN's own re-encoder silently drops the pixel data (200 OK,
+      // correct Content-Type, zero-byte body) for indexed/palette PNGs —
+      // normalize every image to a flat truecolor webp ourselves before it
+      // ever reaches that path, same as chat/avatar uploads already do.
+      if (mimetype.startsWith('image/')) {
+        buffer = await sharp(rawBuffer)
+          .resize(2000, 2000, { fit: 'inside', withoutEnlargement: true })
+          .webp({ quality: 85 })
+          .toBuffer();
+        mimetype = 'image/webp';
+        ext = 'webp';
+      }
       const size = buffer.length;
 
-      const ext = originalname ? originalname.split('.').pop() : 'bin';
       const filenameToUpload = 'news_media_' + Date.now() + '.' + ext;
       const result = await imageClient.uploadImage(buffer, filenameToUpload);
       if (!result || !result.success) throw new Error((result && result.error) || 'CDN upload failed');
