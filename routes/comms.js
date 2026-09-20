@@ -2,52 +2,143 @@
 //
 // SchreckNet availability window: whether comms are open, and the schedule
 // that opens them.
-const { getSetting, setSetting } = require('../utils/settings');
+const { getSetting, setSetting, clearSettingCache } = require('../utils/settings');
+
+function resolveCommsSchedule(scheduleStr, masterEnabledStr, nowInput = new Date()) {
+  const masterEnabled = masterEnabledStr === 'true';
+  let isCommsEnabled = masterEnabled;
+  let nextOpening = null;
+
+  try {
+    const schedule = typeof scheduleStr === 'string' ? JSON.parse(scheduleStr) : (scheduleStr || {});
+    const now = nowInput instanceof Date && !isNaN(nowInput.getTime()) ? nowInput : new Date();
+
+    const getAthensDate = (d) => new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Europe/Athens',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(d);
+
+    const getAthensHour = (d) => {
+      const hourStr = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/Athens',
+        hour: '2-digit',
+        hour12: false
+      }).format(d);
+      const h = parseInt(hourStr, 10);
+      return isNaN(h) ? 0 : h;
+    };
+
+    const getAthensDayName = (d) => new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Europe/Athens',
+      weekday: 'long'
+    }).format(d);
+
+    const getAthensEuDate = (d) => {
+      const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/Athens',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric'
+      }).formatToParts(d);
+      const day = parts.find(p => p.type === 'day')?.value;
+      const month = parts.find(p => p.type === 'month')?.value;
+      const year = parts.find(p => p.type === 'year')?.value;
+      return `${day}/${month}/${year}`;
+    };
+
+    const todayStr = getAthensDate(now);
+    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const yesterdayStr = getAthensDate(yesterday);
+
+    let activeState = schedule[todayStr];
+    const currentHour = getAthensHour(now);
+
+    if (schedule[yesterdayStr] === '17:00' && currentHour < 17 && activeState !== 'event') {
+      activeState = true;
+    } else if (schedule[todayStr] === '17:00') {
+      activeState = currentHour >= 17 ? true : false;
+    }
+
+    if (activeState === false || activeState === 'event') {
+      isCommsEnabled = false;
+    } else if (activeState === true) {
+      isCommsEnabled = true;
+    }
+
+    if (!masterEnabled) {
+      isCommsEnabled = false;
+    }
+
+    if (!isCommsEnabled) {
+      if (schedule[todayStr] === '17:00' && currentHour < 17) {
+        const dayName = getAthensDayName(now);
+        const euDate = getAthensEuDate(now);
+        nextOpening = {
+          day: dayName,
+          time: '17:00',
+          date: euDate,
+          iso: `${todayStr}T17:00:00+03:00`,
+          formatted: `${dayName} at 17:00 (${euDate})`
+        };
+      } else {
+        for (let offset = 1; offset <= 30; offset++) {
+          const futureDate = new Date(now.getTime() + offset * 24 * 60 * 60 * 1000);
+          const futureDateStr = getAthensDate(futureDate);
+          const state = schedule[futureDateStr];
+
+          if (state === true) {
+            const dayName = getAthensDayName(futureDate);
+            const euDate = getAthensEuDate(futureDate);
+            nextOpening = {
+              day: dayName,
+              time: '00:01',
+              date: euDate,
+              iso: `${futureDateStr}T00:01:00+03:00`,
+              formatted: `${dayName} at 00:01 (${euDate})`
+            };
+            break;
+          } else if (state === '17:00') {
+            const dayName = getAthensDayName(futureDate);
+            const euDate = getAthensEuDate(futureDate);
+            nextOpening = {
+              day: dayName,
+              time: '17:00',
+              date: euDate,
+              iso: `${futureDateStr}T17:00:00+03:00`,
+              formatted: `${dayName} at 17:00 (${euDate})`
+            };
+            break;
+          }
+        }
+      }
+    }
+  } catch (err) { }
+
+  return {
+    isCommsEnabled,
+    masterEnabled,
+    nextOpening
+  };
+}
 
 module.exports = async function (fastify, opts) {
-  const { log, authRequired, requireAdmin } = opts;
+  const { log, authRequired, requireAdmin, io } = opts;
 
-  // Public: Check if comms are enabled
+  // Public: Check if comms are enabled and when they next open
   fastify.get('/api/comms/status', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const masterEnabled = await getSetting('comms_enabled', 'true');
-      let isCommsEnabled = masterEnabled === 'true';
+      const scheduleStr = await getSetting('chat_schedule', '{}');
 
-      if (isCommsEnabled) {
-        const scheduleStr = await getSetting('chat_schedule', '{}');
-        try {
-          const schedule = JSON.parse(scheduleStr);
-          const today = new Date();
-          const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+      const info = resolveCommsSchedule(scheduleStr, masterEnabled);
 
-          const toDateStr = (d) => {
-            const y = d.getFullYear();
-            const m = String(d.getMonth() + 1).padStart(2, '0');
-            const dd = String(d.getDate()).padStart(2, '0');
-            return `${y}-${m}-${dd}`;
-          };
-
-          const todayStr = toDateStr(today);
-          const yesterdayStr = toDateStr(yesterday);
-
-          let activeState = schedule[todayStr];
-          const currentHour = today.getHours();
-
-          if (schedule[yesterdayStr] === '17:00' && currentHour < 17) {
-            activeState = true;
-          } else if (schedule[todayStr] === '17:00') {
-            activeState = currentHour >= 17 ? true : false;
-          }
-
-          if (activeState === false) {
-            isCommsEnabled = false;
-          } else if (activeState === true) {
-            isCommsEnabled = true;
-          }
-        } catch (err) { }
-      }
-
-      reply.send({ comms_enabled: isCommsEnabled });
+      reply.send({
+        comms_enabled: info.isCommsEnabled,
+        master_enabled: info.masterEnabled,
+        next_opening: info.nextOpening
+      });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to fetch comms status' });
     }
@@ -58,8 +149,20 @@ module.exports = async function (fastify, opts) {
     try {
       const { comms_enabled } = req.body;
       await setSetting('comms_enabled', String(comms_enabled));
+      clearSettingCache('comms_enabled');
       log.adm(`Master comms switched to ${comms_enabled ? 'ONLINE' : 'OFFLINE'}`, { admin_id: req.user.id });
-      reply.send({ ok: true, comms_enabled });
+
+      const scheduleStr = await getSetting('chat_schedule', '{}');
+      const info = resolveCommsSchedule(scheduleStr, String(comms_enabled));
+      const payload = {
+        comms_enabled: info.isCommsEnabled,
+        master_enabled: info.masterEnabled,
+        next_opening: info.nextOpening
+      };
+      if (io) io.emit('comms:status', payload);
+      else if (fastify.io) fastify.io.emit('comms:status', payload);
+
+      reply.send({ ok: true, comms_enabled: info.isCommsEnabled, next_opening: info.nextOpening });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to update comms status' });
     }
@@ -68,6 +171,8 @@ module.exports = async function (fastify, opts) {
   // Admin: Get Comms Config (master switch and schedule)
   fastify.get('/api/admin/comms/config', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
+      clearSettingCache('chat_schedule');
+      clearSettingCache('comms_enabled');
       const masterEnabled = await getSetting('comms_enabled', 'true');
       const scheduleStr = await getSetting('chat_schedule', '{}');
       let schedule = {};
@@ -83,8 +188,20 @@ module.exports = async function (fastify, opts) {
     try {
       const { schedule } = req.body;
       await setSetting('chat_schedule', JSON.stringify(schedule));
+      clearSettingCache('chat_schedule');
       log.adm('Comms schedule updated', { admin_id: req.user.id });
-      reply.send({ ok: true });
+
+      const masterEnabled = await getSetting('comms_enabled', 'true');
+      const info = resolveCommsSchedule(JSON.stringify(schedule), masterEnabled);
+      const payload = {
+        comms_enabled: info.isCommsEnabled,
+        master_enabled: info.masterEnabled,
+        next_opening: info.nextOpening
+      };
+      if (io) io.emit('comms:status', payload);
+      else if (fastify.io) fastify.io.emit('comms:status', payload);
+
+      reply.send({ ok: true, comms_enabled: info.isCommsEnabled, next_opening: info.nextOpening });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to update comms schedule' });
     }

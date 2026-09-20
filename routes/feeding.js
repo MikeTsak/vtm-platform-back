@@ -11,7 +11,7 @@
 // via GET /status — there is no way to discard a roll and start over.
 
 const { getSetting, setSetting } = require('../utils/settings');
-const { getCycleInfo } = require('../utils/feedingCycle');
+const { getCycleInfo, resolveCurrentFeedingCycle } = require('../utils/feedingCycle');
 const { huntingDifficulty } = require('../data/huntingDifficulty');
 const { chasseBonus } = require('../data/chasseMerits');
 const { PREDATOR_HUNTING_POOLS, PREDATOR_SPECIALTIES } = require('../data/predatorHuntingPools');
@@ -91,12 +91,7 @@ module.exports = async function (fastify, opts) {
   }
 
   async function getCurrentCycle() {
-    let anchor = await getSetting('feeding_cycle_anchor', null);
-    if (!anchor || Number.isNaN(new Date(anchor).getTime())) {
-      anchor = new Date().toISOString();
-      await setSetting('feeding_cycle_anchor', anchor);
-    }
-    return getCycleInfo(anchor);
+    return resolveCurrentFeedingCycle();
   }
 
   async function isFeedingEnabled() {
@@ -109,10 +104,10 @@ module.exports = async function (fastify, opts) {
       const enabled = await isFeedingEnabled();
       if (!enabled) return reply.send({ enabled: false });
 
-      const { cycleIndex, cycleStart, cycleEnd } = await getCurrentCycle();
+      const { cycleIndex, cycleStart, cycleEnd, cycleTitle, isDowntimeLinked } = await getCurrentCycle();
       const char = await getMyCharacter(req.user.id);
       if (!char) {
-        return reply.send({ enabled: true, cycleIndex, cycleStart, cycleEnd, noCharacter: true });
+        return reply.send({ enabled: true, cycleIndex, cycleStart, cycleEnd, cycleTitle: cycleTitle || `Cycle ${cycleIndex}`, isDowntimeLinked: !!isDowntimeLinked, noCharacter: true });
       }
 
       const predatorType = getPredatorType(char.sheet);
@@ -157,6 +152,8 @@ module.exports = async function (fastify, opts) {
         cycleIndex,
         cycleStart,
         cycleEnd,
+        cycleTitle: cycleTitle || `Cycle ${cycleIndex}`,
+        isDowntimeLinked: !!isDowntimeLinked,
         predatorType,
         canAutomate,
         herdDots,

@@ -3,6 +3,8 @@
 // Smaller Storyteller tools that do not warrant a module of their own:
 // events, broadcasts, timelines, domain problems, the blood web, audit logs.
 
+const { getSetting, setSetting } = require('../utils/settings');
+
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, sendPushNotification, broadcastNtfyAlert } = opts;
 
@@ -27,6 +29,33 @@ module.exports = async function (fastify, opts) {
     }
   });
 
+  fastify.patch('/api/admin/events/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const { title, date_string, description } = req.body;
+      const updates = [];
+      const values = [];
+      if (title !== undefined) {
+        updates.push('title = ?');
+        values.push(title);
+      }
+      if (date_string !== undefined) {
+        updates.push('date = ?');
+        values.push(new Date(date_string));
+      }
+      if (description !== undefined) {
+        updates.push('description = ?');
+        values.push(description || null);
+      }
+      if (updates.length === 0) return reply.send({ ok: true });
+      values.push(req.params.id);
+      await pool.query(`UPDATE events SET ${updates.join(', ')} WHERE id = ?`, values);
+      reply.send({ ok: true });
+    } catch (e) {
+      log.err('Admin events patch failed', { message: e.message });
+      reply.status(500).json({ error: 'Failed to update event' });
+    }
+  });
+
   fastify.delete('/api/admin/events/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       await pool.query('DELETE FROM events WHERE id=?', [req.params.id]);
@@ -34,6 +63,34 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       log.err('Admin events delete failed', { message: e.message });
       reply.status(500).json({ error: 'Failed to delete event' });
+    }
+  });
+
+  fastify.get('/api/admin/events/rsvp', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const raw = await getSetting('event_rsvp_config', null);
+      let config = null;
+      if (raw) {
+        try { config = JSON.parse(raw); } catch (_) {}
+      }
+      const [chars] = await pool.query(
+        'SELECT c.id, c.name, c.clan, u.display_name FROM characters c JOIN users u ON c.user_id = u.id WHERE c.is_ex = 0 AND c.is_deceased = 0 ORDER BY c.name ASC LIMIT 100'
+      );
+      reply.send({ config, roster: chars });
+    } catch (e) {
+      log.err('Admin events rsvp fetch failed', { message: e.message });
+      reply.status(500).json({ error: 'Failed to fetch rsvp configuration' });
+    }
+  });
+
+  fastify.post('/api/admin/events/rsvp', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const config = req.body;
+      await setSetting('event_rsvp_config', JSON.stringify(config));
+      reply.send({ ok: true });
+    } catch (e) {
+      log.err('Admin events rsvp save failed', { message: e.message });
+      reply.status(500).json({ error: 'Failed to save rsvp configuration' });
     }
   });
 

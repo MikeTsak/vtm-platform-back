@@ -12,7 +12,7 @@
 // pile of accumulated penalties on every domain at once.
 
 const { getSetting, setSetting } = require('../utils/settings');
-const { getCycleInfo } = require('../utils/feedingCycle');
+const { getCycleInfo, resolveCurrentFeedingCycle } = require('../utils/feedingCycle');
 
 const MAX_DIVISION = 88;
 
@@ -20,8 +20,15 @@ async function runFeedingDecay(pool, log, { force = false } = {}) {
   const enabled = (await getSetting('feeding_enabled', 'true')) === 'true';
   if (!enabled) return { skipped: 'disabled' };
 
-  const anchor = await getSetting('feeding_cycle_anchor', new Date().toISOString());
-  const { cycleIndex } = getCycleInfo(anchor);
+  let cycleIndex = 0;
+  try {
+    const cycleInfo = await resolveCurrentFeedingCycle();
+    cycleIndex = cycleInfo.cycleIndex;
+  } catch (e) {
+    const anchor = await getSetting('feeding_cycle_anchor', new Date().toISOString());
+    cycleIndex = getCycleInfo(anchor).cycleIndex;
+  }
+
   const completedCycle = cycleIndex - 1;
   if (completedCycle < 0) return { skipped: 'no completed cycle yet' };
 

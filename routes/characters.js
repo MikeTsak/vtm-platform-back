@@ -148,9 +148,15 @@ module.exports = async function (fastify, opts) {
         return reply.status(409).json({ error: 'Character already exists' });
       }
 
+      let sheetObj = sheet || {};
+      if (typeof sheetObj === 'string') {
+        try { sheetObj = JSON.parse(sheetObj); } catch { sheetObj = {}; }
+      }
+      sheetObj.is_active = false;
+
       const [r] = await pool.query(
         'INSERT INTO characters (user_id, name, clan, sheet, xp) VALUES (?,?,?,?,?)',
-        [req.user.id, name, clan, sheet ? JSON.stringify(sheet) : null, 50]
+        [req.user.id, name, clan, JSON.stringify(sheetObj), 50]
       );
 
       const [rows] = await pool.query('SELECT * FROM characters WHERE id=?', [r.insertId]);
@@ -835,10 +841,16 @@ module.exports = async function (fastify, opts) {
         await pool.query('DELETE FROM xp_log WHERE character_id=?', [charId]);
       } catch (e) { /* ignore if table missing */ }
 
+      let sheetObj = sheet || {};
+      if (typeof sheetObj === 'string') {
+        try { sheetObj = JSON.parse(sheetObj); } catch { sheetObj = {}; }
+      }
+      sheetObj.is_active = false;
+
       // Overwrite the character data and reset XP to 50
       await pool.query(
         'UPDATE characters SET name=?, clan=?, sheet=?, xp=50 WHERE id=?',
-        [name, clan, sheet ? JSON.stringify(sheet) : null, charId]
+        [name, clan, JSON.stringify(sheetObj), charId]
       );
 
       // Fetch and return the updated character

@@ -4,7 +4,7 @@
 // the chronicle-wide downtime configuration.
 const { getSetting, setSetting } = require('../utils/settings');
 const { startOfMonth, endOfMonth, feedingFromPredator } = require('../services/format');
-const { getCycleInfo } = require('../utils/feedingCycle');
+const { getCycleInfo, resolveCurrentFeedingCycle } = require('../utils/feedingCycle');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, broadcastNtfyAlert } = opts;
@@ -22,21 +22,41 @@ module.exports = async function (fastify, opts) {
     let from = startOfMonth();
     let to = endOfMonth();
 
-    // FIX: Tie the quota to the current cycle (Opening Date) instead of a strict calendar month
+    // Tie the quota window directly to the current Downtime cycle
     try {
-      const openingStr = await getSetting('downtime_opening', null);
-      if (openingStr) {
-        const parsed = new Date(openingStr);
-        if (!isNaN(parsed.getTime())) {
-          from = parsed;
-          // Give the cycle a generous safe upper bound (e.g., 90 days) until the next opening overrides it
-          to = new Date(parsed.getTime() + 90 * 24 * 60 * 60 * 1000);
+      const cycleInfo = await resolveCurrentFeedingCycle();
+      if (cycleInfo?.cycleStart && !isNaN(cycleInfo.cycleStart.getTime())) {
+        from = cycleInfo.cycleStart;
+        to = cycleInfo.cycleEnd && !isNaN(cycleInfo.cycleEnd.getTime())
+          ? cycleInfo.cycleEnd
+          : new Date(cycleInfo.cycleStart.getTime() + 90 * 24 * 60 * 60 * 1000);
+      }
+    } catch (e) {
+      try {
+        const openingStr = await getSetting('downtime_opening', null);
+        if (openingStr) {
+          const parsed = new Date(openingStr);
+          if (!isNaN(parsed.getTime())) {
+            from = parsed;
+            to = new Date(parsed.getTime() + 90 * 24 * 60 * 60 * 1000);
+          }
+        }
+      } catch (err) { }
+    }
+
+    // If deadline was manually extended beyond to, extend to so quota counts all submissions of this cycle
+    try {
+      const dlStr = await getSetting('downtime_deadline', null);
+      if (dlStr) {
+        const dlDate = new Date(dlStr);
+        if (!isNaN(dlDate.getTime()) && dlDate > to) {
+          to = dlDate;
         }
       }
-    } catch (e) { }
+    } catch (err) { }
 
     const [rows] = await pool.query(
-      'SELECT COUNT(*) AS c FROM downtimes WHERE character_id=? AND created_at >= ? AND created_at < ?',
+      'SELECT COUNT(*) AS c FROM downtimes WHERE character_id=? AND created_at >= ? AND created_at <= ?',
       [ch.id, from, to]
     );
     log.dt('Quota check', { user_id: req.user.id, used: rows[0].c, limit: 3 });
@@ -193,10 +213,35 @@ module.exports = async function (fastify, opts) {
     const isProjectSubmission = title.startsWith('[PROJECT]');
     const activePhase = await getSetting('downtime_active_phase', 'standard');
 
+    if (activePhase === 'closed') {
+      return reply.status(400).json({ error: 'Downtime submissions are currently closed.' });
+    }
+
     if (activePhase === 'project' && !isProjectSubmission) {
-      return reply.status(400).json({ error: 'Monthly Action submissions are currently closed. Only Long-Term Projects are being accepted.' });
+      return reply.status(400).json({ error: 'Monthly Action submissions are currently closed. Only Long Term Projects are being accepted.' });
     } else if (activePhase === 'standard' && isProjectSubmission) {
-      return reply.status(400).json({ error: 'Long-Term Project submissions are currently closed. Only Monthly Actions are being accepted.' });
+      return reply.status(400).json({ error: 'Long Term Project submissions are currently closed. Only Monthly Actions are being accepted.' });
+    }
+
+    // Check opening date
+    const openingStr = await getSetting('downtime_opening', null);
+    if (openingStr) {
+      const op = new Date(openingStr);
+      if (!isNaN(op.getTime()) && Date.now() < op.getTime()) {
+        return reply.status(400).json({ error: 'Downtime submissions have not opened yet.' });
+      }
+    }
+
+    // Check deadline
+    const deadlineKey = isProjectSubmission ? 'project_deadline' : 'downtime_deadline';
+    const deadlineStr = await getSetting(deadlineKey, null);
+    if (deadlineStr) {
+      const dl = new Date(deadlineStr);
+      if (!isNaN(dl.getTime()) && Date.now() > dl.getTime()) {
+        return reply.status(400).json({
+          error: `The deadline for ${isProjectSubmission ? 'project' : 'downtime'} submissions has passed.`
+        });
+      }
     }
 
     const [chars] = await pool.query('SELECT * FROM characters WHERE user_id=?', [req.user.id]);
@@ -209,9 +254,13 @@ module.exports = async function (fastify, opts) {
     // Feeding gate: this cycle's hunting roll must be resolved before any
     // downtime action (standard or project) can be submitted.
     const feedingEnabled = (await getSetting('feeding_enabled', 'true')) === 'true';
+    let currentCycleInfo = null;
+    try {
+      currentCycleInfo = await resolveCurrentFeedingCycle();
+    } catch (e) { }
+
     if (feedingEnabled) {
-      const anchor = await getSetting('feeding_cycle_anchor', new Date().toISOString());
-      const { cycleIndex } = getCycleInfo(anchor);
+      const cycleIndex = currentCycleInfo?.cycleIndex || 0;
       const [fed] = await pool.query(
         "SELECT id FROM feedings WHERE character_id=? AND cycle_index=? AND status='resolved' LIMIT 1",
         [ch.id, cycleIndex]
@@ -224,20 +273,38 @@ module.exports = async function (fastify, opts) {
     let from = startOfMonth();
     let to = endOfMonth();
 
-    // FIX: Tie the limit check to the current cycle
+    if (currentCycleInfo?.cycleStart && !isNaN(currentCycleInfo.cycleStart.getTime())) {
+      from = currentCycleInfo.cycleStart;
+      to = currentCycleInfo.cycleEnd && !isNaN(currentCycleInfo.cycleEnd.getTime())
+        ? currentCycleInfo.cycleEnd
+        : new Date(currentCycleInfo.cycleStart.getTime() + 90 * 24 * 60 * 60 * 1000);
+    } else {
+      try {
+        const openingStr = await getSetting('downtime_opening', null);
+        if (openingStr) {
+          const parsed = new Date(openingStr);
+          if (!isNaN(parsed.getTime())) {
+            from = parsed;
+            to = new Date(parsed.getTime() + 90 * 24 * 60 * 60 * 1000);
+          }
+        }
+      } catch (e) { }
+    }
+
+    // If deadline was manually extended beyond to, extend to so quota counts all submissions of this cycle
     try {
-      const openingStr = await getSetting('downtime_opening', null);
-      if (openingStr) {
-        const parsed = new Date(openingStr);
-        if (!isNaN(parsed.getTime())) {
-          from = parsed;
-          to = new Date(parsed.getTime() + 90 * 24 * 60 * 60 * 1000);
+      const dlKey = isProjectSubmission ? 'project_deadline' : 'downtime_deadline';
+      const dlStr = await getSetting(dlKey, null);
+      if (dlStr) {
+        const dlDate = new Date(dlStr);
+        if (!isNaN(dlDate.getTime()) && dlDate > to) {
+          to = dlDate;
         }
       }
     } catch (e) { }
 
     const [cnt] = await pool.query(
-      'SELECT COUNT(*) AS c FROM downtimes WHERE character_id=? AND created_at >= ? AND created_at < ?',
+      'SELECT COUNT(*) AS c FROM downtimes WHERE character_id=? AND created_at >= ? AND created_at <= ?',
       [ch.id, from, to]
     );
     if (cnt[0].c >= 3) {
@@ -423,4 +490,39 @@ module.exports = async function (fastify, opts) {
       reply.status(500).json({ success: false, error: 'Internal Server Error' });
     }
   });
+
+  // GET /api/admin/downtimes/cycles: Retrieve multiple downtime operation cycles
+  fastify.get('/api/admin/downtimes/cycles', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const raw = await getSetting('downtime_cycles_schedule', '[]');
+      let cycles = [];
+      try { cycles = JSON.parse(raw); } catch (_) {}
+      reply.send({ cycles: Array.isArray(cycles) ? cycles : [] });
+    } catch (e) {
+      log.err('Fetch downtime cycles failed', { message: e.message });
+      reply.status(500).json({ error: 'Failed to fetch downtime cycles' });
+    }
+  });
+
+  // POST /api/admin/downtimes/cycles: Save multiple downtime operation cycles
+  fastify.post('/api/admin/downtimes/cycles', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const { cycles, activeCycleId } = req.body || {};
+      const validCycles = Array.isArray(cycles) ? cycles : [];
+      await setSetting('downtime_cycles_schedule', JSON.stringify(validCycles));
+
+      if (activeCycleId) {
+        const found = validCycles.find(c => String(c.id) === String(activeCycleId));
+        if (found) {
+          if (found.opening_date) await setSetting('downtime_opening', found.opening_date);
+          if (found.closing_date) await setSetting('downtime_deadline', found.closing_date);
+        }
+      }
+      reply.send({ ok: true, cycles: validCycles });
+    } catch (e) {
+      log.err('Save downtime cycles failed', { message: e.message });
+      reply.status(500).json({ error: 'Failed to save downtime cycles' });
+    }
+  });
 };
+
