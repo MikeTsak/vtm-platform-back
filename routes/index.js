@@ -49,6 +49,7 @@ const ROUTE_MODULES = [
   { name: 'feeding', path: './feeding' },
   { name: 'domains', path: './domains' },
   { name: 'domain-claims', path: './domainClaims' },
+  { name: 'domain-residents', path: './domainResidents' },
   { name: 'domain-overlays', path: './domainOverlays' },
   { name: 'boons', path: './boons' },
   { name: 'coteries', path: './coteries' },

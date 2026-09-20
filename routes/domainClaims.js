@@ -4,6 +4,7 @@
 // safety ratings, and the player-contributed codex.
 
 const { isDomainManager, requireDomainManager, listDomainManagers } = require('../services/domainManagers');
+const { transitionResidentsOnClaim } = require('./domainResidents');
 
 // Falls back to this whenever a division is first given an owner without an
 // explicit colour (a bare petition approval, or a Steward assign with the
@@ -374,6 +375,10 @@ module.exports = async function (fastify, opts) {
         );
       }
 
+      // Transition any residents of this (previously unclaimed) division:
+      // the claimer's own resident record is dropped; everyone else becomes a guest.
+      await transitionResidentsOnClaim(pool, request.division, request.character_id, null);
+
       await pool.query(
         "UPDATE domain_claim_requests SET status='approved', resolved_at=NOW(), resolved_by=? WHERE id=?",
         [req.user.id, requestId]
@@ -516,6 +521,9 @@ module.exports = async function (fastify, opts) {
         );
       }
 
+      // Transition any residents of this (previously unclaimed) division.
+      await transitionResidentsOnClaim(pool, division, assignCharId, assignNpcId);
+
       const [row] = await pool.query('SELECT * FROM domain_claims WHERE division=?', [division]);
       log.adm('Court assigned domain', { court_user: req.user.id, division, ownerName });
       reply.send({ claim: row[0] });
@@ -615,6 +623,8 @@ module.exports = async function (fastify, opts) {
        FROM characters c
        JOIN users u ON u.id = c.user_id
        WHERE c.id NOT IN (SELECT owner_character_id FROM domain_claims WHERE owner_character_id IS NOT NULL)
+         AND c.id NOT IN (SELECT character_id FROM domain_guests WHERE character_id IS NOT NULL)
+         AND c.id NOT IN (SELECT character_id FROM domain_residents WHERE character_id IS NOT NULL)
        ORDER BY c.name ASC`
       );
       const [npcs] = await pool.query(
@@ -623,6 +633,8 @@ module.exports = async function (fastify, opts) {
        WHERE (is_disabled IS NULL OR is_disabled = 0)
          AND (is_deceased IS NULL OR is_deceased = 0)
          AND id NOT IN (SELECT owner_npc_id FROM domain_claims WHERE owner_npc_id IS NOT NULL)
+         AND id NOT IN (SELECT npc_id FROM domain_guests WHERE npc_id IS NOT NULL)
+         AND id NOT IN (SELECT npc_id FROM domain_residents WHERE npc_id IS NOT NULL)
        ORDER BY name ASC`
       );
       reply.send({ characters, npcs });
@@ -773,11 +785,23 @@ module.exports = async function (fastify, opts) {
         return reply.status(409).json({ error: (charId != null ? 'This character' : 'This NPC') + ' already owns a domain and cannot be added as a guest' });
       }
 
-      const [[dupe]] = await pool.query(
-        'SELECT id FROM domain_guests WHERE division=? AND character_id <=> ? AND npc_id <=> ?',
-        [division, charId, npcId]
+      // Check if already a guest in ANY domain
+      const [[dupeGuest]] = await pool.query(
+        'SELECT id, division FROM domain_guests WHERE character_id <=> ? AND npc_id <=> ?',
+        [charId, npcId]
       );
-      if (dupe) return reply.status(409).json({ error: 'Already listed as a guest of this domain' });
+      if (dupeGuest) {
+        return reply.status(409).json({ error: (charId != null ? 'This character' : 'This NPC') + ` is already a guest in domain #${dupeGuest.division}` });
+      }
+
+      // Check if already a resident in ANY domain
+      const [[dupeResident]] = await pool.query(
+        'SELECT id, division FROM domain_residents WHERE character_id <=> ? AND npc_id <=> ?',
+        [charId, npcId]
+      );
+      if (dupeResident) {
+        return reply.status(409).json({ error: (charId != null ? 'This character' : 'This NPC') + ` is already a resident in domain #${dupeResident.division}` });
+      }
 
       await pool.query(
         'INSERT INTO domain_guests (division, character_id, npc_id, note, added_by) VALUES (?,?,?,?,?)',
