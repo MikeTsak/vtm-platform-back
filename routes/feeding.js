@@ -506,13 +506,30 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/admin/feeding/log', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const [rows] = await pool.query(`
-        SELECT f.*, c.name AS character_name
+        SELECT f.*, c.name AS character_name, c.sheet AS character_sheet,
+               dc.owner_name AS domain_owner_name,
+               dc_char.name AS domain_owner_char_name,
+               dc_npc.name AS domain_owner_npc_name,
+               dc.safety_rating AS current_domain_safety
         FROM feedings f
         JOIN characters c ON c.id = f.character_id
+        LEFT JOIN domain_claims dc ON dc.division = f.division
+        LEFT JOIN characters dc_char ON dc_char.id = dc.owner_character_id
+        LEFT JOIN npcs dc_npc ON dc_npc.id = dc.owner_npc_id
         ORDER BY f.created_at DESC
         LIMIT 200
       `);
-      reply.send({ log: rows });
+      const logRows = rows.map(r => {
+        const sheet = parseSheet(r.character_sheet);
+        const currentHunger = sheet?.hunger !== undefined && sheet?.hunger !== null ? Number(sheet.hunger) : null;
+        const { character_sheet, domain_owner_char_name, domain_owner_npc_name, domain_owner_name, ...rest } = r;
+        return {
+          ...rest,
+          current_hunger: currentHunger,
+          domain_owner: domain_owner_char_name || domain_owner_npc_name || domain_owner_name || null,
+        };
+      });
+      reply.send({ log: logRows });
     } catch (err) {
       log.err('GET /api/admin/feeding/log failed', { error: err.message });
       reply.status(500).send({ error: 'Database error fetching feeding log', details: err.sqlMessage || err.message });

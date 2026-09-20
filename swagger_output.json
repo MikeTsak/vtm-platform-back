@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Erebus Portal API",
-    "version": "1.0.35",
+    "version": "1.0.40",
     "description": "API documentation for the Vampire: The Masquerade RPG portal."
   },
   "servers": [
@@ -5272,6 +5272,38 @@
         }
       }
     },
+    "/api/domain-claims/{division}/color": {
+      "patch": {
+        "description": "",
+        "parameters": [
+          {
+            "name": "division",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        }
+      }
+    },
     "/api/admin/domain-claims/{division}": {
       "patch": {
         "description": "",
@@ -7499,6 +7531,12 @@
                     "example": "any"
                   },
                   "damage": {
+                    "example": "any"
+                  },
+                  "bloodPotencyDelta": {
+                    "example": "any"
+                  },
+                  "bloodPotency": {
                     "example": "any"
                   }
                 }

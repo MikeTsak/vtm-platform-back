@@ -5,6 +5,13 @@
 
 const { isDomainManager, requireDomainManager, listDomainManagers } = require('../services/domainManagers');
 
+// Falls back to this whenever a division is first given an owner without an
+// explicit colour (a bare petition approval, or a Steward assign with the
+// colour field left untouched) -- a plain, readable blue rather than the old
+// fully-random hex, which could land on anything from a muddy brown to a
+// colour indistinguishable from another division already on the map.
+const DEFAULT_CLAIM_COLOR = '#3b82f6';
+
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, sendPushNotification } = opts;
 
@@ -73,6 +80,43 @@ module.exports = async function (fastify, opts) {
 
     const [row] = await pool.query('SELECT * FROM domain_claims WHERE division=?', [division]);
     reply.send({ claim: row[0] });
+  });
+
+  /** Domain owner (their linked character), or a Domain Steward/admin: change
+   *  a CLAIMED division's own colour. Uses the identical permission check as
+   *  guest management (resolveDomainManager, defined below) — both are the
+   *  same "day-to-day control of my territory" authority, just for different
+   *  fields. An NPC-owned division has no logged-in owner to grant this to,
+   *  so only a Steward/admin can recolour those. */
+  fastify.patch('/api/domain-claims/:division/color', { preHandler: [authRequired] }, async (req, reply) => {
+    const division = Number(req.params.division);
+    if (!Number.isInteger(division)) return reply.status(400).json({ error: 'division must be an integer' });
+
+    const hex = (req.body?.color || '').trim();
+    if (!/^#([0-9a-fA-F]{6})$/.test(hex)) {
+      return reply.status(400).json({ error: 'color must be a 6-digit hex like #ff0066' });
+    }
+
+    try {
+      const [[claim]] = await pool.query(
+        'SELECT owner_character_id, owner_npc_id FROM domain_claims WHERE division=?',
+        [division]
+      );
+      if (!claim || (!claim.owner_character_id && !claim.owner_npc_id)) {
+        return reply.status(409).json({ error: 'Only a claimed domain has a colour to change' });
+      }
+      if (!(await resolveDomainManager(req, division))) {
+        return reply.status(403).json({ error: 'Only the domain\'s owner or a Domain Steward can change its colour' });
+      }
+
+      await pool.query('UPDATE domain_claims SET color=? WHERE division=?', [hex, division]);
+      const [updated] = await pool.query('SELECT * FROM domain_claims WHERE division=?', [division]);
+      log.dom('Domain colour changed', { division, color: hex, by: req.user.id });
+      reply.send({ claim: updated[0] });
+    } catch (err) {
+      log.err('PATCH /api/domain-claims/:division/color failed', { error: err.message });
+      reply.status(500).json({ error: 'Database error updating colour' });
+    }
   });
 
   // --- Admin: override/transfer a claim (safe upsert) ---
@@ -312,7 +356,7 @@ module.exports = async function (fastify, opts) {
 
       const [chars] = await pool.query('SELECT name FROM characters WHERE id=?', [request.character_id]);
       const ownerName = chars[0]?.name || 'Unknown';
-      const color = request.color || '#' + Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0');
+      const color = request.color || DEFAULT_CLAIM_COLOR;
 
       const [existingRow] = await pool.query('SELECT division FROM domain_claims WHERE division=?', [request.division]);
       if (existingRow.length) {
@@ -454,7 +498,7 @@ module.exports = async function (fastify, opts) {
 
       let hex = color;
       if (typeof hex !== 'string' || !/^#([0-9a-fA-F]{6})$/.test(hex.trim())) {
-        hex = '#' + Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0');
+        hex = DEFAULT_CLAIM_COLOR;
       }
 
       const [existingRow] = await pool.query('SELECT division FROM domain_claims WHERE division=?', [division]);
@@ -561,13 +605,16 @@ module.exports = async function (fastify, opts) {
 
   /** Any logged-in user: characters + non-disabled NPCs for the guest picker.
    *  Same shape as /api/court/characters-and-npcs but open to every player —
-   *  extending hospitality is the domain owner's call, not a Steward power. */
+   *  extending hospitality is the domain owner's call, not a Steward power.
+   *  Excludes anyone who already owns a division: a guest slot is for someone
+   *  WITHOUT their own territory, not a second address for an existing owner. */
   fastify.get('/api/domain-claims/roster', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const [characters] = await pool.query(
         `SELECT c.id, c.name, c.clan, u.display_name AS player_name
        FROM characters c
        JOIN users u ON u.id = c.user_id
+       WHERE c.id NOT IN (SELECT owner_character_id FROM domain_claims WHERE owner_character_id IS NOT NULL)
        ORDER BY c.name ASC`
       );
       const [npcs] = await pool.query(
@@ -575,6 +622,7 @@ module.exports = async function (fastify, opts) {
        FROM npcs
        WHERE (is_disabled IS NULL OR is_disabled = 0)
          AND (is_deceased IS NULL OR is_deceased = 0)
+         AND id NOT IN (SELECT owner_npc_id FROM domain_claims WHERE owner_npc_id IS NOT NULL)
        ORDER BY name ASC`
       );
       reply.send({ characters, npcs });
@@ -620,10 +668,10 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  // Domain owner (their linked character) OR a Domain Steward/admin may manage
-  // who's hosted in a division. Centralised here since both the guest routes
-  // and their `me.canManage` flag need the identical check.
-  async function resolveGuestManager(req, division) {
+  // Domain owner (their linked character) OR a Domain Steward/admin: the same
+  // check gates both who's hosted in a division AND the division's own colour,
+  // so it's centralised here rather than duplicated per feature.
+  async function resolveDomainManager(req, division) {
     if (await isDomainManager(req.user.id, req.user.role)) return true;
     const [[claim]] = await pool.query('SELECT owner_character_id FROM domain_claims WHERE division=?', [division]);
     if (!claim || !claim.owner_character_id) return false;
@@ -660,7 +708,7 @@ module.exports = async function (fastify, opts) {
         // lets a guest recognise (and later remove) their own entry
         isSelf: !!(r.character_user_id && r.character_user_id === req.user.id),
       }));
-      const canManage = await resolveGuestManager(req, division);
+      const canManage = await resolveDomainManager(req, division);
       reply.send({ guests, me: { canManage } });
     } catch (err) {
       log.err('GET /api/domain-claims/:division/guests failed', { error: err.message });
@@ -692,7 +740,7 @@ module.exports = async function (fastify, opts) {
       if (!claim || (!claim.owner_character_id && !claim.owner_npc_id && !claim.is_abaton)) {
         return reply.status(409).json({ error: 'Only a claimed domain can host guests' });
       }
-      if (!(await resolveGuestManager(req, division))) {
+      if (!(await resolveDomainManager(req, division))) {
         return reply.status(403).json({ error: 'Only the domain\'s owner or a Domain Steward can add guests' });
       }
 
@@ -709,6 +757,20 @@ module.exports = async function (fastify, opts) {
         const [[npc]] = await pool.query('SELECT id FROM npcs WHERE id=?', [nid]);
         if (!npc) return reply.status(404).json({ error: 'NPC not found' });
         npcId = nid;
+      }
+
+      // Re-checked here, not just filtered out of the roster: the roster is a
+      // snapshot the client can hold onto for a while, so a character/NPC could
+      // have claimed a division of their own between the picker loading and
+      // this submit landing. A guest slot is for someone without a territory.
+      const [[ownsDivision]] = await pool.query(
+        charId != null
+          ? 'SELECT division FROM domain_claims WHERE owner_character_id=?'
+          : 'SELECT division FROM domain_claims WHERE owner_npc_id=?',
+        [charId != null ? charId : npcId]
+      );
+      if (ownsDivision) {
+        return reply.status(409).json({ error: (charId != null ? 'This character' : 'This NPC') + ' already owns a domain and cannot be added as a guest' });
       }
 
       const [[dupe]] = await pool.query(
@@ -746,7 +808,7 @@ module.exports = async function (fastify, opts) {
       if (!guest) return reply.status(404).json({ error: 'Guest entry not found' });
 
       const isSelf = guest.character_user_id != null && guest.character_user_id === req.user.id;
-      if (!isSelf && !(await resolveGuestManager(req, division))) {
+      if (!isSelf && !(await resolveDomainManager(req, division))) {
         return reply.status(403).json({ error: 'Only the domain\'s owner, a Domain Steward, or the guest themself can remove this' });
       }
 

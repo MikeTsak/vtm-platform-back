@@ -27,6 +27,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   await pool.query('DELETE FROM feedings');
   await pool.query('DELETE FROM characters');
+  await pool.query('DELETE FROM domain_claims');
 });
 
 afterAll(async () => {
@@ -96,5 +97,52 @@ describe('GET /api/admin/feeding/stats', () => {
     expect(body.counts.failure).toBe(1);
     expect(body.counts.success).toBe(2); // success + herd
     expect(body.successPct).toBe(67); // 2/3 = 66.6% -> 67%
+  });
+
+  it('GET /api/admin/feeding/log returns current_hunger and domain_owner', async () => {
+    const sheetData = JSON.stringify({ hunger: 3 });
+    const [charRow] = await pool.query(
+      'INSERT INTO characters (user_id, name, clan, xp, sheet) VALUES (?, ?, ?, ?, ?)',
+      [admin.user.id, 'Log Char', 'Brujah', 5, sheetData]
+    );
+    const charId = charRow.insertId;
+
+    const princeUser = await registerUser(app, { displayName: 'Prince User' });
+    const [claimOwnerRow] = await pool.query(
+      'INSERT INTO characters (user_id, name, clan, xp) VALUES (?, ?, ?, ?)',
+      [princeUser.user.id, 'Domain Prince', 'Ventrue', 15]
+    );
+    const domainOwnerCharId = claimOwnerRow.insertId;
+
+    await pool.query(
+      'INSERT INTO domain_claims (division, owner_character_id, owner_name, color, safety_rating) VALUES (?, ?, ?, ?, ?)',
+      [29, domainOwnerCharId, 'Legacy Name', '#3b82f6', 8]
+    );
+
+    await pool.query(
+      `INSERT INTO feedings
+        (character_id, division, predator_type, pool_label, dice_pool, difficulty, hunger_before, hunger_delta, safety_delta, outcome, status, cycle_index)
+       VALUES
+        (?, 29, 'Alleycat', 'Strength + Brawl', 6, 2, 4, -1, 0, 'success', 'resolved', 1)`,
+      [charId]
+    );
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/admin/feeding/log',
+      headers: { cookie: admin.cookie },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(Array.isArray(body.log)).toBe(true);
+    expect(body.log.length).toBeGreaterThanOrEqual(1);
+
+    const entry = body.log.find(l => l.character_id === charId);
+    expect(entry).toBeDefined();
+    expect(entry.character_name).toBe('Log Char');
+    expect(entry.current_hunger).toBe(3);
+    expect(entry.domain_owner).toBe('Domain Prince');
+    expect(entry.division).toBe(29);
   });
 });

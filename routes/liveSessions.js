@@ -314,7 +314,7 @@ module.exports = async function (fastify, opts) {
   fastify.patch('/api/live-session/:id/players/:charId', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const charId = req.params.charId;
-      const { hungerDelta, healthSupDelta, healthAggDelta, wpSupDelta, wpAggDelta, humanityDelta, stainsDelta, frenzyState, forceRouseCheck, damage } = req.body;
+      const { hungerDelta, healthSupDelta, healthAggDelta, wpSupDelta, wpAggDelta, humanityDelta, stainsDelta, frenzyState, forceRouseCheck, damage, bloodPotencyDelta, bloodPotency } = req.body;
 
       const [rows] = await pool.query('SELECT sheet FROM characters WHERE id=?', [charId]);
       if (!rows.length) return reply.status(404).json({ error: 'Char not found' });
@@ -355,6 +355,17 @@ module.exports = async function (fastify, opts) {
       }
       if (frenzyState !== undefined) {
         sheet.frenzyState = frenzyState;
+      }
+      if (bloodPotencyDelta !== undefined) {
+        const currentBP = Number(sheet.blood_potency ?? sheet.bloodPotency ?? 1);
+        const nextBP = Math.max(0, Math.min(10, currentBP + Number(bloodPotencyDelta)));
+        sheet.blood_potency = nextBP;
+        sheet.bloodPotency = nextBP;
+      }
+      if (bloodPotency !== undefined) {
+        const nextBP = Math.max(0, Math.min(10, Number(bloodPotency)));
+        sheet.blood_potency = nextBP;
+        sheet.bloodPotency = nextBP;
       }
 
       // Structured damage: halves Superficial (round up) and converts to

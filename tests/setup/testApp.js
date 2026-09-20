@@ -63,6 +63,16 @@ function buildTestApp(pool) {
   // app.testResetEmails and exercise the full forgot -> reset flow.
   app.testResetEmails = [];
 
+  // Same idea for push notifications: captures every call instead of hitting
+  // web-push/Expo, so tests can assert who got notified (and with what
+  // category) instead of just that the route didn't 500. Async, like the
+  // real services/push.js, so callers doing `sendPushNotification(...).catch()`
+  // (see routes/feeding.js) keep working.
+  app.testPushNotifications = [];
+  const capturePushNotification = async (userId, title, body, data, category) => {
+    app.testPushNotifications.push({ userId, title, body, data, category });
+  };
+
   app.register(fastifyCookie);
   // routes/auth.js calls fastify.db.query(...) rather than the pool passed in
   // opts (matches how it's decorated in the real server.fastify.js).
@@ -124,7 +134,7 @@ function buildTestApp(pool) {
     log: testLog,
     authRequired,
     requireAdmin,
-    sendPushNotification: noop,
+    sendPushNotification: capturePushNotification,
   });
 
   return app;
