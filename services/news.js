@@ -45,4 +45,32 @@ async function getAuthorSignature(authorId, pool) {
   }
 }
 
-module.exports = { xmlEscape, getAuthorSignature };
+function isVideoUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  return /\.(mp4|webm|mov|m4v|ogg)(\?.*)?$/i.test(url) || url.includes('/video/');
+}
+
+async function resolveMediaUrl(rawUrl, appBase, pool) {
+  if (!rawUrl || typeof rawUrl !== 'string') return null;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return null;
+
+  const match = trimmed.match(/\/api\/news\/media\/(\d+)/);
+  if (match && match[1] && pool) {
+    try {
+      const [mediaRows] = await pool.query('SELECT data_url FROM news_media WHERE id = ?', [match[1]]);
+      if (mediaRows.length > 0 && mediaRows[0].data_url) {
+        return mediaRows[0].data_url;
+      }
+    } catch (_) {}
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+
+  const base = (appBase || process.env.APP_BASE_URL || 'https://portal.attlarp.gr').replace(/\/$/, '');
+  return `${base}${trimmed.startsWith('/') ? '' : '/'}${trimmed}`;
+}
+
+module.exports = { xmlEscape, getAuthorSignature, isVideoUrl, resolveMediaUrl };

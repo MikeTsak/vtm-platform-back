@@ -37,12 +37,14 @@ async function sendDiscordDM(recipientDiscordId, messageText) {
     throw new Error('Discord bot token is not configured on the server.');
   }
 
+  const payload = typeof messageText === 'string' ? { content: messageText } : messageText;
+
   const client = getDiscordClient();
   if (client?.isReady()) {
     try {
       const discordUser = await client.users.fetch(recipientDiscordId);
       if (discordUser) {
-        return await discordUser.send(messageText);
+        return await discordUser.send(payload);
       }
     } catch (clientErr) {
       if (clientErr.code === 50007) {
@@ -70,7 +72,7 @@ async function sendDiscordDM(recipientDiscordId, messageText) {
 
     const messageRes = await axios.post(
       `https://discord.com/api/v10/channels/${dmChannelId}/messages`,
-      { content: messageText },
+      payload,
       {
         headers: {
           Authorization: `Bot ${token}`,

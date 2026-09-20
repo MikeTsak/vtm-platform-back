@@ -4,6 +4,7 @@
 // and the attached media.
 const { getSetting } = require('../utils/settings');
 const { sendDiscordDM } = require('../services/discord');
+const { isVideoUrl, resolveMediaUrl } = require('../services/news');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, imageClient } = opts;
@@ -188,18 +189,29 @@ module.exports = async function (fastify, opts) {
             // Log how many Discord accounts were found
             log.ok(`Discord Premonition: Found ${userRows.length} linked accounts for targets.`, { targets: uniqueUserIds });
 
+            const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'https://portal.attlarp.gr';
+            const resolvedMedia = await resolveMediaUrl(content_url, appBase, pool);
+
             for (const row of userRows) {
               try {
                 let dmMsg = `🧠 **A sudden vision pierces your mind...**\n\n`;
                 if (content_text) dmMsg += `_${content_text}_\n`;
 
-                if (content_type === 'image' || content_type === 'video') {
-                  dmMsg += `\n👁️ **View Vision:** https://portal.attlarp.gr/media/${premonitionId}`;
-                } else if (content_url) {
-                  dmMsg += `\n🔗 ${content_url}`;
+                const payload = { content: dmMsg };
+
+                if (content_type === 'image' && resolvedMedia) {
+                  payload.embeds = [{ image: { url: resolvedMedia } }];
+                  payload.content += `\n👁️ **View Vision:** https://portal.attlarp.gr/media/${premonitionId}`;
+                } else if (content_type === 'video') {
+                  payload.content += `\n👁️ **View Vision:** https://portal.attlarp.gr/media/${premonitionId}`;
+                  if (resolvedMedia) {
+                    payload.content += `\n\n🎥 **Attached Media:**\n${resolvedMedia}`;
+                  }
+                } else if (resolvedMedia) {
+                  payload.content += `\n🔗 ${resolvedMedia}`;
                 }
 
-                await sendDiscordDM(row.discord_id, dmMsg);
+                await sendDiscordDM(row.discord_id, payload);
                 log.ok(`Premonition DM sent to ${row.display_name}`);
               } catch (dmErr) {
                 log.warn(`Failed to DM Discord user ${row.discord_id} (${row.display_name})`, { error: dmErr.message });

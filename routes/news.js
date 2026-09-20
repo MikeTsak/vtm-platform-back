@@ -6,7 +6,7 @@ const axios = require('axios');
 const sharp = require('sharp');
 const { getSetting } = require('../utils/settings');
 const { sanitizeRichText } = require('../utils/sanitize');
-const { xmlEscape, getAuthorSignature } = require('../services/news');
+const { xmlEscape, getAuthorSignature, isVideoUrl, resolveMediaUrl } = require('../services/news');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, imageClient } = opts;
@@ -378,9 +378,17 @@ module.exports = async function (fastify, opts) {
               broadcast += `\n\n**Read the full announcement here:**\n${articleLink}`;
             }
 
-            await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, {
-              content: broadcast
-            }, {
+            const payload = { content: broadcast };
+            const resolvedImg = await resolveMediaUrl(media_url, appBase, pool);
+            if (resolvedImg) {
+              if (isVideoUrl(resolvedImg)) {
+                payload.content += `\n\n🎥 **Attached Media:**\n${resolvedImg}`;
+              } else {
+                payload.embeds = [{ image: { url: resolvedImg } }];
+              }
+            }
+
+            await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, payload, {
               headers: {
                 'Authorization': `Bot ${process.env.DISCORD_BOT_TOKEN}`,
                 'Content-Type': 'application/json'
@@ -408,7 +416,7 @@ module.exports = async function (fastify, opts) {
       if (rows.length === 0) return reply.status(404).send({ error: 'Entry not found' });
 
       const entry = rows[0];
-      const { type, title, subtitle, theme } = entry;
+      const { type, title, subtitle, theme, media_url } = entry;
 
       const discordEnabled = await getSetting('discord_enabled', 'true') === 'true';
       const tokenPresent = !!process.env.DISCORD_BOT_TOKEN;
@@ -468,9 +476,17 @@ module.exports = async function (fastify, opts) {
         broadcast += `\n\n**Read the full announcement here:**\n${articleLink}`;
       }
 
-      await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, {
-        content: broadcast
-      }, {
+      const payload = { content: broadcast };
+      const resolvedImg = await resolveMediaUrl(media_url, appBase, pool);
+      if (resolvedImg) {
+        if (isVideoUrl(resolvedImg)) {
+          payload.content += `\n\n🎥 **Attached Media:**\n${resolvedImg}`;
+        } else {
+          payload.embeds = [{ image: { url: resolvedImg } }];
+        }
+      }
+
+      await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, payload, {
         headers: {
           'Authorization': `Bot ${process.env.DISCORD_BOT_TOKEN}`,
           'Content-Type': 'application/json'
