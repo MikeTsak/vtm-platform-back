@@ -39,19 +39,38 @@ async function sendResetEmailWithEmailJS({
   name,              // display name (string)
   link,              // absolute reset URL
   appName = 'Erebus Portal',
-  expiresMinutes = 24
+  expiresMinutes = 1440
 }) {
-  // Build exactly what EmailJS expects
+  // Build exactly what EmailJS expects with comprehensive aliases
   const payload = {
     service_id: process.env.EMAILJS_SERVICE_ID,
     template_id: process.env.EMAILJS_TEMPLATE_ID,
     user_id: process.env.EMAILJS_PUBLIC_KEY,     // "user_id" = PUBLIC key
     accessToken: process.env.EMAILJS_PRIVATE_KEY || undefined, // optional
     template_params: {
+      to_email: to,
+      email: to,
+      user_email: to,
+      to: to,
+      recipient: to,
       [VAR_TO]: to,
+
+      to_name: name || 'there',
+      name: name || 'there',
+      user_name: name || 'there',
       [VAR_NAME]: name || 'there',
+
+      app_name: appName,
       [VAR_APP]: appName,
+
+      reset_link: link,
+      link: link,
+      reset_url: link,
+      url: link,
       [VAR_LINK]: link,
+
+      expires_minutes: expiresMinutes,
+      expires_hours: Math.round(expiresMinutes / 60) || 24,
       [VAR_EXPIRES]: expiresMinutes,
     },
   };

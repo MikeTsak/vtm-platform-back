@@ -153,20 +153,32 @@ module.exports = async function (fastify, opts) {
 
     await fastify.db.query('INSERT INTO password_resets (user_id, token_id, secret_hash, expires_at) VALUES (?,?,?,?)', [user.id, tokenId, secretHash, expiresAt]);
 
-    const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
+    let reqOrigin = req.headers.origin;
+    if (!reqOrigin && req.headers.referer) {
+      try { reqOrigin = new URL(req.headers.referer).origin; } catch {}
+    }
+    const defaultBase = IS_PROD ? 'https://portal.attlarp.gr' : 'http://localhost:3002';
+    const appBase = ((!IS_PROD && reqOrigin) ? reqOrigin : (process.env.APP_BASE_URL || reqOrigin || defaultBase)).replace(/\/$/, '');
     const link = `${appBase}/reset?token=${encodeURIComponent(combined)}`;
 
-    if (log.mail) log.mail('Reset token created', { email: maskEmail(norm), link_path: new URL(link).pathname, expires_min: 30, cooldown_min: COOLDOWN_MIN });
+    if (log.mail) log.mail('Reset token created', { email: maskEmail(norm), link_path: new URL(link).pathname, expires_min: 1440, cooldown_min: COOLDOWN_MIN });
+    if (!IS_PROD) {
+      log.info(`[DEV] Password reset link for ${norm}: ${link}`);
+    }
 
     try {
       if (typeof sendResetEmailWithEmailJS === 'function') {
-        await sendResetEmailWithEmailJS({ to: norm, name: user.display_name || 'there', link, appName: process.env.APP_NAME || 'Erebus Portal' });
+        await sendResetEmailWithEmailJS({ to: norm, name: user.display_name || 'there', link, appName: process.env.APP_NAME || 'Erebus Portal', expiresMinutes: 1440 });
       }
     } catch (e) {
       log.err('EmailJS send failed', { error: e?.message || String(e) });
     }
 
-    return okResponse();
+    return reply.send({
+      ok: true,
+      message: 'If the email exists, a reset link has been sent.',
+      ...(!IS_PROD ? { dev_link: link } : {})
+    });
   });
 
   // POST /api/auth/reset
