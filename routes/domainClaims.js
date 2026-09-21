@@ -428,13 +428,24 @@ module.exports = async function (fastify, opts) {
         `SELECT c.id, c.name, c.clan, u.display_name AS player_name
        FROM characters c
        JOIN users u ON u.id = c.user_id
+       WHERE COALESCE(c.is_deceased, 0) = 0
+         AND COALESCE(c.is_missing, 0) = 0
+         AND COALESCE(c.is_left, 0) = 0
+         AND COALESCE(c.is_called, 0) = 0
+         AND COALESCE(c.is_exiled, 0) = 0
+         AND COALESCE(c.is_bloodhunted, 0) = 0
        ORDER BY c.name ASC`
       );
       const [npcs] = await pool.query(
         `SELECT id, name, clan
        FROM npcs
        WHERE (is_disabled IS NULL OR is_disabled = 0)
-         AND (is_deceased IS NULL OR is_deceased = 0)
+         AND COALESCE(is_deceased, 0) = 0
+         AND COALESCE(is_missing, 0) = 0
+         AND COALESCE(is_left, 0) = 0
+         AND COALESCE(is_called, 0) = 0
+         AND COALESCE(is_exiled, 0) = 0
+         AND COALESCE(is_bloodhunted, 0) = 0
        ORDER BY name ASC`
       );
       reply.send({ characters, npcs });
@@ -622,7 +633,13 @@ module.exports = async function (fastify, opts) {
         `SELECT c.id, c.name, c.clan, u.display_name AS player_name
        FROM characters c
        JOIN users u ON u.id = c.user_id
-       WHERE c.id NOT IN (SELECT owner_character_id FROM domain_claims WHERE owner_character_id IS NOT NULL)
+       WHERE COALESCE(c.is_deceased, 0) = 0
+         AND COALESCE(c.is_missing, 0) = 0
+         AND COALESCE(c.is_left, 0) = 0
+         AND COALESCE(c.is_called, 0) = 0
+         AND COALESCE(c.is_exiled, 0) = 0
+         AND COALESCE(c.is_bloodhunted, 0) = 0
+         AND c.id NOT IN (SELECT owner_character_id FROM domain_claims WHERE owner_character_id IS NOT NULL)
          AND c.id NOT IN (SELECT character_id FROM domain_guests WHERE character_id IS NOT NULL)
          AND c.id NOT IN (SELECT character_id FROM domain_residents WHERE character_id IS NOT NULL)
        ORDER BY c.name ASC`
@@ -631,7 +648,12 @@ module.exports = async function (fastify, opts) {
         `SELECT id, name, clan
        FROM npcs
        WHERE (is_disabled IS NULL OR is_disabled = 0)
-         AND (is_deceased IS NULL OR is_deceased = 0)
+         AND COALESCE(is_deceased, 0) = 0
+         AND COALESCE(is_missing, 0) = 0
+         AND COALESCE(is_left, 0) = 0
+         AND COALESCE(is_called, 0) = 0
+         AND COALESCE(is_exiled, 0) = 0
+         AND COALESCE(is_bloodhunted, 0) = 0
          AND id NOT IN (SELECT owner_npc_id FROM domain_claims WHERE owner_npc_id IS NOT NULL)
          AND id NOT IN (SELECT npc_id FROM domain_guests WHERE npc_id IS NOT NULL)
          AND id NOT IN (SELECT npc_id FROM domain_residents WHERE npc_id IS NOT NULL)

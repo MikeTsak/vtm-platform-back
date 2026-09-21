@@ -109,16 +109,6 @@ const COTERIE_MERITS_GENERAL = {
 // Domain Merits — each is anchored to one Domain trait and therefore requires
 // the coterie to actually hold a Domain with at least one dot in that trait.
 const COTERIE_MERITS_DOMAIN = {
-  // Chasse
-  apartment_towers: { name: 'Apartment Towers', min: 2, max: 2, trait: 'chasse' },
-  back_alleys: { name: 'Back Alleys', min: 2, max: 2, trait: 'chasse' },
-  funerary: { name: 'Funerary', min: 1, max: 1, trait: 'chasse' },
-  gated_community: { name: 'Gated Community', min: 2, max: 2, trait: 'chasse' },
-  hospital: { name: 'Hospital', min: 2, max: 2, trait: 'chasse' },
-  nightlife: { name: 'Nightlife', min: 3, max: 3, trait: 'chasse' },
-  shelter: { name: 'Shelter', min: 2, max: 2, trait: 'chasse' },
-  built_in_flock: { name: 'Built-In Flock', min: 1, max: 1, trait: 'chasse' },
-  mithraeum: { name: 'Mithraeum', min: 2, max: 2, trait: 'chasse' },
   // Lien
   campus: { name: 'Campus', min: 3, max: 3, trait: 'lien' },
   city_hall: { name: 'City Hall', min: 3, max: 3, trait: 'lien' },

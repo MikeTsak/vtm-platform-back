@@ -296,10 +296,10 @@ module.exports = async function (fastify, opts) {
         return reply.status(400).send({ error: 'Please select a domain to feed in.' });
       }
 
-      // Use exactly 1 pool point → -1 hunger (floor 1), -1 herd_current
+      // Use exactly 1 pool point: -1 hunger (floor 1), -1 herd_current
       const currentHunger = clamp(Number(char.sheet?.hunger) ?? 1, 0, 5);
       const reduction = currentHunger > 1 ? 1 : 0; // can only reduce if hunger > 1
-      const newHunger = currentHunger - reduction;
+      const newHunger = Math.max(1, currentHunger - reduction);
       const newHerdCurrent = herdCurrent - 1;
 
       char.sheet.hunger = newHunger;
@@ -402,7 +402,11 @@ module.exports = async function (fastify, opts) {
       if (!deltas) return reply.status(500).send({ error: 'Unresolved outcome on this roll.' });
 
       let sheet = parseSheet(charRows[0].sheet);
-      sheet.hunger = clamp((Number(sheet.hunger) || 0) + deltas.hunger, 0, 5);
+      const currentHunger = Number(sheet.hunger) || 1;
+      // V5 Hunting rule: feeding can never reduce Hunger below 1. Only GM manual edit can set 0.
+      const newHunger = Math.max(1, Math.min(5, currentHunger + deltas.hunger));
+      const appliedHungerDelta = newHunger - currentHunger;
+      sheet.hunger = newHunger;
       await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), feeding.character_id]);
 
       const [existingClaim] = await pool.query(
@@ -423,7 +427,7 @@ module.exports = async function (fastify, opts) {
 
       await pool.query(
         "UPDATE feedings SET status='resolved', resolved_at=NOW(), hunger_delta=?, safety_delta=? WHERE id=?",
-        [deltas.hunger, deltas.safety, feedingId]
+        [appliedHungerDelta, deltas.safety, feedingId]
       );
 
       // Domain incident: only on a bad-for-the-domain outcome, only when
@@ -453,7 +457,7 @@ module.exports = async function (fastify, opts) {
         }
       }
 
-      reply.send({ ok: true, tier: feeding.outcome, hungerDelta: deltas.hunger, safetyDelta: deltas.safety, sheet });
+      reply.send({ ok: true, tier: feeding.outcome, hungerDelta: appliedHungerDelta, safetyDelta: deltas.safety, sheet });
     } catch (err) {
       log.err('POST /api/feeding/:id/confirm failed', { error: err.message });
       reply.status(500).send({ error: 'Database error confirming feeding roll' });
@@ -521,7 +525,7 @@ module.exports = async function (fastify, opts) {
       `);
       const logRows = rows.map(r => {
         const sheet = parseSheet(r.character_sheet);
-        const currentHunger = sheet?.hunger !== undefined && sheet?.hunger !== null ? Number(sheet.hunger) : null;
+        const currentHunger = sheet?.hunger !== undefined && sheet?.hunger !== null ? Number(sheet.hunger) : 1;
         const { character_sheet, domain_owner_char_name, domain_owner_npc_name, domain_owner_name, ...rest } = r;
         return {
           ...rest,
@@ -621,6 +625,42 @@ module.exports = async function (fastify, opts) {
     } catch (err) {
       log.err('POST /api/admin/feeding/herd-adjust failed', { error: err.message });
       reply.status(500).send({ error: 'Database error adjusting herd', details: err.sqlMessage || err.message });
+    }
+  });
+
+  /* ---- Admin: Adjust Hunger for a character (delta ±N or direct value) ---- */
+  fastify.post('/api/admin/feeding/hunger-adjust', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const { character_id, delta, hunger } = req.body || {};
+      if (!character_id) return reply.status(400).send({ error: 'character_id required' });
+
+      const [charRows] = await pool.query('SELECT id, name, sheet FROM characters WHERE id=? LIMIT 1', [character_id]);
+      if (!charRows.length) return reply.status(404).send({ error: 'Character not found' });
+      let sheet;
+      try { sheet = typeof charRows[0].sheet === 'string' ? JSON.parse(charRows[0].sheet) : charRows[0].sheet; } catch { sheet = {}; }
+      if (!sheet) sheet = {};
+
+      const before = clamp(sheet.hunger !== undefined && sheet.hunger !== null ? Number(sheet.hunger) : 1, 0, 5);
+      let after = before;
+
+      if (hunger !== undefined && !isNaN(Number(hunger))) {
+        after = clamp(Number(hunger), 0, 5);
+      } else if (delta !== undefined) {
+        const d = parseInt(delta, 10);
+        if (isNaN(d) || d === 0) return reply.status(400).send({ error: 'delta must be a non-zero integer' });
+        // GM manual edit: allows 0 to 5, but cannot go below 0 (cannot go to minus)
+        after = clamp(before + d, 0, 5);
+      } else {
+        return reply.status(400).send({ error: 'delta or hunger required' });
+      }
+
+      sheet.hunger = after;
+      await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), character_id]);
+      log.adm('Admin hunger adjust', { admin: req.user.id, character_id, delta, before, after });
+      reply.send({ ok: true, character_id, name: charRows[0].name, hungerBefore: before, hungerAfter: after });
+    } catch (err) {
+      log.err('POST /api/admin/feeding/hunger-adjust failed', { error: err.message });
+      reply.status(500).send({ error: 'Database error adjusting hunger', details: err.sqlMessage || err.message });
     }
   });
 

@@ -306,8 +306,8 @@ describe('POST /api/coteries/:id/purchase', () => {
   it('refuses to "buy" a rating at or below the current one', async () => {
     await post(`/api/coteries/${coterieId}/xp`, admin.cookie, { delta: 30 });
     const res = await post(`/api/coteries/${coterieId}/purchase`, members[0].cookie, {
-      target: { kind: 'domain', key: 'chasse' }, // already 2
-      to_dots: 2, from_bank: 0, from_personal: 0,
+      target: { kind: 'domain', key: 'lien' }, // already 1
+      to_dots: 1, from_bank: 0, from_personal: 0,
     });
     expect(res.statusCode).toBe(400);
     expect(JSON.parse(res.body).error).toMatch(/new dots only/i);
@@ -334,14 +334,31 @@ describe('POST /api/coteries/:id/purchase', () => {
   it('allows advancement to exceed the original creation pool', async () => {
     await post(`/api/coteries/${coterieId}/xp`, admin.cookie, { delta: 60 });
     const res = await post(`/api/coteries/${coterieId}/purchase`, members[0].cookie, {
-      target: { kind: 'domain', key: 'chasse' },
-      to_dots: 5, from_bank: 9, from_personal: 0,
+      target: { kind: 'domain', key: 'lien' },
+      to_dots: 5, from_bank: 12, from_personal: 0,
     });
     expect(res.statusCode).toBe(200);
     const { coterie } = JSON.parse(res.body);
-    expect(coterie.traits.chasse).toBe(5);
-    expect(coterie.mechanics.huntingDifficulty).toBe(2);
+    expect(coterie.traits.lien).toBe(5);
     expect(coterie.budget.remaining).toBeLessThan(0); // over the creation pool, by design
+  });
+
+  it('rejects purchasing Chasse dots with XP', async () => {
+    const res = await post(`/api/coteries/${coterieId}/purchase`, members[0].cookie, {
+      target: { kind: 'domain', key: 'chasse' },
+      to_dots: 5, from_bank: 9, from_personal: 0,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/cannot be purchased/i);
+  });
+
+  it('rejects purchasing legacy Chasse merits', async () => {
+    const res = await post(`/api/coteries/${coterieId}/purchase`, members[0].cookie, {
+      target: { kind: 'merit', key: 'nightlife' },
+      to_dots: 3, from_bank: 9, from_personal: 0,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/cannot be purchased/i);
   });
 });
 

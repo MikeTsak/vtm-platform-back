@@ -40,6 +40,11 @@ const jsonColumn = (val, fallback) => {
   return parsed == null ? null : JSON.stringify(parsed);
 };
 
+const CHASSE_MERIT_KEYS = new Set([
+  'apartment_towers', 'back_alleys', 'funerary', 'gated_community',
+  'hospital', 'nightlife', 'shelter', 'built_in_flock', 'mithraeum'
+]);
+
 // Shapes a raw `coteries` row into the object the client consumes, with the
 // derived V5 mechanics attached so the sheet does not have to recompute them.
 function presentCoterie(row, members = []) {
@@ -50,7 +55,7 @@ function presentCoterie(row, members = []) {
     portillon: Number(row.portillon) || 0,
   };
   const backgrounds = safeParse(row.backgrounds_json, []);
-  const merits = safeParse(row.merits_json, []);
+  const merits = safeParse(row.merits_json, []).filter((m) => !CHASSE_MERIT_KEYS.has(m && m.key));
   const flaws = safeParse(row.flaws_json, []);
 
   const budget = rules.computeBudget({
@@ -94,6 +99,26 @@ function presentCoterie(row, members = []) {
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, broadcastNtfyAlert } = opts;
+
+  // Cleanup legacy Chasse merits from existing coteries in the database
+  (async () => {
+    try {
+      const [rows] = await pool.query('SELECT id, merits_json FROM coteries WHERE merits_json IS NOT NULL');
+      for (const r of rows) {
+        const list = safeParse(r.merits_json, []);
+        const cleaned = list.filter((m) => !CHASSE_MERIT_KEYS.has(m && m.key));
+        if (cleaned.length !== list.length) {
+          await pool.query('UPDATE coteries SET merits_json=? WHERE id=?', [
+            JSON.stringify(cleaned),
+            r.id,
+          ]);
+          log?.info?.({ coterieId: r.id }, 'Purged legacy Chasse merits from coterie in database');
+        }
+      }
+    } catch (err) {
+      // Non-fatal if DB is not ready during isolated test setup
+    }
+  })();
 
   /** Resolves the caller's relationship to a coterie. */
   async function access(req, coterieId) {
@@ -613,8 +638,14 @@ module.exports = async function (fastify, opts) {
     const catalog = kind === 'domain' ? null
       : kind === 'background' ? rules.COTERIE_BACKGROUNDS
       : rules.COTERIE_MERITS;
+    if (kind === 'domain' && key === 'chasse') {
+      return reply.status(400).json({ error: 'Chasse is determined by the domain and cannot be purchased with XP' });
+    }
     if (kind === 'domain' && !rules.DOMAIN_TRAITS.includes(key)) {
       return reply.status(400).json({ error: 'Unknown domain trait' });
+    }
+    if (kind === 'merit' && CHASSE_MERIT_KEYS.has(key)) {
+      return reply.status(400).json({ error: 'Chasse merits are fixed features of the domain and cannot be purchased' });
     }
     if (catalog && !catalog[key]) {
       return reply.status(400).json({ error: `Unknown coterie ${kind}: ${key}` });

@@ -84,12 +84,12 @@ describe('pool arithmetic', () => {
   // Corebook p.197: "If your coterie matches a given type, subtract the
   // listed costs from the coterie pool." A type's Domain dots are paid for,
   // not granted — the old builder treated them as free.
-  it('charges the pool for every Domain dot, including a type baseline', () => {
+  it('charges the pool for Lien and Portillon domain dots, while Chasse is fixed by domain', () => {
     const { spend } = rules.computeBudget(baseCoterie({
       traits: { chasse: 2, lien: 0, portillon: 2 }, // Maréchal
     }));
-    expect(spend.domain).toBe(4);
-    expect(spend.total).toBe(4);
+    expect(spend.domain).toBe(2);
+    expect(spend.total).toBe(2);
   });
 
   it('charges for Backgrounds and Merits alongside Domain dots', () => {
@@ -98,10 +98,10 @@ describe('pool arithmetic', () => {
       backgrounds: [{ key: 'haven', dots: 2 }],
       merits: [{ key: 'bolt_holes', dots: 1 }],
     }));
-    expect(spend.domain).toBe(4);
+    expect(spend.domain).toBe(3);
     expect(spend.backgrounds).toBe(2);
     expect(spend.merits).toBe(1);
-    expect(spend.total).toBe(7);
+    expect(spend.total).toBe(6);
   });
 
   // The corebook's own worked example (p.195): a Maréchal coterie drops its
