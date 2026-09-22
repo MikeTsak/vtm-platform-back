@@ -59,6 +59,7 @@ module.exports = async function (fastify, opts) {
     try {
       const [threads] = await pool.query(`
       SELECT t.id, t.subject, t.updated_at,
+             t.user_id, t.identity_id,
              u.display_name as user_name, c.name as char_name,
              i.email_address, i.display_name as identity_name,
              COALESCE(um.unread_count, 0) as unread_count
@@ -132,6 +133,7 @@ module.exports = async function (fastify, opts) {
     try {
       const [threads] = await pool.query(`
       SELECT t.id, t.subject, t.updated_at,
+             t.identity_id,
              i.email_address as from_email, i.display_name as from_name,
              snip.body as snippet,
              COALESCE(um.unread_count, 0) as unread_count
@@ -245,6 +247,66 @@ module.exports = async function (fastify, opts) {
       reply.send({ messages });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to fetch email messages' });
+    }
+  });
+
+  // 7. Admin Direct Message — create identity on-the-fly and open a DM thread with a player
+  fastify.post('/api/admin/emails/dm', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    const conn = await pool.getConnection();
+    try {
+      const { email_address, display_name, user_id, subject, body } = req.body;
+      if (!email_address || !display_name || !user_id || !subject || !body) {
+        return reply.status(400).json({ error: 'Missing required fields' });
+      }
+
+      const email = email_address.trim().toLowerCase();
+      if (!email.includes('@')) return reply.status(400).json({ error: 'Invalid email format' });
+
+      // Verify the target player exists
+      const [[targetUser]] = await conn.query('SELECT id, display_name FROM users WHERE id=?', [user_id]);
+      if (!targetUser) return reply.status(404).json({ error: 'Target player not found' });
+
+      await conn.beginTransaction();
+
+      // Upsert the email identity — create it if it doesn't exist yet
+      await conn.query(`
+        INSERT INTO email_identities (email_address, display_name)
+        VALUES (?, ?)
+        ON DUPLICATE KEY UPDATE display_name = VALUES(display_name)
+      `, [email, display_name]);
+
+      const [[identity]] = await conn.query('SELECT id FROM email_identities WHERE email_address=?', [email]);
+
+      // Create thread linked to the target player
+      const [t] = await conn.query(
+        `INSERT INTO email_threads (user_id, identity_id, subject) VALUES (?, ?, ?)`,
+        [user_id, identity.id, subject]
+      );
+      const threadId = t.insertId;
+
+      // Insert first message as the identity (admin speaking as NPC)
+      await conn.query(
+        `INSERT INTO email_messages (thread_id, sender_type, body, is_read) VALUES (?, 'identity', ?, 0)`,
+        [threadId, body]
+      );
+
+      await conn.commit();
+
+      // Push notification to the target player
+      try {
+        const pushTitle = `📧 New message from ${display_name}`;
+        const pushBody = `Re: ${subject}`;
+        await sendPushNotification(user_id, pushTitle, pushBody).catch(() => {});
+      } catch (e) { log.err('Admin DM push failed', { error: e.message }); }
+
+      log.adm('Admin created DM thread', { admin: req.user.id, target_user: user_id, identity: email });
+      reply.send({ ok: true, thread_id: threadId, identity_id: identity.id });
+    } catch (e) {
+      await conn.rollback();
+      log.err('Admin DM failed', { message: e.message });
+      reply.status(500).json({ error: 'Failed to create DM' });
+    } finally {
+      conn.release();
     }
   });
 };
