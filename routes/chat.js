@@ -516,7 +516,7 @@ module.exports = async function (fastify, opts) {
       const groupId = Number(req.params.id);
       const [messages] = await pool.query(`
       SELECT m.id, m.sender_id, m.body, m.created_at,
-            m.attachment_id,
+            m.attachment_id, m.edited,
             u.display_name, c.name as char_name, c.clan
       FROM chat_group_messages m
       LEFT JOIN users u ON m.sender_id = u.id
@@ -1112,12 +1112,17 @@ module.exports = async function (fastify, opts) {
     try {
       const [messages] = await pool.query(
         `SELECT
-                cm.id, cm.body, cm.created_at,
+                cm.id, cm.body, cm.created_at, cm.attachment_id, cm.edited,
+                cm.read_at, cm.delivered_at,
                 s.id as sender_id, s.display_name as sender_name,
-                r.id as recipient_id, r.display_name as recipient_name
+                cs.name as sender_char_name, cs.clan as sender_clan,
+                r.id as recipient_id, r.display_name as recipient_name,
+                cr.name as recipient_char_name, cr.clan as recipient_clan
             FROM chat_messages cm
             JOIN users s ON cm.sender_id = s.id
             JOIN users r ON cm.recipient_id = r.id
+            LEFT JOIN characters cs ON cs.user_id = s.id
+            LEFT JOIN characters cr ON cr.user_id = r.id
             ORDER BY cm.created_at DESC`
       );
       log.adm('Admin fetched all chat messages', { count: messages.length });

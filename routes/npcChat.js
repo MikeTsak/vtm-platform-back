@@ -39,7 +39,7 @@ module.exports = async function (fastify, opts) {
     try {
       // FIX: Changed to npc_messages
       const [messages] = await pool.query(
-        `SELECT id, body, from_side, created_at, attachment_id, status
+        `SELECT id, body, from_side, created_at, attachment_id, status, edited, read_at
         FROM npc_messages
         WHERE npc_id = ? AND user_id = ?
         ORDER BY created_at ASC`,
@@ -206,7 +206,7 @@ module.exports = async function (fastify, opts) {
       if (!npcId || !userId) return reply.status(400).json({ error: 'npc_id and user_id are required' });
 
       const [rows] = await pool.query(
-        `SELECT id, npc_id, user_id, from_side, body, created_at, attachment_id, status
+        `SELECT id, npc_id, user_id, from_side, body, created_at, attachment_id, status, edited, read_at
         FROM npc_messages
         WHERE npc_id=? AND user_id=?
         ORDER BY created_at ASC`,
@@ -320,7 +320,7 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/admin/chat/npc/all', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const [rows] = await pool.query(`
-      SELECT id, npc_id, user_id, from_side, body, created_at, status
+      SELECT id, npc_id, user_id, from_side, body, created_at, status, attachment_id, edited
       FROM npc_messages
       ORDER BY created_at ASC
     `);
