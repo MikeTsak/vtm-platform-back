@@ -84,7 +84,7 @@ module.exports = async function (fastify, opts) {
         FROM npc_messages nm
         JOIN npcs n ON n.id = nm.npc_id
         WHERE nm.id IN (
-          SELECT MAX(id) FROM npc_messages WHERE user_id = ? GROUP BY npc_id
+          SELECT MAX(id) FROM npc_messages WHERE user_id = ? AND status != 'queued' GROUP BY npc_id
         )
         ORDER BY nm.created_at DESC LIMIT 5
       `, [userId]).catch(err => {

@@ -28,8 +28,16 @@ async function sendPushNotification(userId, title, body, data = {}, category = '
     // If settings are false for this category, do not send web push (off by default)
     const isEnabled = !!settings[category];
 
+    const origin = process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',')[0] : '';
     const clickUrl = data.url ? data.url : '/comms';
-    const clickFullUrl = process.env.CORS_ORIGIN ? (process.env.CORS_ORIGIN.split(',')[0] + clickUrl) : clickUrl;
+    const clickFullUrl = origin ? (origin + clickUrl) : clickUrl;
+    // data.icon is a relative avatar/crest path (e.g. `/api/users/5/avatar`)
+    // set by the caller — resolved to an absolute URL the same way clickUrl
+    // is, since the service worker's showNotification() needs it to survive
+    // being read back out of the push payload with no other context. Not
+    // every caller passes one (system-level notifications, the test push):
+    // those fall back to the service worker's own generic app icon.
+    const iconFullUrl = data.icon ? (origin ? (origin + data.icon) : data.icon) : null;
 
     if (isEnabled) {
       // Send Web Push
@@ -37,6 +45,7 @@ async function sendPushNotification(userId, title, body, data = {}, category = '
       const payload = JSON.stringify({
         title,
         body,
+        icon: iconFullUrl,
         data: { url: clickFullUrl }
       });
 
@@ -70,8 +79,11 @@ async function sendPushNotification(userId, title, body, data = {}, category = '
     }
 
     if (expoTokens.length > 0) {
+      // Expo's push API has no first-class "notification icon" field — this
+      // just passes the resolved avatar URL through in `data` for the native
+      // app to use if/when it's built to read it. Not a working image today.
       const expoMessages = expoTokens.map(token => ({
-        to: token, sound: 'default', title: title, body: body, data: data,
+        to: token, sound: 'default', title: title, body: body, data: { ...data, icon: iconFullUrl },
       }));
       await axios.post('https://exp.host/--/api/v2/push/send', expoMessages, {
         headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' }

@@ -141,6 +141,15 @@ module.exports = async function (fastify, opts) {
   // PUT retainer avatar
   fastify.put('/api/retainers/:id/avatar', { preHandler: [authRequired] }, async (req, reply) => {
     try {
+      const [[owner]] = await pool.query(
+        'SELECT c.user_id FROM retainers r JOIN characters c ON c.id = r.character_id WHERE r.id = ?',
+        [req.params.id]
+      );
+      if (!owner) return reply.status(404).send({ error: 'Retainer not found' });
+      if (owner.user_id !== req.user.id && req.user.role !== 'admin') {
+        return reply.status(403).send({ error: 'Not your retainer' });
+      }
+
       const fileData = await req.file();
       if (!fileData) return reply.status(400).send({ error: 'No file uploaded' });
       const rawBuffer = await fileData.toBuffer();

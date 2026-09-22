@@ -13,6 +13,9 @@ const { getSetting, setSetting } = require('../utils/settings');
 const { broadcastNtfyAlert } = require('../utils/ntfy');
 const { sendDiscordDM, sendDiscordMailNotifications } = require('../services/discord');
 const { runFeedingDecay } = require('../services/feedingDecay');
+const { sendPushNotification } = require('../services/push');
+const { flushQueuedMessages } = require('../services/commsQueue');
+const { resolveCommsSchedule } = require('../routes/comms');
 
 // ============================================================================
 // AUTOMATED LOGISTICS - DOWNTIME DEADLINE PINGS
@@ -238,8 +241,29 @@ function scheduleFeedingCycleDecay() {
   });
 }
 
+// ============================================================================
+// QUEUED NPC MESSAGE FLUSH (SchreckNet + SurfaceWeb)
+// ============================================================================
+// Every minute: safety net for schedule-based comms openings. The admin's
+// manual on/off toggle already flushes instantly from routes/comms.js — this
+// only matters when comms open on their own via the day-by-day schedule.
+function scheduleQueuedMessageFlush(io) {
+  return cron.schedule('* * * * *', async () => {
+    try {
+      const masterEnabled = await getSetting('comms_enabled', 'true');
+      const scheduleStr = await getSetting('chat_schedule', '{}');
+      const { isCommsEnabled } = resolveCommsSchedule(scheduleStr, masterEnabled);
+      if (!isCommsEnabled) return;
+
+      await flushQueuedMessages(pool, { log, sendPushNotification, io });
+    } catch (error) {
+      log.err('Queued message flush cron failed', { error: error.message });
+    }
+  });
+}
+
 let started = false;
-function startJobs() {
+function startJobs(fastify) {
   if (started) return;
   started = true;
   scheduleDowntimeDeadlinePings();
@@ -248,6 +272,7 @@ function startJobs() {
   scheduleDailySummary();
   scheduleNightlyBackup();
   scheduleFeedingCycleDecay();
+  scheduleQueuedMessageFlush(fastify?.io);
   log.start('Background jobs scheduled.');
 }
 

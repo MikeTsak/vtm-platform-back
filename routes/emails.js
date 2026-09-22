@@ -102,25 +102,29 @@ module.exports = async function (fastify, opts) {
   // 6. Reply as the Identity (Admin View & Player Push)
   fastify.post('/api/admin/emails/reply', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const { thread_id, body } = req.body;
+      const { thread_id, body, queue } = req.body;
       if (!body || !thread_id) return reply.status(400).json({ error: 'Missing body' });
 
-      await pool.query(`INSERT INTO email_messages (thread_id, sender_type, body, is_read) VALUES (?, 'identity', ?, 0)`, [thread_id, body]);
-      await pool.query(`UPDATE email_threads SET updated_at=NOW() WHERE id=?`, [thread_id]);
+      const status = queue ? 'queued' : 'sent';
+      await pool.query(`INSERT INTO email_messages (thread_id, sender_type, body, is_read, status) VALUES (?, 'identity', ?, 0, ?)`, [thread_id, body, status]);
 
-      // --- NEW: SEND PUSH TO PLAYER ---
-      try {
-        const [[thread]] = await pool.query('SELECT user_id, identity_id, subject FROM email_threads WHERE id=?', [thread_id]);
-        const [[identity]] = await pool.query('SELECT display_name FROM email_identities WHERE id=?', [thread.identity_id]);
+      if (status === 'sent') {
+        await pool.query(`UPDATE email_threads SET updated_at=NOW() WHERE id=?`, [thread_id]);
 
-        const pushTitle = `📧 Reply from ${identity?.display_name || 'NPC'}`;
-        const pushBody = `Re: ${thread.subject}`;
+        // --- NEW: SEND PUSH TO PLAYER ---
+        try {
+          const [[thread]] = await pool.query('SELECT user_id, identity_id, subject FROM email_threads WHERE id=?', [thread_id]);
+          const [[identity]] = await pool.query('SELECT display_name FROM email_identities WHERE id=?', [thread.identity_id]);
 
-        await sendPushNotification(thread.user_id, pushTitle, pushBody).catch(() => { });
-      } catch (e) { log.err('Email push to player failed', { error: e.message }); }
-      // --------------------------------
+          const pushTitle = `📧 Reply from ${identity?.display_name || 'NPC'}`;
+          const pushBody = `Re: ${thread.subject}`;
 
-      reply.send({ ok: true });
+          await sendPushNotification(thread.user_id, pushTitle, pushBody, { url: '/surfaceweb', icon: `/api/identities/${thread.identity_id}/avatar` }, 'chat').catch(() => { });
+        } catch (e) { log.err('Email push to player failed', { error: e.message }); }
+        // --------------------------------
+      }
+
+      reply.send({ ok: true, status });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to reply' });
     }
@@ -145,16 +149,18 @@ module.exports = async function (fastify, opts) {
           SELECT thread_id, body,
                  ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY created_at DESC) as rn
           FROM email_messages
+          WHERE status = 'sent'
         ) ordered_msgs
         WHERE rn = 1
       ) snip ON snip.thread_id = t.id
       LEFT JOIN (
         SELECT thread_id, COUNT(*) as unread_count
         FROM email_messages
-        WHERE sender_type = 'identity' AND is_read = 0
+        WHERE sender_type = 'identity' AND is_read = 0 AND status = 'sent'
         GROUP BY thread_id
       ) um ON um.thread_id = t.id
       WHERE t.user_id = ?
+        AND EXISTS (SELECT 1 FROM email_messages em WHERE em.thread_id = t.id AND em.status = 'sent')
       ORDER BY t.updated_at DESC
     `, [req.user.id]);
       reply.send({ threads });
@@ -170,10 +176,10 @@ module.exports = async function (fastify, opts) {
       if (!check.length) return reply.status(403).json({ error: 'Forbidden' });
 
       const [messages] = await pool.query(`
-      SELECT * FROM email_messages WHERE thread_id=? ORDER BY created_at ASC
+      SELECT * FROM email_messages WHERE thread_id=? AND status='sent' ORDER BY created_at ASC
     `, [req.params.id]);
 
-      await pool.query(`UPDATE email_messages SET is_read=1 WHERE thread_id=? AND sender_type='identity'`, [req.params.id]);
+      await pool.query(`UPDATE email_messages SET is_read=1 WHERE thread_id=? AND sender_type='identity' AND status='sent'`, [req.params.id]);
 
       reply.send({ messages });
     } catch (e) {
@@ -225,7 +231,7 @@ module.exports = async function (fastify, opts) {
         const pushBody = `From ${player?.display_name}: ${subject || 'New Reply'}`;
 
         for (const admin of admins) {
-          if (admin.id !== req.user.id) await sendPushNotification(admin.id, pushTitle, pushBody).catch(() => { });
+          if (admin.id !== req.user.id) await sendPushNotification(admin.id, pushTitle, pushBody, { url: '/surfaceweb', icon: `/api/users/${req.user.id}/avatar` }, 'chat').catch(() => { });
         }
       } catch (e) { log.err('Email push to admin failed', { error: e.message }); }
       // --------------------------------
@@ -241,9 +247,11 @@ module.exports = async function (fastify, opts) {
   });
 
   // ADMIN: Get all email messages (for stats)
+  // Excludes still-queued drafts — a message that hasn't actually been sent
+  // yet shouldn't count toward sent-message stats.
   fastify.get('/api/admin/emails/messages/all', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const [messages] = await pool.query('SELECT * FROM email_messages');
+      const [messages] = await pool.query(`SELECT * FROM email_messages WHERE status = 'sent'`);
       reply.send({ messages });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to fetch email messages' });
@@ -254,10 +262,11 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/admin/emails/dm', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const conn = await pool.getConnection();
     try {
-      const { email_address, display_name, user_id, subject, body } = req.body;
+      const { email_address, display_name, user_id, subject, body, queue } = req.body;
       if (!email_address || !display_name || !user_id || !subject || !body) {
         return reply.status(400).json({ error: 'Missing required fields' });
       }
+      const status = queue ? 'queued' : 'sent';
 
       const email = email_address.trim().toLowerCase();
       if (!email.includes('@')) return reply.status(400).json({ error: 'Invalid email format' });
@@ -286,27 +295,73 @@ module.exports = async function (fastify, opts) {
 
       // Insert first message as the identity (admin speaking as NPC)
       await conn.query(
-        `INSERT INTO email_messages (thread_id, sender_type, body, is_read) VALUES (?, 'identity', ?, 0)`,
-        [threadId, body]
+        `INSERT INTO email_messages (thread_id, sender_type, body, is_read, status) VALUES (?, 'identity', ?, 0, ?)`,
+        [threadId, body, status]
       );
 
       await conn.commit();
 
-      // Push notification to the target player
-      try {
-        const pushTitle = `📧 New message from ${display_name}`;
-        const pushBody = `Re: ${subject}`;
-        await sendPushNotification(user_id, pushTitle, pushBody).catch(() => {});
-      } catch (e) { log.err('Admin DM push failed', { error: e.message }); }
+      if (status === 'sent') {
+        // Push notification to the target player
+        try {
+          const pushTitle = `📧 New message from ${display_name}`;
+          const pushBody = `Re: ${subject}`;
+          await sendPushNotification(user_id, pushTitle, pushBody, { url: '/surfaceweb', icon: `/api/identities/${identity.id}/avatar` }, 'chat').catch(() => {});
+        } catch (e) { log.err('Admin DM push failed', { error: e.message }); }
+      }
 
-      log.adm('Admin created DM thread', { admin: req.user.id, target_user: user_id, identity: email });
-      reply.send({ ok: true, thread_id: threadId, identity_id: identity.id });
+      log.adm('Admin created DM thread', { admin: req.user.id, target_user: user_id, identity: email, status });
+      reply.send({ ok: true, thread_id: threadId, identity_id: identity.id, status });
     } catch (e) {
       await conn.rollback();
       log.err('Admin DM failed', { message: e.message });
       reply.status(500).json({ error: 'Failed to create DM' });
     } finally {
       conn.release();
+    }
+  });
+
+  // 8. Admin: list all currently-queued NPC-identity emails, across every thread
+  fastify.get('/api/admin/emails/queued', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const [rows] = await pool.query(`
+        SELECT m.id, m.thread_id, m.body, m.created_at,
+               t.subject, t.user_id, u.display_name AS user_display_name, c.name AS char_name,
+               i.display_name AS identity_name, i.email_address
+        FROM email_messages m
+        JOIN email_threads t ON t.id = m.thread_id
+        JOIN users u ON u.id = t.user_id
+        LEFT JOIN characters c ON c.user_id = u.id
+        JOIN email_identities i ON i.id = t.identity_id
+        WHERE m.status = 'queued'
+        ORDER BY m.created_at ASC
+      `);
+      reply.send({ queued: rows });
+    } catch (e) {
+      log.err('Admin fetch queued emails failed', { message: e.message });
+      reply.status(500).json({ error: 'Failed to fetch queued emails' });
+    }
+  });
+
+  // 9. Admin: cancel a queued email before it sends
+  fastify.delete('/api/admin/emails/queued/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const [[msg]] = await pool.query(`SELECT thread_id FROM email_messages WHERE id=? AND status='queued'`, [req.params.id]);
+      if (!msg) return reply.status(404).json({ error: 'Queued message not found' });
+
+      await pool.query(`DELETE FROM email_messages WHERE id=?`, [req.params.id]);
+
+      // If that was a brand-new DM thread's only message, don't leave an
+      // empty thread behind in the admin's inbox.
+      const [[remaining]] = await pool.query(`SELECT COUNT(*) AS c FROM email_messages WHERE thread_id=?`, [msg.thread_id]);
+      if (remaining.c === 0) {
+        await pool.query(`DELETE FROM email_threads WHERE id=?`, [msg.thread_id]);
+      }
+
+      reply.send({ ok: true });
+    } catch (e) {
+      log.err('Admin cancel queued email failed', { message: e.message });
+      reply.status(500).json({ error: 'Failed to cancel queued email' });
     }
   });
 };

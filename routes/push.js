@@ -61,7 +61,9 @@ module.exports = async function (fastify, opts) {
     try {
       const { category } = req.body || {};
       const notifCategory = category === 'chat' ? 'chat' : 'system';
-      await sendPushNotification(req.user.id, `🔔 Test: ${notifCategory.toUpperCase()}`, `If you can read this, background ${notifCategory} push works!`, { url: '/comms', tag: 'push-test' }, notifCategory);
+      // Uses your own avatar as the icon so this doubles as a live check that
+      // notification icons actually render, not just that push delivery works.
+      await sendPushNotification(req.user.id, `🔔 Test: ${notifCategory.toUpperCase()}`, `If you can read this, background ${notifCategory} push works!`, { url: '/comms', tag: 'push-test', icon: `/api/users/${req.user.id}/avatar` }, notifCategory);
       reply.send({ ok: true });
     } catch (e) {
       log.err('Push test failed', { message: e.message });

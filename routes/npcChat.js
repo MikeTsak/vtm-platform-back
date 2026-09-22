@@ -11,10 +11,10 @@ module.exports = async function (fastify, opts) {
     try {
       const [rows] = await pool.query(`
       SELECT 
-        u.id AS user_id, 
-        u.display_name, 
-        c.name AS char_name, 
-        MAX(m.created_at) AS last_message_at,
+        u.id AS user_id,
+        u.display_name,
+        c.name AS char_name,
+        MAX(CASE WHEN m.status != 'queued' THEN m.created_at END) AS last_message_at,
         COUNT(CASE WHEN m.from_side = 'user' AND m.read_at IS NULL THEN 1 END) as unread_count
       FROM npc_messages m
       JOIN users u ON m.user_id = u.id
@@ -39,7 +39,7 @@ module.exports = async function (fastify, opts) {
     try {
       // FIX: Changed to npc_messages
       const [messages] = await pool.query(
-        `SELECT id, body, from_side, created_at, attachment_id
+        `SELECT id, body, from_side, created_at, attachment_id, status
         FROM npc_messages
         WHERE npc_id = ? AND user_id = ?
         ORDER BY created_at ASC`,
@@ -104,7 +104,7 @@ module.exports = async function (fastify, opts) {
       const [rows] = await pool.query(
         `SELECT id, npc_id, user_id, from_side, body, created_at, attachment_id
         FROM npc_messages
-        WHERE npc_id=? AND user_id=?
+        WHERE npc_id=? AND user_id=? AND status != 'queued'
         ORDER BY created_at ASC`,
         [npcId, userId]
       );
@@ -168,7 +168,7 @@ module.exports = async function (fastify, opts) {
           // Prevent sending a push to the admin if the admin is the one testing/playing as a user
           if (admin.id !== userId) {
             // Web Push
-            await sendPushNotification(admin.id, notifTitle, notifBody).catch(() => { });
+            await sendPushNotification(admin.id, notifTitle, notifBody, { url: '/schrecknet', icon: `/api/users/${userId}/avatar` }, 'chat').catch(() => { });
 
             // Ntfy Push (Only if subscribed)
             if (admin.ntfy_topic && admin.ntfy_subscribed_npcs) {
@@ -206,7 +206,7 @@ module.exports = async function (fastify, opts) {
       if (!npcId || !userId) return reply.status(400).json({ error: 'npc_id and user_id are required' });
 
       const [rows] = await pool.query(
-        `SELECT id, npc_id, user_id, from_side, body, created_at, attachment_id
+        `SELECT id, npc_id, user_id, from_side, body, created_at, attachment_id, status
         FROM npc_messages
         WHERE npc_id=? AND user_id=?
         ORDER BY created_at ASC`,
@@ -227,14 +227,16 @@ module.exports = async function (fastify, opts) {
 
   fastify.post('/api/admin/chat/npc/messages', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const { npc_id, user_id, body, attachment_id } = req.body || {};
+      const { npc_id, user_id, body, attachment_id, queue } = req.body || {};
       if (!npc_id || !user_id || (!attachment_id && (!body || !body.trim()))) {
         return reply.status(400).json({ error: 'Missing fields' });
       }
 
+      const status = queue ? 'queued' : 'sent';
+
       const [r] = await pool.query(
-        'INSERT INTO npc_messages (npc_id, user_id, from_side, body, attachment_id) VALUES (?,?,?,?,?)',
-        [Number(npc_id), Number(user_id), 'npc', body ? body.trim() : '', attachment_id || null]
+        'INSERT INTO npc_messages (npc_id, user_id, from_side, body, attachment_id, status) VALUES (?,?,?,?,?,?)',
+        [Number(npc_id), Number(user_id), 'npc', body ? body.trim() : '', attachment_id || null, status]
       );
 
       // FIX: Define the message object so notifications and the response don't crash
@@ -245,26 +247,33 @@ module.exports = async function (fastify, opts) {
         from_side: 'npc',
         body: body ? body.trim() : '',
         attachment_id: attachment_id || null,
-        created_at: new Date()
+        created_at: new Date(),
+        status
       };
 
-      // --- NEW: PUSH NOTIFICATION TO PLAYER ---
-      try {
-        // Find the NPC name so the player knows who is replying
-        const [[npcInfo]] = await pool.query('SELECT name FROM npcs WHERE id=?', [npc_id]);
-        const npcName = npcInfo?.name || 'NPC';
-        const notifBody = message.attachment_id ? '📷 Image Attachment' : message.body;
+      if (status === 'sent') {
+        // --- NEW: PUSH NOTIFICATION TO PLAYER ---
+        try {
+          // Find the NPC name so the player knows who is replying
+          const [[npcInfo]] = await pool.query('SELECT name FROM npcs WHERE id=?', [npc_id]);
+          const npcName = npcInfo?.name || 'NPC';
+          const notifBody = message.attachment_id ? '📷 Image Attachment' : message.body;
 
-        // Send push directly to the player
-        await sendPushNotification(user_id, npcName, notifBody).catch(() => { });
-      } catch (pushErr) {
-        log.err('Failed to notify player of NPC reply', { error: pushErr.message });
-      }
-      // ----------------------------------------
+          // Send push directly to the player
+          await sendPushNotification(user_id, npcName, notifBody, { url: '/schrecknet', icon: `/api/npcs/${npc_id}/avatar` }, 'chat').catch(() => { });
+        } catch (pushErr) {
+          log.err('Failed to notify player of NPC reply', { error: pushErr.message });
+        }
+        // ----------------------------------------
 
-      if (fastify.io) {
-        fastify.io.to(`user_${user_id}`).emit('chat:refresh', { type: 'npc', partnerId: Number(npc_id) });
-        fastify.io.to('admin_chat').emit('chat:refresh', { type: 'npc', partnerId: Number(npc_id), userId: Number(user_id) });
+        if (fastify.io) {
+          fastify.io.to(`user_${user_id}`).emit('chat:refresh', { type: 'npc', partnerId: Number(npc_id) });
+          fastify.io.to('admin_chat').emit('chat:refresh', { type: 'npc', partnerId: Number(npc_id), userId: Number(user_id) });
+        }
+      } else if (fastify.io) {
+        // Queued: don't leak anything to the player yet — just nudge other
+        // admins' Pending panels.
+        fastify.io.to('admin_chat').emit('chat:refresh', { type: 'npc', partnerId: Number(npc_id), userId: Number(user_id), queued: true });
       }
 
       reply.status(201).json({ message });
@@ -273,11 +282,45 @@ module.exports = async function (fastify, opts) {
     }
   });
 
+  // --- Admin: list all currently-queued NPC messages, across every NPC/player ---
+  fastify.get('/api/admin/chat/npc/queued', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const [rows] = await pool.query(`
+        SELECT m.id, m.npc_id, m.user_id, m.body, m.created_at, m.attachment_id,
+               n.name AS npc_name, u.display_name AS user_display_name, c.name AS char_name
+        FROM npc_messages m
+        JOIN npcs n ON n.id = m.npc_id
+        JOIN users u ON u.id = m.user_id
+        LEFT JOIN characters c ON c.user_id = u.id
+        WHERE m.status = 'queued'
+        ORDER BY m.created_at ASC
+      `);
+      reply.send({ queued: rows });
+    } catch (e) {
+      log.err('Admin fetch queued NPC messages failed', { message: e.message });
+      reply.status(500).json({ error: 'Failed to fetch queued messages' });
+    }
+  });
+
+  // --- Admin: cancel a queued NPC message before it sends ---
+  fastify.delete('/api/admin/chat/npc/queued/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const [result] = await pool.query(`DELETE FROM npc_messages WHERE id=? AND status='queued'`, [req.params.id]);
+      if (!result.affectedRows) return reply.status(404).json({ error: 'Queued message not found' });
+
+      if (fastify.io) fastify.io.to('admin_chat').emit('chat:refresh', { type: 'npc_queue_cancelled' });
+      reply.send({ ok: true });
+    } catch (e) {
+      log.err('Admin cancel queued NPC message failed', { message: e.message });
+      reply.status(500).json({ error: 'Failed to cancel queued message' });
+    }
+  });
+
   // Admin: fetch ALL NPC chat messages (flat list)
   fastify.get('/api/admin/chat/npc/all', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const [rows] = await pool.query(`
-      SELECT id, npc_id, user_id, from_side, body, created_at
+      SELECT id, npc_id, user_id, from_side, body, created_at, status
       FROM npc_messages
       ORDER BY created_at ASC
     `);
@@ -290,11 +333,14 @@ module.exports = async function (fastify, opts) {
   });
 
   // Court/Admin: fetch ALL NPC messages
+  // Court users are not admins — a still-queued reply must stay invisible to
+  // them exactly like it does to the player until an admin actually sends it.
   fastify.get('/api/court/chat/npc/all', { preHandler: [authRequired, requireCourt] }, async (req, reply) => {
     try {
       const [rows] = await pool.query(`
       SELECT id, npc_id, user_id, from_side, body, created_at
       FROM npc_messages
+      WHERE status != 'queued'
       ORDER BY created_at ASC
     `);
       reply.send({ messages: rows });

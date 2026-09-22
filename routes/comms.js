@@ -3,6 +3,7 @@
 // SchreckNet availability window: whether comms are open, and the schedule
 // that opens them.
 const { getSetting, setSetting, clearSettingCache } = require('../utils/settings');
+const { flushQueuedMessages } = require('../services/commsQueue');
 
 function resolveCommsSchedule(scheduleStr, masterEnabledStr, nowInput = new Date()) {
   const masterEnabled = masterEnabledStr === 'true';
@@ -124,7 +125,7 @@ function resolveCommsSchedule(scheduleStr, masterEnabledStr, nowInput = new Date
 }
 
 module.exports = async function (fastify, opts) {
-  const { log, authRequired, requireAdmin, io } = opts;
+  const { pool, log, authRequired, requireAdmin, sendPushNotification, io } = opts;
 
   // Public: Check if comms are enabled and when they next open
   fastify.get('/api/comms/status', { preHandler: [authRequired] }, async (req, reply) => {
@@ -161,6 +162,11 @@ module.exports = async function (fastify, opts) {
       };
       if (io) io.emit('comms:status', payload);
       else if (fastify.io) fastify.io.emit('comms:status', payload);
+
+      if (info.isCommsEnabled) {
+        flushQueuedMessages(pool, { log, sendPushNotification, io: io || fastify.io })
+          .catch((e) => log.err('Queued message flush failed', { error: e.message }));
+      }
 
       reply.send({ ok: true, comms_enabled: info.isCommsEnabled, next_opening: info.nextOpening });
     } catch (e) {
@@ -201,9 +207,16 @@ module.exports = async function (fastify, opts) {
       if (io) io.emit('comms:status', payload);
       else if (fastify.io) fastify.io.emit('comms:status', payload);
 
+      if (info.isCommsEnabled) {
+        flushQueuedMessages(pool, { log, sendPushNotification, io: io || fastify.io })
+          .catch((e) => log.err('Queued message flush failed', { error: e.message }));
+      }
+
       reply.send({ ok: true, comms_enabled: info.isCommsEnabled, next_opening: info.nextOpening });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to update comms schedule' });
     }
   });
 };
+
+module.exports.resolveCommsSchedule = resolveCommsSchedule;

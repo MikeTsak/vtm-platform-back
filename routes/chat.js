@@ -6,6 +6,30 @@
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, moderateLimiter, uploadLimiter, sendPushNotification, sharp } = opts;
 
+  // A chat_media row is visible to whoever uploaded it, or to a participant
+  // of whichever message (DM / group / NPC) actually references it as its
+  // attachment_id — not to any authenticated user who can guess its numeric
+  // id. Admins can always see everything (moderation).
+  async function canAccessChatMedia(mediaId, user) {
+    if (!mediaId || !user) return false;
+    if (user.role === 'admin') return true;
+
+    const [rows] = await pool.query(
+      `SELECT 1 FROM chat_media WHERE id = ? AND uploader_id = ?
+       UNION
+       SELECT 1 FROM chat_messages WHERE attachment_id = ? AND (sender_id = ? OR recipient_id = ?)
+       UNION
+       SELECT 1 FROM npc_messages WHERE attachment_id = ? AND user_id = ?
+       UNION
+       SELECT 1 FROM chat_group_messages gm
+         JOIN chat_group_members mem ON mem.group_id = gm.group_id AND mem.user_id = ?
+       WHERE gm.attachment_id = ?
+       LIMIT 1`,
+      [mediaId, user.id, mediaId, user.id, user.id, mediaId, user.id, user.id, mediaId]
+    );
+    return rows.length > 0;
+  }
+
   fastify.get('/api/chat/my-recent', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const userId = req.user.id;
@@ -21,10 +45,10 @@ module.exports = async function (fastify, opts) {
        LEFT JOIN (
          SELECT npc_id, COUNT(*) as unread_count
          FROM npc_messages
-         WHERE user_id = ? AND from_side = 'npc' AND read_at IS NULL
+         WHERE user_id = ? AND from_side = 'npc' AND read_at IS NULL AND status != 'queued'
          GROUP BY npc_id
        ) u ON u.npc_id = m.npc_id
-       WHERE m.user_id = ? AND IFNULL(n.is_disabled, 0) = 0
+       WHERE m.user_id = ? AND IFNULL(n.is_disabled, 0) = 0 AND m.status != 'queued'
        ORDER BY m.created_at DESC LIMIT ?`,
         [userId, userId, limit]
       );
@@ -132,6 +156,8 @@ module.exports = async function (fastify, opts) {
     // requests, so there's no need for a token in the URL).
     try {
       const id = Number(req.params.id);
+      if (!(await canAccessChatMedia(id, req.user))) return reply.status(404).send('Not found');
+
       const [rows] = await pool.query('SELECT mime, size, data FROM chat_media WHERE id=?', [id]);
       if (!rows.length) return reply.status(404).send('Not found');
 
@@ -159,8 +185,8 @@ module.exports = async function (fastify, opts) {
       // έχουν δημιουργηθεί μετά το last_read_at του συγκεκριμένου χρήστη στην ομάδα.
       // Ταξινόμηση ώστε οι ομάδες με αδιάβαστα να πηγαίνουν πάνω, και μετά να ταξινομούνται ανά παλαιότητα.
       const [rows] = await pool.query(`
-      SELECT 
-        g.id, g.name, g.created_by, g.created_at as group_created_at,
+      SELECT
+        g.id, g.name, g.icon, g.created_by, g.created_at as group_created_at,
         COALESCE(
           (
             SELECT created_at 
@@ -206,15 +232,19 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/chat/groups', { preHandler: [authRequired, moderateLimiter] }, async (req, reply) => {
     const conn = await pool.getConnection();
     try {
-      const { name, members = [] } = req.body; // members is array of user_ids
+      const { name, members = [], icon } = req.body; // members is array of user_ids
       if (!name || !members.length) {
         return reply.status(400).json({ error: 'Name and at least one other member required' });
       }
+      // icon: a literal emoji character, or a ':Clan_Name:' crest token
+      // (same convention as chat_message_reactions.emoji) — capped the same
+      // way for the same reason (varchar column, arbitrary client input).
+      const groupIcon = typeof icon === 'string' && icon.trim() && icon.length <= 32 ? icon.trim() : null;
 
       await conn.beginTransaction();
 
       // 1. Create Group
-      const [g] = await conn.query('INSERT INTO chat_groups (name, created_by) VALUES (?, ?)', [name.trim(), req.user.id]);
+      const [g] = await conn.query('INSERT INTO chat_groups (name, icon, created_by) VALUES (?, ?, ?)', [name.trim(), groupIcon, req.user.id]);
       const groupId = g.insertId;
 
       // 2. Add Creator to Members
@@ -350,6 +380,29 @@ module.exports = async function (fastify, opts) {
     }
   });
 
+  // Set/change a group's picture — a literal emoji or a ':Clan_Name:' crest
+  // token (Creator/Admin only). Lets a group created before this existed
+  // pick one too, not just new ones.
+  fastify.put('/api/chat/groups/:id/icon', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const groupId = Number(req.params.id);
+      const { icon } = req.body || {};
+      const groupIcon = typeof icon === 'string' && icon.trim() && icon.length <= 32 ? icon.trim() : null;
+
+      const [g] = await pool.query('SELECT created_by FROM chat_groups WHERE id=?', [groupId]);
+      if (!g.length) return reply.status(404).json({ error: 'Group not found' });
+      if (g[0].created_by !== req.user.id && req.user.role !== 'admin') return reply.status(403).json({ error: 'Only the creator can change this group\'s picture' });
+
+      await pool.query('UPDATE chat_groups SET icon=? WHERE id=?', [groupIcon, groupId]);
+
+      if (fastify.io) fastify.io.to(`group_${groupId}`).emit('chat:refresh', { type: 'group', groupId });
+      reply.send({ ok: true, icon: groupIcon });
+    } catch (e) {
+      log.err('Failed to update group icon', { message: e.message });
+      reply.status(500).json({ error: 'Failed to update group picture' });
+    }
+  });
+
   // Send a message to a group
   fastify.post('/api/chat/groups/:id/messages', { preHandler: [authRequired] }, async (req, reply) => {
     try {
@@ -398,7 +451,7 @@ module.exports = async function (fastify, opts) {
 
         // 4. Στέλνουμε push notification στο κάθε μέλος
         for (const member of members) {
-          await sendPushNotification(member.user_id, notifTitle, notifBody, { url: '/schrecknet' }, 'chat').catch(() => { });
+          await sendPushNotification(member.user_id, notifTitle, notifBody, { url: '/schrecknet', icon: `/api/users/${req.user.id}/avatar` }, 'chat').catch(() => { });
         }
       } catch (pushErr) {
         log.err('Failed to notify group members', { error: pushErr.message });
@@ -549,7 +602,7 @@ module.exports = async function (fastify, opts) {
       FROM npcs n
       LEFT JOIN (
         SELECT npc_id,
-               MAX(created_at) as last_message_at,
+               MAX(CASE WHEN status != 'queued' THEN created_at END) as last_message_at,
                COUNT(CASE WHEN from_side = 'user' AND read_at IS NULL THEN 1 END) as unread_count
         FROM npc_messages
         GROUP BY npc_id
@@ -565,8 +618,8 @@ module.exports = async function (fastify, opts) {
       FROM npcs n
       LEFT JOIN (
         SELECT npc_id,
-               MAX(created_at) as last_message_at,
-               COUNT(CASE WHEN from_side = 'npc' AND read_at IS NULL THEN 1 END) as unread_count
+               MAX(CASE WHEN status != 'queued' THEN created_at END) as last_message_at,
+               COUNT(CASE WHEN from_side = 'npc' AND read_at IS NULL AND status != 'queued' THEN 1 END) as unread_count
         FROM npc_messages
         WHERE user_id = ?
         GROUP BY npc_id
@@ -639,11 +692,16 @@ module.exports = async function (fastify, opts) {
         [r.insertId]
       );
 
+      // Was missing category: 'chat' — it fell through to the default
+      // 'system' category, so a player who'd only enabled chat
+      // notifications (not system) never got pushed for a DM at all.
       sendPushNotification(
         recipient_id,
         message.sender_name,
-        message.attachment_id ? '📷 Image Attachment' : message.body
-      );
+        message.attachment_id ? '📷 Image Attachment' : message.body,
+        { url: '/schrecknet', icon: `/api/users/${req.user.id}/avatar` },
+        'chat'
+      ).catch(() => {});
 
       if (fastify.io) {
         fastify.io.to(`user_${recipient_id}`).emit('chat:refresh', { type: 'user', partnerId: req.user.id });
@@ -708,8 +766,30 @@ module.exports = async function (fastify, opts) {
       }));
 
       if (fastify.io) {
-        fastify.io.emit('chat:reactions', { table, messageId });
-        fastify.io.emit('chat:refresh', { type: 'reaction', table, messageId });
+        const payload = { table, messageId };
+        const rooms = [];
+        try {
+          if (table === 'chat_messages') {
+            const [[m]] = await pool.query('SELECT sender_id, recipient_id FROM chat_messages WHERE id=?', [messageId]);
+            if (m) rooms.push(`user_${m.sender_id}`, `user_${m.recipient_id}`);
+          } else if (table === 'chat_group_messages') {
+            const [[m]] = await pool.query('SELECT group_id FROM chat_group_messages WHERE id=?', [messageId]);
+            if (m) rooms.push(`group_${m.group_id}`);
+          } else if (table === 'npc_messages') {
+            const [[m]] = await pool.query('SELECT user_id FROM npc_messages WHERE id=?', [messageId]);
+            if (m) rooms.push(`user_${m.user_id}`, 'admin_chat');
+          }
+        } catch (e) { /* fall through to a best-effort broadcast below */ }
+
+        if (rooms.length) {
+          for (const room of rooms) {
+            fastify.io.to(room).emit('chat:reactions', payload);
+            fastify.io.to(room).emit('chat:refresh', { type: 'reaction', ...payload });
+          }
+        } else {
+          fastify.io.emit('chat:reactions', payload);
+          fastify.io.emit('chat:refresh', { type: 'reaction', ...payload });
+        }
       }
 
       reply.send({ reactions });
@@ -786,7 +866,10 @@ module.exports = async function (fastify, opts) {
   // GET /api/chat/media/:id/info
   fastify.get('/api/chat/media/:id/info', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      const [rows] = await pool.query('SELECT data_url, data, mime FROM chat_media WHERE id=?', [req.params.id]);
+      const id = Number(req.params.id);
+      if (!(await canAccessChatMedia(id, req.user))) return reply.status(404).send('Not found');
+
+      const [rows] = await pool.query('SELECT data_url, data, mime FROM chat_media WHERE id=?', [id]);
       if (!rows.length) return reply.status(404).send('Not found');
 
       let url = rows[0].data_url;
@@ -822,6 +905,42 @@ module.exports = async function (fastify, opts) {
 
   /* --- Edit & Delete Messages (4-Hour Window) --- */
 
+  // Has the other side of this conversation sent anything since `msg` was
+  // sent? If so, it's already been "answered" and can no longer be edited —
+  // changing it after the fact would retroactively rewrite what the other
+  // party actually replied to.
+  async function hasBeenAnsweredSince(tableName, msg) {
+    if (tableName === 'chat_messages') {
+      const [rows] = await pool.query(
+        `SELECT 1 FROM chat_messages
+         WHERE created_at > ? AND sender_id = ? AND recipient_id = ?
+         LIMIT 1`,
+        [msg.created_at, msg.recipient_id, msg.sender_id]
+      );
+      return rows.length > 0;
+    }
+    if (tableName === 'chat_group_messages') {
+      const [rows] = await pool.query(
+        `SELECT 1 FROM chat_group_messages
+         WHERE group_id = ? AND created_at > ? AND sender_id != ?
+         LIMIT 1`,
+        [msg.group_id, msg.created_at, msg.sender_id]
+      );
+      return rows.length > 0;
+    }
+    if (tableName === 'npc_messages') {
+      const otherSide = msg.from_side === 'user' ? 'npc' : 'user';
+      const [rows] = await pool.query(
+        `SELECT 1 FROM npc_messages
+         WHERE npc_id = ? AND user_id = ? AND created_at > ? AND from_side = ?
+         LIMIT 1`,
+        [msg.npc_id, msg.user_id, msg.created_at, otherSide]
+      );
+      return rows.length > 0;
+    }
+    return false;
+  }
+
   // Universal Edit Message Route
   fastify.put('/api/chat/messages/:id', { preHandler: [authRequired] }, async (req, reply) => {
     try {
@@ -844,7 +963,7 @@ module.exports = async function (fastify, opts) {
 
       for (const table of tables) {
         const extraWhere = table.extraCondition ? ` AND ${table.extraCondition}` : '';
-        const [rows] = await pool.query(`SELECT id, ${table.senderCol} as sender_id, created_at FROM ${table.name} WHERE id = ?${extraWhere}`, [msgId]);
+        const [rows] = await pool.query(`SELECT *, ${table.senderCol} as sender_id FROM ${table.name} WHERE id = ?${extraWhere}`, [msgId]);
 
         if (rows.length > 0) {
           const msg = rows[0];
@@ -856,6 +975,9 @@ module.exports = async function (fastify, opts) {
           }
           if (Date.now() - new Date(msg.created_at).getTime() > FOUR_HOURS && !isAdmin) {
             return reply.status(403).json({ error: 'You can only edit a message within 4 hours of sending.' });
+          }
+          if (!isAdmin && await hasBeenAnsweredSince(table.name, msg)) {
+            return reply.status(403).json({ error: 'This message has already been answered and can no longer be edited.' });
           }
 
           await pool.query(`UPDATE ${table.name} SET body = ?, edited = 1 WHERE id = ?`, [body.trim(), msgId]);

@@ -79,7 +79,7 @@ fastify
       bootMs: Date.now() - bootStartedAt,
     });
 
-    startJobs();
+    startJobs(fastify);
 
     // Track server start
     try {
