@@ -14,7 +14,8 @@ module.exports = async function (fastify, opts) {
     const [rows] = await pool.query(
       `SELECT u.id, u.email, u.display_name, u.role, u.discord_id,
             (u.avatar_url IS NOT NULL OR u.avatar_url_thumb IS NOT NULL) AS has_avatar,
-            c.id AS character_id, c.name AS char_name, c.clan, c.sheet, c.xp
+            c.id AS character_id, c.name AS char_name, c.clan, c.sheet, c.xp,
+            c.is_deceased, c.is_left, c.is_missing
      FROM users u
      LEFT JOIN characters c ON c.user_id=u.id
      ORDER BY u.created_at DESC`

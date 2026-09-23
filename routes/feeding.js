@@ -59,18 +59,23 @@ function hasRelevantSpecialty(sheet, predatorType, chosenSkill) {
   
   if (relevantGrantedSpecs.length === 0) return false;
 
+  // Granted specs like "Animal Ken: specific animal" are placeholders the
+  // player fills in, so any specialty in that skill counts.
+  const isPlaceholder = relevantGrantedSpecs.some(s => s.startsWith('specific'));
+  const matches = (specName) => isPlaceholder || relevantGrantedSpecs.includes(specName);
+
   if (Array.isArray(sheet.specialties)) {
     for (const specStr of sheet.specialties) {
       if (typeof specStr === 'string' && specStr.toLowerCase().startsWith(chosenSkill.toLowerCase() + ':')) {
         const specName = specStr.split(':')[1].trim().toLowerCase();
-        if (relevantGrantedSpecs.includes(specName)) return true;
+        if (specName && matches(specName)) return true;
       }
     }
   }
 
   if (sheet.skills && sheet.skills[chosenSkill] && Array.isArray(sheet.skills[chosenSkill].specialties)) {
     for (const specName of sheet.skills[chosenSkill].specialties) {
-      if (typeof specName === 'string' && relevantGrantedSpecs.includes(specName.trim().toLowerCase())) {
+      if (typeof specName === 'string' && specName.trim() && matches(specName.trim().toLowerCase())) {
         return true;
       }
     }
@@ -80,6 +85,38 @@ function hasRelevantSpecialty(sheet, predatorType, chosenSkill) {
 }
 
 const clamp = (v, min, max) => Math.max(min, Math.min(max, Number(v) || 0));
+
+// A missing/blank Hunger reads as 1 (a fresh sheet); 0 is a real value (GM-set).
+function readHunger(sheet) {
+  const raw = sheet?.hunger;
+  if (raw === undefined || raw === null || raw === '' || !Number.isFinite(Number(raw))) return 1;
+  return clamp(raw, 0, 5);
+}
+
+// House rule: Hunger after any feeding is always within 1..5. Only a GM
+// manual edit can set 0.
+function applyHungerDelta(current, delta) {
+  return Math.max(1, Math.min(5, current + delta));
+}
+
+// Outcomes that leave a trail; each gets a stored predatorFlavor line.
+const FAILURE_OUTCOMES = ['bestial_failure', 'failure', 'messy_critical'];
+
+// Herd background: stored in sheet.advantages.merits[] (not sheet.backgrounds[]).
+// Some entries only have a name field (no id), so fall back to name match.
+function getHerdDots(sheet) {
+  const merits = Array.isArray(sheet?.advantages?.merits) ? sheet.advantages.merits : [];
+  const herdEntry = merits.find(b =>
+    String(b.id || '').toLowerCase().includes('herd__herd') ||
+    String(b.name || '').toLowerCase() === 'herd'
+  );
+  return herdEntry ? clamp(Number(herdEntry.dots) || 0, 0, 5) : 0;
+}
+
+function parseJsonArray(v) {
+  if (Array.isArray(v)) return v;
+  try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a : []; } catch { return []; }
+}
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, sendPushNotification } = opts;
@@ -92,6 +129,25 @@ module.exports = async function (fastify, opts) {
 
   async function getCurrentCycle() {
     return resolveCurrentFeedingCycle();
+  }
+
+  // Runs fn(conn, character) in a transaction holding the character row lock
+  // (character is null if the row is gone). fn returns { code, body }.
+  async function withCharacterLock(characterId, fn) {
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [rows] = await conn.query('SELECT id, user_id, sheet FROM characters WHERE id=? FOR UPDATE', [characterId]);
+      const character = rows.length ? { ...rows[0], sheet: parseSheet(rows[0].sheet) } : null;
+      const result = await fn(conn, character);
+      await conn.commit();
+      return result;
+    } catch (err) {
+      await conn.rollback().catch(() => {});
+      throw err;
+    } finally {
+      conn.release();
+    }
   }
 
   async function isFeedingEnabled() {
@@ -129,14 +185,7 @@ module.exports = async function (fastify, opts) {
         [char.id, cycleIndex]
       );
 
-      // Herd background: stored in sheet.advantages.merits[] (not sheet.backgrounds[]).
-      // Some entries only have a name field (no id), so fall back to name match.
-      const sheetMerits = Array.isArray(char.sheet?.advantages?.merits) ? char.sheet.advantages.merits : [];
-      const herdEntry = sheetMerits.find(b =>
-        String(b.id || '').toLowerCase().includes('herd__herd') ||
-        String(b.name || '').toLowerCase() === 'herd'
-      );
-      const herdDots = herdEntry ? clamp(Number(herdEntry.dots) || 0, 0, 5) : 0;
+      const herdDots = getHerdDots(char.sheet);
 
       // herd_current tracks the available pool (starts = dots, depletes on use, regens +1/cycle).
       // Undefined means never used — treat as full.
@@ -204,45 +253,46 @@ module.exports = async function (fastify, opts) {
 
       const { cycleIndex } = await getCurrentCycle();
 
-      const [existing] = await pool.query(
-        "SELECT id, status FROM feedings WHERE character_id=? AND cycle_index=? AND status IN ('pending','resolved') LIMIT 1",
-        [char.id, cycleIndex]
-      );
-      if (existing.length) {
-        return reply.status(409).send({ error: 'You already have a feeding roll for this cycle.', feedingId: existing[0].id, status: existing[0].status });
-      }
+      // The character row lock serializes this against a double-submitted
+      // roll (or a concurrent Herd feed), so the one-per-cycle check holds.
+      const result = await withCharacterLock(char.id, async (conn, locked) => {
+        const [existing] = await conn.query(
+          "SELECT id, status FROM feedings WHERE character_id=? AND cycle_index=? AND status IN ('pending','resolved') LIMIT 1",
+          [char.id, cycleIndex]
+        );
+        if (existing.length) {
+          return { code: 409, body: { error: 'You already have a feeding roll for this cycle.', feedingId: existing[0].id, status: existing[0].status } };
+        }
 
-      const chosenPool = pools[poolIndex];
-      const basePool = getTraitValue(char.sheet, chosenPool.attribute) + getTraitValue(char.sheet, chosenPool.skill);
-      let specialtyBonus = 0;
-      if (hasRelevantSpecialty(char.sheet, predatorType, chosenPool.skill)) {
-        specialtyBonus = 1;
-      }
-      const { bonusDice, meritsApplied } = chasseBonus(division, predatorType);
-      const totalPool = clamp(basePool + specialtyBonus + bonusDice, 0, 30);
+        const sheet = locked.sheet;
+        const chosenPool = pools[poolIndex];
+        const basePool = getTraitValue(sheet, chosenPool.attribute) + getTraitValue(sheet, chosenPool.skill);
+        const specialtyBonus = hasRelevantSpecialty(sheet, predatorType, chosenPool.skill) ? 1 : 0;
+        const { bonusDice, meritsApplied } = chasseBonus(division, predatorType);
+        const totalPool = clamp(basePool + specialtyBonus + bonusDice, 0, 30);
 
-      const hunger = clamp(char.sheet?.hunger ?? 1, 0, 5);
-      const hungerCount = Math.min(totalPool, hunger);
-      const normalCount = totalPool - hungerCount;
-      const normalDice = rollDice(normalCount);
-      const hungerDice = rollDice(hungerCount);
-      const outcome = computeFeedingOutcome(normalDice, hungerDice, difficulty);
+        const hunger = readHunger(sheet);
+        const hungerCount = Math.min(totalPool, hunger);
+        const normalDice = rollDice(totalPool - hungerCount);
+        const hungerDice = rollDice(hungerCount);
+        const outcome = computeFeedingOutcome(normalDice, hungerDice, difficulty);
 
-      const [result] = await pool.query(
-        `INSERT INTO feedings
-          (character_id, division, predator_type, pool_label, dice_pool, difficulty, bonus_dice,
-           chasse_merits_applied, hunger_before, normal_dice, hunger_dice, outcome, status, cycle_index)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-        [
-          char.id, division, predatorType, chosenPool.pool, totalPool, difficulty, bonusDice,
-          JSON.stringify(meritsApplied), hunger, JSON.stringify(normalDice), JSON.stringify(hungerDice),
-          outcome.tier, cycleIndex,
-        ]
-      );
-
-      const [rows] = await pool.query('SELECT * FROM feedings WHERE id=?', [result.insertId]);
-      log.info('Feeding roll made', { character_id: char.id, division, tier: outcome.tier });
-      reply.send({ feeding: rows[0], projected: OUTCOME_DELTAS[outcome.tier] });
+        const [ins] = await conn.query(
+          `INSERT INTO feedings
+            (character_id, division, predator_type, pool_label, dice_pool, difficulty, bonus_dice,
+             chasse_merits_applied, hunger_before, normal_dice, hunger_dice, outcome, status, cycle_index)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+          [
+            char.id, division, predatorType, chosenPool.pool, totalPool, difficulty, bonusDice,
+            JSON.stringify(meritsApplied), hunger, JSON.stringify(normalDice), JSON.stringify(hungerDice),
+            outcome.tier, cycleIndex,
+          ]
+        );
+        const [rows] = await conn.query('SELECT * FROM feedings WHERE id=?', [ins.insertId]);
+        log.info('Feeding roll made', { character_id: char.id, division, tier: outcome.tier });
+        return { code: 200, body: { feeding: rows[0], projected: OUTCOME_DELTAS[outcome.tier] } };
+      });
+      reply.status(result.code).send(result.body);
     } catch (err) {
       log.err('POST /api/feeding/roll failed', { error: err.message });
       reply.status(500).send({ error: 'Database error making feeding roll' });
@@ -260,123 +310,124 @@ module.exports = async function (fastify, opts) {
       const char = await getMyCharacter(req.user.id);
       if (!char) return reply.status(404).send({ error: 'No character found for this account.' });
 
-      const { cycleIndex } = await getCurrentCycle();
-
-      // Already fed this cycle?
-      const [existing] = await pool.query(
-        "SELECT id, status FROM feedings WHERE character_id=? AND cycle_index=? AND status IN ('pending','resolved') LIMIT 1",
-        [char.id, cycleIndex]
-      );
-      if (existing.length) {
-        return reply.status(409).send({ error: 'You already have a feeding roll for this cycle.', feedingId: existing[0].id, status: existing[0].status });
-      }
-
-      // Herd background: stored in sheet.advantages.merits[] with id or name fallback
-      const merits = Array.isArray(char.sheet?.advantages?.merits) ? char.sheet.advantages.merits : [];
-      const herdEntry = merits.find(b =>
-        String(b.id || '').toLowerCase().includes('herd__herd') ||
-        String(b.name || '').toLowerCase() === 'herd'
-      );
-      const herdDots = herdEntry ? clamp(Number(herdEntry.dots) || 0, 0, 5) : 0;
-
-      if (herdDots < 1) {
-        return reply.status(400).send({ error: 'You do not have the Herd background.' });
-      }
-
-      // herd_current: initialize to full dots if never set, then clamp to [0, dots]
-      const rawCurrent = char.sheet.herd_current !== undefined ? Number(char.sheet.herd_current) : herdDots;
-      const herdCurrent = clamp(rawCurrent, 0, herdDots);
-
-      if (herdCurrent < 1) {
-        return reply.status(400).send({ error: 'Your Herd is depleted. It restores 1 point each feeding cycle.' });
-      }
-
+      // Division is a flavor/log field for Herd, but it still has to be a real one.
       const division = Number(req.body?.division);
-      if (Number.isNaN(division) || division === 0) {
+      if (huntingDifficulty(division) === null) {
         return reply.status(400).send({ error: 'Please select a domain to feed in.' });
       }
 
-      // Use exactly 1 pool point: -1 hunger (floor 1), -1 herd_current
-      const currentHunger = clamp(Number(char.sheet?.hunger) ?? 1, 0, 5);
-      const reduction = currentHunger > 1 ? 1 : 0; // can only reduce if hunger > 1
-      const newHunger = Math.max(1, currentHunger - reduction);
-      const newHerdCurrent = herdCurrent - 1;
+      const { cycleIndex } = await getCurrentCycle();
 
-      char.sheet.hunger = newHunger;
-      char.sheet.herd_current = newHerdCurrent;
-      await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(char.sheet), char.id]);
+      const result = await withCharacterLock(char.id, async (conn, locked) => {
+        const [existing] = await conn.query(
+          "SELECT id, status FROM feedings WHERE character_id=? AND cycle_index=? AND status IN ('pending','resolved') LIMIT 1",
+          [char.id, cycleIndex]
+        );
+        if (existing.length) {
+          return { code: 409, body: { error: 'You already have a feeding roll for this cycle.', feedingId: existing[0].id, status: existing[0].status } };
+        }
 
-      const predatorType = getPredatorType(char.sheet) || '';
+        const sheet = locked.sheet;
+        const herdDots = getHerdDots(sheet);
+        if (herdDots < 1) return { code: 400, body: { error: 'You do not have the Herd background.' } };
 
-      // Log as a resolved feeding with outcome 'herd'
-      await pool.query(
-        `INSERT INTO feedings
-          (character_id, division, predator_type, pool_label, dice_pool, difficulty, bonus_dice,
-           chasse_merits_applied, hunger_before, normal_dice, hunger_dice, outcome, status, cycle_index, hunger_delta, safety_delta, resolved_at)
-         VALUES (?, ?, ?, 'Herd', 0, 0, 0, '[]', ?, '[]', '[]', 'herd', 'resolved', ?, ?, 0, NOW())`,
-        [char.id, division, predatorType, currentHunger, cycleIndex, -reduction]
-      );
+        // herd_current: initialize to full dots if never set, then clamp to [0, dots]
+        const rawCurrent = sheet.herd_current !== undefined ? Number(sheet.herd_current) : herdDots;
+        const herdCurrent = clamp(rawCurrent, 0, herdDots);
+        if (herdCurrent < 1) {
+          return { code: 400, body: { error: 'Your Herd is depleted. It restores 1 point each feeding cycle.' } };
+        }
 
-      log.info('Herd feed used', { character_id: char.id, herdDots, herdCurrent, herdAfter: newHerdCurrent, hungerBefore: currentHunger, hungerAfter: newHunger });
-      reply.send({
-        ok: true,
-        herdDots,
-        herdCurrent: newHerdCurrent,
-        hungerBefore: currentHunger,
-        hungerAfter: newHunger,
-        hungerDelta: -reduction,
-        sheet: char.sheet,
+        // Use exactly 1 pool point: -1 hunger (result always at least 1), -1 herd_current
+        const currentHunger = readHunger(sheet);
+        const newHunger = applyHungerDelta(currentHunger, -1);
+        const hungerDelta = newHunger - currentHunger;
+        const newHerdCurrent = herdCurrent - 1;
+
+        sheet.hunger = newHunger;
+        sheet.herd_current = newHerdCurrent;
+        await conn.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), char.id]);
+
+        // Log as a resolved feeding with outcome 'herd'
+        await conn.query(
+          `INSERT INTO feedings
+            (character_id, division, predator_type, pool_label, dice_pool, difficulty, bonus_dice,
+             chasse_merits_applied, hunger_before, normal_dice, hunger_dice, outcome, status, cycle_index, hunger_delta, safety_delta, resolved_at)
+           VALUES (?, ?, ?, 'Herd', 0, 0, 0, '[]', ?, '[]', '[]', 'herd', 'resolved', ?, ?, 0, NOW())`,
+          [char.id, division, getPredatorType(sheet) || '', currentHunger, cycleIndex, hungerDelta]
+        );
+
+        log.info('Herd feed used', { character_id: char.id, herdDots, herdCurrent, herdAfter: newHerdCurrent, hungerBefore: currentHunger, hungerAfter: newHunger });
+        return {
+          code: 200,
+          body: { ok: true, herdDots, herdCurrent: newHerdCurrent, hungerBefore: currentHunger, hungerAfter: newHunger, hungerDelta, sheet },
+        };
       });
+      reply.status(result.code).send(result.body);
     } catch (err) {
       log.err('POST /api/feeding/herd-feed failed', { error: err.message });
       reply.status(500).send({ error: 'Database error using Herd feed' });
     }
   });
 
+  // Loads a pending feeding for reroll/confirm: locks its character row and
+  // re-reads the feeding under that lock, so a double-submitted reroll can't
+  // spend Willpower twice and a double-submitted confirm can't apply twice.
+  async function withPendingFeeding(req, feedingId, fn) {
+    const [rows] = await pool.query('SELECT character_id FROM feedings WHERE id=?', [feedingId]);
+    if (!rows.length) return { code: 404, body: { error: 'Feeding roll not found.' } };
+
+    return withCharacterLock(rows[0].character_id, async (conn, locked) => {
+      if (!locked) return { code: 404, body: { error: 'Character not found.' } };
+      if (locked.user_id !== req.user.id && req.user.role !== 'admin') {
+        return { code: 403, body: { error: 'Forbidden' } };
+      }
+      const [[feeding]] = await conn.query('SELECT * FROM feedings WHERE id=?', [feedingId]);
+      if (feeding.status !== 'pending') return { code: 400, body: { error: 'This roll is already resolved.' } };
+      return fn(conn, locked, feeding);
+    });
+  }
+
   /* -------------------- Reroll (spend Willpower, once) -------------------- */
   fastify.post('/api/feeding/:id/reroll', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const feedingId = Number(req.params.id);
-      const [rows] = await pool.query('SELECT * FROM feedings WHERE id=?', [feedingId]);
-      if (!rows.length) return reply.status(404).send({ error: 'Feeding roll not found.' });
-      const feeding = rows[0];
+      const result = await withPendingFeeding(req, feedingId, async (conn, locked, feeding) => {
+        if (feeding.wp_rerolled) return { code: 400, body: { error: 'You have already spent Willpower on this roll.' } };
 
-      const [charRows] = await pool.query('SELECT user_id, sheet FROM characters WHERE id=?', [feeding.character_id]);
-      if (!charRows.length) return reply.status(404).send({ error: 'Character not found.' });
-      if (charRows[0].user_id !== req.user.id && req.user.role !== 'admin') {
-        return reply.status(403).send({ error: 'Forbidden' });
-      }
-      if (feeding.status !== 'pending') return reply.status(400).send({ error: 'This roll is already resolved.' });
-      if (feeding.wp_rerolled) return reply.status(400).send({ error: 'You have already spent Willpower on this roll.' });
+        // Only regular dice can be rerolled (Hunger dice never can).
+        const normalDice = parseJsonArray(feeding.normal_dice);
+        const hungerDice = parseJsonArray(feeding.hunger_dice);
+        const rawSelected = Array.isArray(req.body?.selectedIndices) ? req.body.selectedIndices : [];
+        const selected = Array.from(new Set(rawSelected.map(Number)))
+          .filter((i) => Number.isInteger(i) && i >= 0 && i < normalDice.length);
+        if (!selected.length) return { code: 400, body: { error: 'Select at least one of your regular dice to reroll.' } };
+        if (selected.length > 3) return { code: 400, body: { error: 'You can reroll at most 3 dice.' } };
 
-      const selected = Array.from(new Set(req.body?.selectedIndices || [])).slice(0, 3);
-      if (!selected.length) return reply.status(400).send({ error: 'Select at least one die to reroll.' });
+        const sheet = locked.sheet;
+        if (!sheet.willpower) sheet.willpower = { superficial: 0, aggravated: 0 };
+        const comp = Number(sheet.attributes?.Composure) || 1;
+        const reso = Number(sheet.attributes?.Resolve) || 1;
+        const max = comp + reso;
+        const currentWp = (Number(sheet.willpower.superficial) || 0) + (Number(sheet.willpower.aggravated) || 0);
+        if (currentWp >= max) return { code: 400, body: { error: 'Not enough Willpower.' } };
 
-      let sheet = parseSheet(charRows[0].sheet);
-      if (!sheet.willpower) sheet.willpower = { superficial: 0, aggravated: 0 };
-      const comp = Number(sheet.attributes?.Composure) || 1;
-      const reso = Number(sheet.attributes?.Resolve) || 1;
-      const max = comp + reso;
-      const currentWp = (Number(sheet.willpower.superficial) || 0) + (Number(sheet.willpower.aggravated) || 0);
-      if (currentWp >= max) return reply.status(400).send({ error: 'Not enough Willpower.' });
+        sheet.willpower.superficial = (Number(sheet.willpower.superficial) || 0) + 1;
+        await conn.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), feeding.character_id]);
 
-      sheet.willpower.superficial = (Number(sheet.willpower.superficial) || 0) + 1;
-      await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), feeding.character_id]);
+        const rerolled = rollDice(selected.length);
+        let r = 0;
+        const nextNormal = normalDice.map((die, idx) => (selected.includes(idx) ? rerolled[r++] : die));
+        const outcome = computeFeedingOutcome(nextNormal, hungerDice, feeding.difficulty);
 
-      const normalDice = Array.isArray(feeding.normal_dice) ? feeding.normal_dice : JSON.parse(feeding.normal_dice || '[]');
-      const hungerDice = Array.isArray(feeding.hunger_dice) ? feeding.hunger_dice : JSON.parse(feeding.hunger_dice || '[]');
-      const rerolled = rollDice(selected.length);
-      let r = 0;
-      const nextNormal = normalDice.map((die, idx) => (selected.includes(idx) ? rerolled[r++] : die));
-      const outcome = computeFeedingOutcome(nextNormal, hungerDice, feeding.difficulty);
-
-      await pool.query(
-        "UPDATE feedings SET normal_dice=?, outcome=?, wp_rerolled=1 WHERE id=?",
-        [JSON.stringify(nextNormal), outcome.tier, feedingId]
-      );
-
-      const [updated] = await pool.query('SELECT * FROM feedings WHERE id=?', [feedingId]);
-      reply.send({ feeding: updated[0], projected: OUTCOME_DELTAS[outcome.tier], sheet });
+        await conn.query(
+          "UPDATE feedings SET normal_dice=?, outcome=?, wp_rerolled=1 WHERE id=?",
+          [JSON.stringify(nextNormal), outcome.tier, feedingId]
+        );
+        const [[updated]] = await conn.query('SELECT * FROM feedings WHERE id=?', [feedingId]);
+        return { code: 200, body: { feeding: updated, projected: OUTCOME_DELTAS[outcome.tier], sheet } };
+      });
+      reply.status(result.code).send(result.body);
     } catch (err) {
       log.err('POST /api/feeding/:id/reroll failed', { error: err.message });
       reply.status(500).send({ error: 'Database error rerolling' });
@@ -387,77 +438,76 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/feeding/:id/confirm', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const feedingId = Number(req.params.id);
-      const [rows] = await pool.query('SELECT * FROM feedings WHERE id=?', [feedingId]);
-      if (!rows.length) return reply.status(404).send({ error: 'Feeding roll not found.' });
-      const feeding = rows[0];
+      let notify = null;
+      const result = await withPendingFeeding(req, feedingId, async (conn, locked, feeding) => {
+        const deltas = OUTCOME_DELTAS[feeding.outcome];
+        if (!deltas) return { code: 500, body: { error: 'Unresolved outcome on this roll.' } };
 
-      const [charRows] = await pool.query('SELECT id, user_id, sheet FROM characters WHERE id=?', [feeding.character_id]);
-      if (!charRows.length) return reply.status(404).send({ error: 'Character not found.' });
-      if (charRows[0].user_id !== req.user.id && req.user.role !== 'admin') {
-        return reply.status(403).send({ error: 'Forbidden' });
-      }
-      if (feeding.status !== 'pending') return reply.status(400).send({ error: 'This roll is already resolved.' });
+        const sheet = locked.sheet;
+        const currentHunger = readHunger(sheet);
+        const newHunger = applyHungerDelta(currentHunger, deltas.hunger);
+        const appliedHungerDelta = newHunger - currentHunger;
+        sheet.hunger = newHunger;
+        await conn.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), feeding.character_id]);
 
-      const deltas = OUTCOME_DELTAS[feeding.outcome];
-      if (!deltas) return reply.status(500).send({ error: 'Unresolved outcome on this roll.' });
-
-      let sheet = parseSheet(charRows[0].sheet);
-      const currentHunger = Number(sheet.hunger) || 1;
-      // V5 Hunting rule: feeding can never reduce Hunger below 1. Only GM manual edit can set 0.
-      const newHunger = Math.max(1, Math.min(5, currentHunger + deltas.hunger));
-      const appliedHungerDelta = newHunger - currentHunger;
-      sheet.hunger = newHunger;
-      await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), feeding.character_id]);
-
-      const [existingClaim] = await pool.query(
-        'SELECT division, owner_character_id, owner_npc_id, owner_name, safety_rating FROM domain_claims WHERE division=?',
-        [feeding.division]
-      );
-      if (existingClaim.length) {
-        await pool.query(
-          'UPDATE domain_claims SET safety_rating = GREATEST(0, LEAST(10, IFNULL(safety_rating, 10) + ?)) WHERE division=?',
-          [deltas.safety, feeding.division]
+        const [existingClaim] = await conn.query(
+          'SELECT division, owner_character_id, owner_npc_id, owner_name, safety_rating FROM domain_claims WHERE division=?',
+          [feeding.division]
         );
-      } else {
-        await pool.query(
-          'INSERT INTO domain_claims (division, owner_name, color, safety_rating) VALUES (?, NULL, ?, ?)',
-          [feeding.division, '#888888', clamp(10 + deltas.safety, 0, 10)]
-        );
-      }
-
-      await pool.query(
-        "UPDATE feedings SET status='resolved', resolved_at=NOW(), hunger_delta=?, safety_delta=? WHERE id=?",
-        [appliedHungerDelta, deltas.safety, feedingId]
-      );
-
-      // Domain incident: only on a bad-for-the-domain outcome, only when
-      // hunting someone else's (player-owned) division.
-      const isIncidentOutcome = ['bestial_failure', 'failure', 'messy_critical'].includes(feeding.outcome);
-      if (isIncidentOutcome && existingClaim.length && existingClaim[0].owner_character_id
-          && existingClaim[0].owner_character_id !== feeding.character_id) {
-        const [ownerRows] = await pool.query('SELECT id, user_id, name FROM characters WHERE id=?', [existingClaim[0].owner_character_id]);
-        if (ownerRows.length) {
-          const [hunterRows] = await pool.query('SELECT name FROM characters WHERE id=?', [feeding.character_id]);
-          const hunterName = hunterRows[0]?.name || 'An unknown Kindred';
-          const flavor = pickFlavor(feeding.predator_type);
-
-          await pool.query(
-            `INSERT INTO domain_incidents
-              (feeding_id, division, owner_user_id, owner_character_id, intruder_character_id, intruder_character_name, outcome, flavor_text)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [feedingId, feeding.division, ownerRows[0].user_id, ownerRows[0].id, feeding.character_id, hunterName, feeding.outcome, flavor]
+        if (existingClaim.length) {
+          await conn.query(
+            'UPDATE domain_claims SET safety_rating = GREATEST(0, LEAST(10, IFNULL(safety_rating, 10) + ?)) WHERE division=?',
+            [deltas.safety, feeding.division]
           );
-
-          sendPushNotification(
-            ownerRows[0].user_id,
-            'Feeding Incident',
-            `${hunterName} hunted in your domain (Division ${feeding.division}) and drew attention.`,
-            {}, 'court'
-          ).catch(() => {});
+        } else {
+          await conn.query(
+            'INSERT INTO domain_claims (division, owner_name, color, safety_rating) VALUES (?, NULL, ?, ?)',
+            [feeding.division, '#888888', clamp(10 + deltas.safety, 0, 10)]
+          );
         }
-      }
 
-      reply.send({ ok: true, tier: feeding.outcome, hungerDelta: appliedHungerDelta, safetyDelta: deltas.safety, sheet });
+        // Picked once and stored, so the log and any incident read the same forever.
+        const isIncidentOutcome = FAILURE_OUTCOMES.includes(feeding.outcome);
+        const failureReason = isIncidentOutcome ? pickFlavor(feeding.predator_type) : null;
+
+        await conn.query(
+          "UPDATE feedings SET status='resolved', resolved_at=NOW(), hunger_delta=?, safety_delta=?, failure_reason=? WHERE id=?",
+          [appliedHungerDelta, deltas.safety, failureReason, feedingId]
+        );
+
+        // Domain incident: only on a bad-for-the-domain outcome, only when
+        // hunting someone else's (player-owned) division.
+        if (isIncidentOutcome && existingClaim.length && existingClaim[0].owner_character_id
+            && existingClaim[0].owner_character_id !== feeding.character_id) {
+          const [ownerRows] = await conn.query('SELECT id, user_id, name FROM characters WHERE id=?', [existingClaim[0].owner_character_id]);
+          if (ownerRows.length) {
+            const [hunterRows] = await conn.query('SELECT name FROM characters WHERE id=?', [feeding.character_id]);
+            const hunterName = hunterRows[0]?.name || 'An unknown Kindred';
+            const flavor = failureReason;
+
+            await conn.query(
+              `INSERT INTO domain_incidents
+                (feeding_id, division, owner_user_id, owner_character_id, intruder_character_id, intruder_character_name, outcome, flavor_text)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+              [feedingId, feeding.division, ownerRows[0].user_id, ownerRows[0].id, feeding.character_id, hunterName, feeding.outcome, flavor]
+            );
+            notify = { userId: ownerRows[0].user_id, hunterName, division: feeding.division };
+          }
+        }
+
+        return { code: 200, body: { ok: true, tier: feeding.outcome, hungerDelta: appliedHungerDelta, safetyDelta: deltas.safety, sheet } };
+      });
+
+      // Push only once the transaction has committed.
+      if (notify) {
+        sendPushNotification(
+          notify.userId,
+          'Feeding Incident',
+          `${notify.hunterName} hunted in your domain (Division ${notify.division}) and drew attention.`,
+          {}, 'court'
+        ).catch(() => {});
+      }
+      reply.status(result.code).send(result.body);
     } catch (err) {
       log.err('POST /api/feeding/:id/confirm failed', { error: err.message });
       reply.status(500).send({ error: 'Database error confirming feeding roll' });
@@ -560,6 +610,60 @@ module.exports = async function (fastify, opts) {
     } catch (err) {
       log.err('POST /api/admin/feeding/run-decay failed', { error: err.message });
       reply.status(500).send({ error: 'Database error running decay', details: err.sqlMessage || err.message });
+    }
+  });
+
+  /* ---- Admin: Allow Reroll (undo a feeding so the player can feed again) ---- */
+  // Reverses everything the feeding applied: the Hunger change, the Willpower
+  // spent on its reroll, the domain Safety change and the Herd point, then
+  // deletes the row (its domain incident cascades) so the one-per-cycle
+  // check lets the player roll again. Downtimes already submitted stay.
+  fastify.post('/api/admin/feeding/:id/allow-reroll', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const feedingId = Number(req.params.id);
+      const [rows] = await pool.query('SELECT character_id FROM feedings WHERE id=?', [feedingId]);
+      if (!rows.length) return reply.status(404).send({ error: 'Feeding roll not found.' });
+
+      const result = await withCharacterLock(rows[0].character_id, async (conn, locked) => {
+        const [[feeding]] = await conn.query('SELECT * FROM feedings WHERE id=?', [feedingId]);
+        if (!feeding) return { code: 404, body: { error: 'Feeding roll not found.' } };
+
+        const resolved = feeding.status === 'resolved';
+        const undone = {};
+        if (locked) {
+          const sheet = locked.sheet;
+          if (resolved && feeding.hunger_delta) {
+            const before = readHunger(sheet);
+            sheet.hunger = clamp(before - feeding.hunger_delta, 0, 5);
+            undone.hunger = { before, after: sheet.hunger };
+          }
+          if (feeding.wp_rerolled && Number(sheet.willpower?.superficial) > 0) {
+            sheet.willpower.superficial = Number(sheet.willpower.superficial) - 1;
+            undone.willpower = true;
+          }
+          if (feeding.outcome === 'herd' && sheet.herd_current !== undefined) {
+            sheet.herd_current = clamp(Number(sheet.herd_current) + 1, 0, getHerdDots(sheet));
+            undone.herd = sheet.herd_current;
+          }
+          await conn.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), locked.id]);
+        }
+
+        if (resolved && feeding.safety_delta) {
+          await conn.query(
+            'UPDATE domain_claims SET safety_rating = GREATEST(0, LEAST(10, IFNULL(safety_rating, 10) - ?)) WHERE division=?',
+            [feeding.safety_delta, feeding.division]
+          );
+          undone.safety = -feeding.safety_delta;
+        }
+
+        await conn.query('DELETE FROM feedings WHERE id=?', [feedingId]);
+        log.adm('Admin allowed feeding reroll', { admin: req.user.id, feeding, undone });
+        return { code: 200, body: { ok: true, undone } };
+      });
+      reply.status(result.code).send(result.body);
+    } catch (err) {
+      log.err('POST /api/admin/feeding/:id/allow-reroll failed', { error: err.message });
+      reply.status(500).send({ error: 'Database error undoing feeding', details: err.sqlMessage || err.message });
     }
   });
 

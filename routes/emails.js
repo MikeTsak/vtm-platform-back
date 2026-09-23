@@ -92,6 +92,7 @@ module.exports = async function (fastify, opts) {
 
       // Mark user messages as read
       await pool.query(`UPDATE email_messages SET is_read=1 WHERE thread_id=? AND sender_type='user'`, [req.params.id]);
+      if (fastify.io) fastify.io.to(`user_${req.user.id}`).emit('emails:refresh', { type: 'read' });
 
       reply.send({ messages });
     } catch (e) {
@@ -114,6 +115,7 @@ module.exports = async function (fastify, opts) {
         // --- NEW: SEND PUSH TO PLAYER ---
         try {
           const [[thread]] = await pool.query('SELECT user_id, identity_id, subject FROM email_threads WHERE id=?', [thread_id]);
+          if (fastify.io) fastify.io.to(`user_${thread.user_id}`).emit('emails:refresh', { type: 'new' });
           const [[identity]] = await pool.query('SELECT display_name FROM email_identities WHERE id=?', [thread.identity_id]);
 
           const pushTitle = `📧 Reply from ${identity?.display_name || 'NPC'}`;
@@ -131,6 +133,25 @@ module.exports = async function (fastify, opts) {
   });
 
   // --- USER ROUTES ---
+
+  // Unread count for the Surface Web badge in the nav. Same semantics as the
+  // inbox lists: players count sent identity mail, admins count player mail.
+  fastify.get('/api/emails/unread-count', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const isAdmin = req.user.role === 'admin' || req.user.permission_level === 'admin';
+      const [[row]] = isAdmin
+        ? await pool.query(`SELECT COUNT(*) AS count FROM email_messages WHERE sender_type = 'user' AND is_read = 0`)
+        : await pool.query(`
+            SELECT COUNT(*) AS count FROM email_messages m
+            JOIN email_threads t ON t.id = m.thread_id
+            WHERE t.user_id = ? AND m.sender_type = 'identity' AND m.is_read = 0 AND m.status = 'sent'
+          `, [req.user.id]);
+      reply.send({ count: Number(row.count) });
+    } catch (e) {
+      log.err('Failed to count unread emails', { message: e.message });
+      reply.status(500).json({ error: 'Failed to count unread' });
+    }
+  });
 
   // 1. Player Inbox
   fastify.get('/api/emails/my-inbox', { preHandler: [authRequired] }, async (req, reply) => {
@@ -180,6 +201,7 @@ module.exports = async function (fastify, opts) {
     `, [req.params.id]);
 
       await pool.query(`UPDATE email_messages SET is_read=1 WHERE thread_id=? AND sender_type='identity' AND status='sent'`, [req.params.id]);
+      if (fastify.io) fastify.io.to(`user_${req.user.id}`).emit('emails:refresh', { type: 'read' });
 
       reply.send({ messages });
     } catch (e) {
@@ -236,6 +258,7 @@ module.exports = async function (fastify, opts) {
       } catch (e) { log.err('Email push to admin failed', { error: e.message }); }
       // --------------------------------
 
+      if (fastify.io) fastify.io.to('admin_chat').emit('emails:refresh', { type: 'new' });
       reply.send({ ok: true, thread_id: finalThreadId });
     } catch (e) {
       await conn.rollback();

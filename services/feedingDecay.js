@@ -36,7 +36,8 @@ async function runFeedingDecay(pool, log, { force = false } = {}) {
   if (!force && completedCycle <= lastProcessed) return { skipped: 'already processed', completedCycle, lastProcessed };
 
   const [rows] = await pool.query(
-    "SELECT division, outcome FROM feedings WHERE cycle_index = ? AND status='resolved'",
+    // Herd feeds never touch the domain, so they don't count as activity here.
+    "SELECT division, outcome FROM feedings WHERE cycle_index = ? AND status='resolved' AND outcome <> 'herd'",
     [completedCycle]
   );
   const byDivision = new Map();

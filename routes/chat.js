@@ -177,6 +177,34 @@ module.exports = async function (fastify, opts) {
   /* -------------------- Group Chat Routes (NEW) -------------------- */
 
   // List groups for the current user (with metadata)
+  // Total unread across DMs, groups and NPC threads — drives the SchreckNet
+  // badge in the nav. Mirrors the per-contact counts of /chat/users, /chat/groups
+  // and /chat/npcs (admins count players' unread messages to any NPC).
+  fastify.get('/api/chat/unread-count', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const userId = req.user.id;
+      const isAdmin = req.user.role === 'admin' || req.user.permission_level === 'admin';
+      const npcSql = isAdmin
+        ? `SELECT COUNT(*) FROM npc_messages m JOIN npcs n ON n.id = m.npc_id
+           WHERE m.from_side = 'user' AND m.read_at IS NULL AND IFNULL(n.is_disabled, 0) = 0`
+        : `SELECT COUNT(*) FROM npc_messages m JOIN npcs n ON n.id = m.npc_id
+           WHERE m.user_id = ? AND m.from_side = 'npc' AND m.read_at IS NULL AND m.status != 'queued'
+             AND IFNULL(n.is_disabled, 0) = 0`;
+      const [[row]] = await pool.query(`
+        SELECT
+          (SELECT COUNT(*) FROM chat_messages WHERE recipient_id = ? AND read_at IS NULL) AS dms,
+          (SELECT COUNT(*) FROM chat_group_messages gm
+             JOIN chat_group_members m ON m.group_id = gm.group_id AND m.user_id = ?
+            WHERE gm.created_at > m.last_read_at AND gm.sender_id != ?) AS grp,
+          (${npcSql}) AS npc
+      `, isAdmin ? [userId, userId, userId] : [userId, userId, userId, userId]);
+      reply.send({ count: Number(row.dms) + Number(row.grp) + Number(row.npc) });
+    } catch (e) {
+      log.err('Failed to count unread chat', { message: e.message });
+      reply.status(500).json({ error: 'Failed to count unread' });
+    }
+  });
+
   fastify.get('/api/chat/groups', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const userId = req.user.id;
@@ -222,6 +250,7 @@ module.exports = async function (fastify, opts) {
         'UPDATE chat_group_members SET last_read_at = NOW() WHERE group_id = ? AND user_id = ?',
         [groupId, req.user.id]
       );
+      if (fastify.io) fastify.io.to(`user_${req.user.id}`).emit('chat:refresh', { type: 'read', groupId });
       reply.send({ ok: true });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to mark group as read' });
@@ -941,60 +970,50 @@ module.exports = async function (fastify, opts) {
     return false;
   }
 
+  // Message IDs are per-table and collide across DMs / groups / NPC threads,
+  // so edit & delete must be told which table the message lives in.
+  const EDITABLE_MESSAGE_TABLES = {
+    chat_messages: { senderCol: 'sender_id' },
+    chat_group_messages: { senderCol: 'sender_id' },
+    // Players may only touch their own side of an NPC thread; admins may touch either side.
+    npc_messages: { senderCol: 'user_id', playerCondition: "from_side = 'user'" }
+  };
+  const FOUR_HOURS = 4 * 60 * 60 * 1000;
+
+  // Resolves the target message and enforces ownership / age rules. Returns { msg } or { error, status }.
+  async function loadOwnMessage(req, table, verb) {
+    const cfg = EDITABLE_MESSAGE_TABLES[table];
+    if (!cfg) return { status: 400, error: 'Invalid message table.' };
+    const msgId = Number(req.params.id);
+    const isAdmin = req.user.role === 'admin' || req.user.permission_level === 'admin';
+    const extraWhere = !isAdmin && cfg.playerCondition ? ` AND ${cfg.playerCondition}` : '';
+    const [rows] = await pool.query(`SELECT *, ${cfg.senderCol} as sender_id FROM ${table} WHERE id = ?${extraWhere}`, [msgId]);
+    if (rows.length === 0) return { status: 404, error: 'Message not found.' };
+    const msg = rows[0];
+    if (isAdmin) return { msg, isAdmin };
+    if (String(msg.sender_id) !== String(req.user.id)) {
+      return { status: 403, error: `You can only ${verb} your own messages.` };
+    }
+    if (Date.now() - new Date(msg.created_at).getTime() > FOUR_HOURS) {
+      return { status: 403, error: `You can only ${verb} a message within 4 hours of sending.` };
+    }
+    return { msg, isAdmin };
+  }
+
   // Universal Edit Message Route
   fastify.put('/api/chat/messages/:id', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      const msgId = Number(req.params.id);
-      const { body } = req.body;
-      const userId = req.user.id;
-      const isAdmin = req.user.role === 'admin' || req.user.permission_level === 'admin';
-
+      const { body, table } = req.body || {};
       if (!body || !body.trim()) return reply.status(400).json({ error: 'Message body cannot be empty.' });
 
-      const FOUR_HOURS = 4 * 60 * 60 * 1000;
-
-      const tables = [
-        { name: 'chat_messages', senderCol: 'sender_id' },
-        { name: 'chat_group_messages', senderCol: 'sender_id' },
-        { name: 'npc_messages', senderCol: 'user_id', extraCondition: "from_side = 'user'" }
-      ];
-
-      let found = false;
-
-      for (const table of tables) {
-        const extraWhere = table.extraCondition ? ` AND ${table.extraCondition}` : '';
-        const [rows] = await pool.query(`SELECT *, ${table.senderCol} as sender_id FROM ${table.name} WHERE id = ?${extraWhere}`, [msgId]);
-
-        if (rows.length > 0) {
-          const msg = rows[0];
-          found = true;
-
-          // FIX: Cast both to Strings to prevent Strict Equality ( !== ) Type Bugs
-          if (String(msg.sender_id) !== String(userId) && !isAdmin) {
-            return reply.status(403).json({ error: 'You can only edit your own messages.' });
-          }
-          if (Date.now() - new Date(msg.created_at).getTime() > FOUR_HOURS && !isAdmin) {
-            return reply.status(403).json({ error: 'You can only edit a message within 4 hours of sending.' });
-          }
-          if (!isAdmin && await hasBeenAnsweredSince(table.name, msg)) {
-            return reply.status(403).json({ error: 'This message has already been answered and can no longer be edited.' });
-          }
-
-          await pool.query(`UPDATE ${table.name} SET body = ?, edited = 1 WHERE id = ?`, [body.trim(), msgId]);
-          return reply.send({ ok: true, edited: true });
-        }
+      const { msg, isAdmin, status, error } = await loadOwnMessage(req, table, 'edit');
+      if (error) return reply.status(status).json({ error });
+      if (!isAdmin && await hasBeenAnsweredSince(table, msg)) {
+        return reply.status(403).json({ error: 'This message has already been answered and can no longer be edited.' });
       }
 
-      if (isAdmin && !found) {
-        const [npcRows] = await pool.query(`SELECT id FROM npc_messages WHERE id = ? AND from_side = 'npc'`, [msgId]);
-        if (npcRows.length > 0) {
-          await pool.query(`UPDATE npc_messages SET body = ?, edited = 1 WHERE id = ?`, [body.trim(), msgId]);
-          return reply.send({ ok: true, edited: true });
-        }
-      }
-
-      if (!found) return reply.status(404).json({ error: 'Message not found.' });
-
+      await pool.query(`UPDATE ${table} SET body = ?, edited = 1 WHERE id = ?`, [body.trim(), msg.id]);
+      return reply.send({ ok: true, edited: true });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to edit message.' });
     }
@@ -1003,50 +1022,12 @@ module.exports = async function (fastify, opts) {
   // Universal Delete Message Route
   fastify.delete('/api/chat/messages/:id', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      const msgId = Number(req.params.id);
-      const userId = req.user.id;
-      const isAdmin = req.user.role === 'admin' || req.user.permission_level === 'admin';
-      const FOUR_HOURS = 4 * 60 * 60 * 1000;
+      const table = req.query.table;
+      const { msg, status, error } = await loadOwnMessage(req, table, 'delete');
+      if (error) return reply.status(status).json({ error });
 
-      const tables = [
-        { name: 'chat_messages', senderCol: 'sender_id' },
-        { name: 'chat_group_messages', senderCol: 'sender_id' },
-        { name: 'npc_messages', senderCol: 'user_id', extraCondition: "from_side = 'user'" }
-      ];
-
-      let found = false;
-
-      for (const table of tables) {
-        const extraWhere = table.extraCondition ? ` AND ${table.extraCondition}` : '';
-        const [rows] = await pool.query(`SELECT id, ${table.senderCol} as sender_id, created_at FROM ${table.name} WHERE id = ?${extraWhere}`, [msgId]);
-
-        if (rows.length > 0) {
-          const msg = rows[0];
-          found = true;
-
-          // FIX: Cast both to Strings to prevent Strict Equality ( !== ) Type Bugs
-          if (String(msg.sender_id) !== String(userId) && !isAdmin) {
-            return reply.status(403).json({ error: 'You can only delete your own messages.' });
-          }
-          if (Date.now() - new Date(msg.created_at).getTime() > FOUR_HOURS && !isAdmin) {
-            return reply.status(403).json({ error: 'You can only delete a message within 4 hours of sending.' });
-          }
-
-          await pool.query(`DELETE FROM ${table.name} WHERE id = ?`, [msgId]);
-          return reply.send({ ok: true });
-        }
-      }
-
-      if (isAdmin && !found) {
-        const [npcRows] = await pool.query(`SELECT id FROM npc_messages WHERE id = ? AND from_side = 'npc'`, [msgId]);
-        if (npcRows.length > 0) {
-          await pool.query(`DELETE FROM npc_messages WHERE id = ?`, [msgId]);
-          return reply.send({ ok: true });
-        }
-      }
-
-      if (!found) return reply.status(404).json({ error: 'Message not found.' });
-
+      await pool.query(`DELETE FROM ${table} WHERE id = ?`, [msg.id]);
+      return reply.send({ ok: true });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to delete message.' });
     }

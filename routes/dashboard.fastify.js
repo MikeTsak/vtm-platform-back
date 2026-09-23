@@ -111,6 +111,30 @@ module.exports = async function (fastify, opts) {
       `, [userId]).catch(err => {
         log.warn('Whispers: Group query error', { error: err.message });
         return [[]];
+      }),
+
+      // Surface Web email threads (latest sent message per thread)
+      pool.query(`
+        SELECT
+          CONCAT('mail_', t.id) AS id,
+          t.id AS partner_id,
+          em.body AS lastMessage,
+          em.created_at AS timestamp,
+          i.display_name AS partnerName,
+          t.subject AS subject,
+          0 AS isNPC,
+          0 AS isGroup,
+          1 AS isEmail
+        FROM email_threads t
+        JOIN email_identities i ON i.id = t.identity_id
+        JOIN email_messages em ON em.id = (
+          SELECT MAX(id) FROM email_messages WHERE thread_id = t.id AND status = 'sent'
+        )
+        WHERE t.user_id = ?
+        ORDER BY em.created_at DESC LIMIT 5
+      `, [userId]).catch(err => {
+        log.warn('Whispers: Email query error', { error: err.message });
+        return [[]];
       })
     ]);
 
@@ -118,7 +142,7 @@ module.exports = async function (fastify, opts) {
     const [
       [downtimeOpening, threatLevel, bannerEnabled, bannerMessage, bannerCountdown],
       [newsRows],
-      [dmRows, npcRows, groupRows]
+      [dmRows, npcRows, groupRows, emailRows]
     ] = await Promise.all([settingsPromise, newsPromise, whispersPromise]);
 
     recentNews = newsRows || [];
@@ -127,7 +151,8 @@ module.exports = async function (fastify, opts) {
     const combinedWhispers = [
       ...(dmRows[0] || []),
       ...(npcRows[0] || []),
-      ...(groupRows[0] || [])
+      ...(groupRows[0] || []),
+      ...(emailRows[0] || [])
     ].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(0, 5);
 
     recentChats = combinedWhispers;

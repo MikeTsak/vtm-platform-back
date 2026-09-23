@@ -7,6 +7,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const { sseCorsHeaders } = require('../services/sse');
 const { backup, listBackups, backupDir } = require('../scripts/backup-db');
+const { runMigrations } = require('../migrations/runner');
 
 // The migration scripts live at the application root, not in routes/.
 const APP_ROOT = path.join(__dirname, '..');
@@ -478,5 +479,34 @@ module.exports = async function (fastify, opts) {
       orphaned,
       pending: versions.filter((v) => !v.applied).length,
     });
+  });
+
+  // Admin: apply pending schema migrations (the same runner the server uses
+  // at boot, i.e. `npm run migrate`). The flag stops a double click from
+  // starting a second run while the first is still going.
+  let schemaRunInProgress = false;
+  fastify.post('/api/admin/schema-versions/run', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    if (schemaRunInProgress) return reply.status(409).send({ error: 'Migrations are already running.' });
+    schemaRunInProgress = true;
+    const appliedNames = async () => {
+      const [rows] = await pool.query('SELECT name FROM schema_migrations');
+      return new Set(rows.map((r) => r.name));
+    };
+    let before = new Set();
+    try {
+      before = await appliedNames().catch(() => new Set());
+      await runMigrations(pool);
+      const after = await appliedNames();
+      const ran = [...after].filter((n) => !before.has(n)).sort();
+      log.adm('Admin ran schema migrations', { admin: req.user.id, ran });
+      return reply.send({ ok: true, ran });
+    } catch (e) {
+      const after = await appliedNames().catch(() => before);
+      const ran = [...after].filter((n) => !before.has(n)).sort();
+      log.err('Admin schema migration run failed', { error: e.message, ran });
+      return reply.status(500).send({ error: `Migration failed: ${e.message}`, ran });
+    } finally {
+      schemaRunInProgress = false;
+    }
   });
 };

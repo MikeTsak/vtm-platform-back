@@ -4,6 +4,16 @@
 // bulk), and read the audit log. The self-serve counterpart lives in
 // routes/characterXp.js.
 const { xpCost } = require('../utils/xpCost');
+const { getSetting, setSetting } = require('../utils/settings');
+
+// Validates a client-supplied list of character ids; returns a de-duplicated
+// array of positive integers, or null if the input is malformed.
+function parseIdList(value) {
+  if (!Array.isArray(value) || value.length > 1000) return null;
+  const ids = value.map(Number);
+  if (!ids.every(n => Number.isInteger(n) && n > 0)) return null;
+  return [...new Set(ids)];
+}
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin } = opts;
@@ -102,26 +112,53 @@ module.exports = async function (fastify, opts) {
 
   /* -------------------- Admin add/remove XP -------------------- */
 
-  // Admin: Bulk XP to all characters at once
+  // Admin: Bulk XP to a selected set of characters at once
   fastify.patch('/api/admin/characters/xp/bulk', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
-  const { delta } = req.body;
-    if (typeof delta !== 'number') return reply.status(400).json({ error: 'delta must be a number' });
+    const { delta, character_ids } = req.body || {};
+    if (typeof delta !== 'number' || !Number.isInteger(delta) || delta === 0) {
+      return reply.status(400).json({ error: 'delta must be a non-zero integer' });
+    }
+    const ids = parseIdList(character_ids);
+    if (!ids || ids.length === 0) {
+      return reply.status(400).json({ error: 'character_ids must be a non-empty array of character ids' });
+    }
 
+    const conn = await pool.getConnection();
     try {
-      await pool.query('UPDATE characters SET xp = GREATEST(0, xp + ?)', [delta]);
-
-      // NEW: Log the bulk grant for EVERY character in the database at once
-      await pool.query(`
+      await conn.beginTransaction();
+      const [result] = await conn.query('UPDATE characters SET xp = GREATEST(0, xp + ?) WHERE id IN (?)', [delta, ids]);
+      await conn.query(`
       INSERT INTO xp_log (character_id, action, target, cost, payload)
-      SELECT id, 'admin_bulk_grant', 'Bulk Session XP', ?, ? FROM characters
-    `, [-delta, JSON.stringify({ admin_id: req.user.id })]);
+      SELECT id, 'admin_bulk_grant', 'Bulk Session XP', ?, ? FROM characters WHERE id IN (?)
+    `, [-delta, JSON.stringify({ admin_id: req.user.id }), ids]);
+      await conn.commit();
 
-      log.adm('Admin bulk XP adjust', { admin_id: req.user.id, delta });
-      reply.send({ ok: true });
+      log.adm('Admin bulk XP adjust', { admin_id: req.user.id, delta, count: result.affectedRows });
+      reply.send({ ok: true, count: result.affectedRows });
     } catch (e) {
+      await conn.rollback();
       log.err('Admin bulk XP adjust failed', { message: e.message });
       reply.status(500).json({ error: 'Failed to adjust bulk XP' });
+    } finally {
+      conn.release();
     }
+  });
+
+  /* -------------------- Saved bulk-grant selection (per admin) -------------------- */
+  const selectionKey = (userId) => `xp_bulk_selection:${userId}`;
+
+  fastify.get('/api/admin/xp/bulk-selection', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    let ids = [];
+    try { ids = parseIdList(JSON.parse(await getSetting(selectionKey(req.user.id), '[]'))) || []; } catch (_) { }
+    reply.send({ character_ids: ids });
+  });
+
+  fastify.put('/api/admin/xp/bulk-selection', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    const ids = parseIdList(req.body?.character_ids);
+    if (!ids) return reply.status(400).json({ error: 'character_ids must be an array of character ids' });
+    const ok = await setSetting(selectionKey(req.user.id), JSON.stringify(ids));
+    if (!ok) return reply.status(500).json({ error: 'Failed to save selection' });
+    reply.send({ character_ids: ids });
   });
 
   /* -------------------- Fetch XP Logs for Admin Panel -------------------- */

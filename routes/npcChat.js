@@ -15,13 +15,14 @@ module.exports = async function (fastify, opts) {
         u.display_name,
         c.name AS char_name,
         MAX(CASE WHEN m.status != 'queued' THEN m.created_at END) AS last_message_at,
+        MAX(CASE WHEN m.from_side = 'user' THEN m.created_at END) AS last_incoming_at,
         COUNT(CASE WHEN m.from_side = 'user' AND m.read_at IS NULL THEN 1 END) as unread_count
       FROM npc_messages m
       JOIN users u ON m.user_id = u.id
       LEFT JOIN characters c ON c.user_id = u.id -- FIXED: Changed from u.character_id = c.id
       WHERE m.npc_id = ?
       GROUP BY u.id, u.display_name, c.name
-      ORDER BY unread_count DESC, last_message_at DESC
+      ORDER BY COALESCE(last_incoming_at, last_message_at) DESC
     `, [npcId]);
       reply.send({ conversations: rows });
     } catch (e) {

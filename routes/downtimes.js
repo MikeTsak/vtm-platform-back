@@ -504,6 +504,34 @@ module.exports = async function (fastify, opts) {
     }
   });
 
+  // GET /api/admin/downtimes/last-cycle-submitters: characters that submitted a
+  // (non-rejected) downtime in the most recently *closed* cycle. Session XP is
+  // granted after that cycle is resolved, so the still-open cycle is skipped.
+  fastify.get('/api/admin/downtimes/last-cycle-submitters', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      let cycles = [];
+      try { cycles = JSON.parse(await getSetting('downtime_cycles_schedule', '[]')); } catch (_) { }
+      const todayStr = new Date().toISOString().split('T')[0];
+      const last = (Array.isArray(cycles) ? cycles : [])
+        .filter(c => c && c.opening_date && c.closing_date && c.closing_date < todayStr)
+        .sort((a, b) => b.closing_date.localeCompare(a.closing_date))[0];
+      if (!last) return reply.send({ cycle: null, character_ids: [] });
+
+      const [rows] = await pool.query(
+        `SELECT DISTINCT character_id FROM downtimes
+         WHERE status <> 'rejected' AND created_at >= ? AND created_at <= ?`,
+        [new Date(last.opening_date + 'T00:00:00'), new Date(last.closing_date + 'T23:59:59')]
+      );
+      reply.send({
+        cycle: { id: last.id, title: last.title || null, opening_date: last.opening_date, closing_date: last.closing_date },
+        character_ids: rows.map(r => r.character_id),
+      });
+    } catch (e) {
+      log.err('Fetch last-cycle downtime submitters failed', { message: e.message });
+      reply.status(500).json({ error: 'Failed to fetch downtime submitters' });
+    }
+  });
+
   // POST /api/admin/downtimes/cycles: Save multiple downtime operation cycles
   fastify.post('/api/admin/downtimes/cycles', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
