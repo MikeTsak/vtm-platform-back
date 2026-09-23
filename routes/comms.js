@@ -56,7 +56,13 @@ function resolveCommsSchedule(scheduleStr, masterEnabledStr, nowInput = new Date
     let activeState = schedule[todayStr];
     const currentHour = getAthensHour(now);
 
-    if (schedule[yesterdayStr] === '17:00' && currentHour < 17 && activeState !== 'event') {
+    // The carry-over must not steamroll an explicit override for today —
+    // same principle as the killswitch fix below, just for the one branch it
+    // didn't touch. 'event' was already excluded; an explicit Force OFF
+    // (false) needs the same treatment, or a day an admin deliberately
+    // closed still shows open all morning whenever yesterday opened at
+    // 17:00, only correctly closing after today's own 17:00 rolls around.
+    if (schedule[yesterdayStr] === '17:00' && currentHour < 17 && activeState !== 'event' && activeState !== false) {
       activeState = true;
     } else if (schedule[todayStr] === '17:00') {
       activeState = currentHour >= 17 ? true : false;

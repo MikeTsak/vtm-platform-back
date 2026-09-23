@@ -26,6 +26,18 @@ module.exports = async function (fastify, opts) {
       return reply.status(400).json({ error: 'Create a character first' });
     }
 
+    // V5 hard cap: no discipline (clan, Caitiff, or unlocked out-of-clan) can
+    // exceed 5 dots — there's no power data or ceremony/ritual content past
+    // level 5, so letting this through silently soft-locks the player's own
+    // XP shop (the "assign a power for this new dot" prompt can never be
+    // satisfied and keeps reopening). The frontend already caps the shop UI
+    // at 5; this is the server-side backstop for clan/Caitiff purchases,
+    // matching the out-of-clan cap enforced just below.
+    if (type === 'discipline' && Number(newLevel) > 5) {
+      log.warn('XP spend blocked: discipline level above V5 cap', { user_id: req.user.id, target, newLevel });
+      return reply.status(400).json({ error: `${target || 'Disciplines'} cannot exceed 5 dots.` });
+    }
+
     // Out-of-clan disciplines are only purchasable once an ST has unlocked
     // them for this character (see routes/disciplineAccess.js) — everything
     // else (in-clan, Caitiff's "any discipline", power selection) is
