@@ -189,25 +189,23 @@ module.exports = async function (fastify, opts) {
 
   fastify.get('/api/identities/:id/avatar', async (req, reply) => {
     try {
-      const [rows] = await pool.query('SELECT avatar_url, avatar_url_thumb, avatar FROM email_identities WHERE id = ?', [req.params.id]);
+      // No `avatar` blob column here (see the PUT handler below): identity
+      // avatars have only ever gone through the CDN, so there's no legacy
+      // blob data to fall back to for this table the way there is for
+      // users/npcs/retainers.
+      const [rows] = await pool.query('SELECT avatar_url, avatar_url_thumb FROM email_identities WHERE id = ?', [req.params.id]);
       if (rows.length === 0) return reply.status(404).send('Avatar not found');
 
       const targetUrl = (req.query.size === 'thumb' && rows[0].avatar_url_thumb) ? rows[0].avatar_url_thumb
         : rows[0].avatar_url ? rows[0].avatar_url
-          : (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) ? rows[0].avatar
-            : null;
+          : null;
 
       if (targetUrl) {
         reply.header('Cache-Control', 'public, max-age=86400');
         return reply.redirect(targetUrl);
       }
 
-      if (!rows[0].avatar) return reply.status(404).send('Avatar not found');
-
-      const mime = getMimeType(rows[0].avatar);
-      reply.header('Content-Type', mime);
-      reply.header('Cache-Control', 'public, max-age=31536000, immutable');
-      reply.send(rows[0].avatar);
+      return reply.status(404).send('Avatar not found');
     } catch (err) {
       log.err('Identity avatar fetch error', err);
       reply.status(500).send('Error fetching avatar');
@@ -250,13 +248,18 @@ module.exports = async function (fastify, opts) {
 
       // No CDN-failure fallback path exists above (a failed upload throws
       // before this line), so the CDN URL is always available here — no need
-      // to duplicate the image bytes into MySQL as well.
-      await pool.query('UPDATE email_identities SET avatar_url = ?, avatar_url_thumb = ?, avatar = NULL WHERE id = ?', [result.url, thumbUrl, req.params.id]);
+      // to duplicate the image bytes into MySQL as well. email_identities
+      // has no `avatar` blob column (see GET above) — nothing to clear.
+      await pool.query('UPDATE email_identities SET avatar_url = ?, avatar_url_thumb = ? WHERE id = ?', [result.url, thumbUrl, req.params.id]);
       log.adm('Identity avatar updated', { identity_id: req.params.id, admin_id: req.user.id });
       reply.send({ ok: true, message: 'Identity avatar updated successfully', url: result.url });
     } catch (err) {
       log.err('Identity avatar upload error', err);
-      reply.status(500).json({ error: 'Error processing or saving avatar' });
+      // This route is admin-only (requireAdmin above), so the real error is
+      // safe to surface — it's what actually lets an admin tell a bad image
+      // file apart from a CDN outage apart from a DB/schema problem without
+      // needing to go pull server logs for every failed upload.
+      reply.status(500).json({ error: `Error processing or saving avatar: ${err.message}` });
     }
   });
 

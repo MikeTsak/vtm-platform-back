@@ -62,14 +62,18 @@ function resolveCommsSchedule(scheduleStr, masterEnabledStr, nowInput = new Date
       activeState = currentHour >= 17 ? true : false;
     }
 
+    // An explicit schedule entry for today — or its 17:00/carry-over
+    // resolution above — is authoritative regardless of the master
+    // killswitch: that's exactly what the admin calendar's own legend
+    // promises ("If blank, it follows the Master Killswitch above"). The
+    // killswitch is only the fallback default for a day nobody scheduled at
+    // all; it must not silently override a day an admin explicitly opened.
     if (activeState === false || activeState === 'event') {
       isCommsEnabled = false;
     } else if (activeState === true) {
       isCommsEnabled = true;
-    }
-
-    if (!masterEnabled) {
-      isCommsEnabled = false;
+    } else {
+      isCommsEnabled = masterEnabled;
     }
 
     if (!isCommsEnabled) {

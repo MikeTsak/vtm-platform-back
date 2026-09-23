@@ -110,8 +110,25 @@ const colors = require('colors/safe');
 // Pino is only used in production or when JSON logging is forced
 const pinoLogger = pino();
 
+// Call sites throughout the codebase do both `log.err('X failed', err)` (the
+// raw Error as ctx) and `log.err('X failed', { message: err.message })`. The
+// latter was always fine; the former silently dropped the useful part in
+// production. Error.message/.stack/.name live on the prototype chain, not as
+// own enumerable properties, so `{ ...err }` (used below for the pino/JSON
+// path) serializes a plain Error to `{}` — and even a driver error (mysql2
+// attaches code/errno/sqlMessage as real own properties) still loses message
+// and stack the same way. That's meant every production error this route
+// logged as `log.err('...', err)` came out with no usable detail at all.
+function normalizeCtx(ctx) {
+  if (ctx instanceof Error) {
+    return { message: ctx.message, stack: ctx.stack, name: ctx.name, ...ctx };
+  }
+  return ctx;
+}
+
 function emit(level, cat, msg, ctx) {
   if (!allow(level)) return;
+  ctx = normalizeCtx(ctx);
 
   if (process.env.NODE_ENV !== 'production' && !USE_JSON) {
     const d = new Date();
