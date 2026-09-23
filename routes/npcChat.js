@@ -22,12 +22,16 @@ module.exports = async function (fastify, opts) {
       LEFT JOIN characters c ON c.user_id = u.id -- FIXED: Changed from u.character_id = c.id
       WHERE m.npc_id = ?
       GROUP BY u.id, u.display_name, c.name
-      ORDER BY COALESCE(last_incoming_at, last_message_at) DESC
+      -- MariaDB rejects aggregate aliases inside an ORDER BY expression
+      -- ("reference to group function"), so the aggregates are repeated here.
+      ORDER BY COALESCE(
+        MAX(CASE WHEN m.from_side = 'user' THEN m.created_at END),
+        MAX(CASE WHEN m.status != 'queued' THEN m.created_at END)
+      ) DESC
     `, [npcId]);
       reply.send({ conversations: rows });
     } catch (e) {
-      // Pro-tip: Log the actual error here temporarily if you ever get another 500!
-      // console.error("NPC Convo Error:", e);
+      log.err('Failed to fetch NPC conversations', { npcId, message: e.message });
       reply.status(500).json({ error: 'Failed to fetch NPC conversations' });
     }
   });

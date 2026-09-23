@@ -32,6 +32,45 @@ module.exports = async function (fastify, opts) {
     return rows.length > 0;
   }
 
+  // A member's display name for system-message text: character name if they
+  // have one, else their account display name — same fallback the group
+  // message queries already use (m.char_name || m.display_name).
+  async function nameFor(userId) {
+    const [[row]] = await pool.query(
+      `SELECT u.display_name, c.name as char_name FROM users u
+       LEFT JOIN characters c ON c.user_id = u.id WHERE u.id=?`,
+      [userId]
+    );
+    return row?.char_name || row?.display_name || 'Someone';
+  }
+
+  // Any current member (or a global admin) may rename a group, change its
+  // icon, or add/kick members — this isn't creator-only.
+  async function isMemberOrAdmin(groupId, user) {
+    if (user.role === 'admin') return true;
+    const [rows] = await pool.query('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?', [groupId, user.id]);
+    return rows.length > 0;
+  }
+
+  // Inserts an auto-generated line (member added/removed, renamed, icon
+  // changed) into a group's history and fans it out over the same
+  // chat:refresh event real messages use, so it appears live without a
+  // page reload. sender_id is the user who performed the action, kept for
+  // attribution/avatar even though the body itself isn't something a
+  // player typed.
+  async function postSystemMessage(groupId, actorId, text) {
+    const [r] = await pool.query(
+      "INSERT INTO chat_group_messages (group_id, sender_id, body, type) VALUES (?,?,?,'system')",
+      [groupId, actorId, text]
+    );
+    const [members] = await pool.query('SELECT user_id FROM chat_group_members WHERE group_id=?', [groupId]);
+    if (fastify.io) {
+      for (const m of members) fastify.io.to(`user_${m.user_id}`).emit('chat:refresh', { type: 'group', groupId });
+      fastify.io.to(`group_${groupId}`).emit('chat:refresh', { type: 'group', groupId });
+    }
+    return r.insertId;
+  }
+
   fastify.get('/api/chat/my-recent', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const userId = req.user.id;
@@ -312,7 +351,7 @@ module.exports = async function (fastify, opts) {
 
       // 2. Fetch Messages
       const [messages] = await pool.query(`
-      SELECT m.id, m.sender_id, m.body, m.created_at,
+      SELECT m.id, m.sender_id, m.body, m.created_at, m.type,
             m.attachment_id,
             u.display_name, c.name as char_name, c.clan
       FROM chat_group_messages m
@@ -353,7 +392,8 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  // Add members to an existing group (Creator/Admin only)
+  // Add members to an existing group — any current member can invite
+  // someone else in, not just the creator.
   fastify.post('/api/chat/groups/:id/members', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const groupId = Number(req.params.id);
@@ -362,17 +402,41 @@ module.exports = async function (fastify, opts) {
 
       const [g] = await pool.query('SELECT created_by FROM chat_groups WHERE id=?', [groupId]);
       if (!g.length) return reply.status(404).json({ error: 'Group not found' });
-      if (!isOwnerOrAdmin(req.user, g[0].created_by)) return reply.status(403).json({ error: 'Not authorized' });
+      if (!(await isMemberOrAdmin(groupId, req.user))) return reply.status(403).json({ error: 'Not a member of this group' });
 
-      const values = members.map(uid => [groupId, Number(uid)]);
+      const requestedIds = members.map(Number).filter(v => !isNaN(v));
+      if (!requestedIds.length) return reply.status(400).json({ error: 'No members provided' });
+
+      // Only the ids that weren't already members get a system line — an
+      // INSERT IGNORE on an existing member is a silent no-op and shouldn't
+      // announce anything.
+      const [existing] = await pool.query(
+        'SELECT user_id FROM chat_group_members WHERE group_id=? AND user_id IN (?)',
+        [groupId, requestedIds]
+      );
+      const existingIds = new Set(existing.map(r => r.user_id));
+      const newIds = requestedIds.filter(id => !existingIds.has(id));
+
+      const values = requestedIds.map(uid => [groupId, uid]);
       await pool.query('INSERT IGNORE INTO chat_group_members (group_id, user_id) VALUES ?', [values]);
+
+      if (newIds.length) {
+        const actorName = await nameFor(req.user.id);
+        for (const id of newIds) {
+          const targetName = await nameFor(id);
+          await postSystemMessage(groupId, req.user.id, `${actorName} added ${targetName}`);
+        }
+      }
+
       reply.send({ ok: true });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to add members' });
     }
   });
 
-  // Remove a member from a group (Creator/Admin, or User leaving)
+  // Remove a member from a group — any current member can kick another
+  // member (or leave themself); the creator can't be kicked by anyone,
+  // only replaced by deleting the group.
   fastify.delete('/api/chat/groups/:id/members/:userId', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const groupId = Number(req.params.id);
@@ -381,14 +445,18 @@ module.exports = async function (fastify, opts) {
       const [g] = await pool.query('SELECT created_by FROM chat_groups WHERE id=?', [groupId]);
       if (!g.length) return reply.status(404).json({ error: 'Group not found' });
 
-      // Check if requester is Creator, Admin, OR the user trying to leave
-      if (g[0].created_by !== req.user.id && req.user.role !== 'admin' && req.user.id !== targetUserId) {
-        return reply.status(403).json({ error: 'Not authorized' });
-      }
+      if (!(await isMemberOrAdmin(groupId, req.user))) return reply.status(403).json({ error: 'Not a member of this group' });
 
       if (g[0].created_by === targetUserId) return reply.status(400).json({ error: 'Cannot remove creator' });
 
       await pool.query('DELETE FROM chat_group_members WHERE group_id=? AND user_id=?', [groupId, targetUserId]);
+
+      const actorName = await nameFor(req.user.id);
+      const text = req.user.id === targetUserId
+        ? `${actorName} left the group chat`
+        : `${actorName} removed ${await nameFor(targetUserId)} from the group chat`;
+      await postSystemMessage(groupId, req.user.id, text);
+
       reply.send({ ok: true });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to remove member' });
@@ -412,8 +480,7 @@ module.exports = async function (fastify, opts) {
   });
 
   // Set/change a group's picture — a literal emoji or a ':Clan_Name:' crest
-  // token (Creator/Admin only). Lets a group created before this existed
-  // pick one too, not just new ones.
+  // token. Any current member can change it, not just the creator.
   fastify.put('/api/chat/groups/:id/icon', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const groupId = Number(req.params.id);
@@ -422,15 +489,46 @@ module.exports = async function (fastify, opts) {
 
       const [g] = await pool.query('SELECT created_by FROM chat_groups WHERE id=?', [groupId]);
       if (!g.length) return reply.status(404).json({ error: 'Group not found' });
-      if (!isOwnerOrAdmin(req.user, g[0].created_by)) return reply.status(403).json({ error: 'Only the creator can change this group\'s picture' });
+      if (!(await isMemberOrAdmin(groupId, req.user))) return reply.status(403).json({ error: 'Not a member of this group' });
 
       await pool.query('UPDATE chat_groups SET icon=? WHERE id=?', [groupIcon, groupId]);
 
-      if (fastify.io) fastify.io.to(`group_${groupId}`).emit('chat:refresh', { type: 'group', groupId });
+      const actorName = await nameFor(req.user.id);
+      await postSystemMessage(groupId, req.user.id, groupIcon
+        ? `${actorName} set the group icon to ${groupIcon}`
+        : `${actorName} removed the group icon`);
+
       reply.send({ ok: true, icon: groupIcon });
     } catch (e) {
       log.err('Failed to update group icon', { message: e.message });
       reply.status(500).json({ error: 'Failed to update group picture' });
+    }
+  });
+
+  // Rename a group. Any current member can rename it, not just the creator.
+  fastify.put('/api/chat/groups/:id/name', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const groupId = Number(req.params.id);
+      const { name } = req.body || {};
+      const newName = typeof name === 'string' ? name.trim() : '';
+      if (!newName || newName.length > 100) return reply.status(400).json({ error: 'Name must be 1-100 characters' });
+
+      const [g] = await pool.query('SELECT created_by, name FROM chat_groups WHERE id=?', [groupId]);
+      if (!g.length) return reply.status(404).json({ error: 'Group not found' });
+      if (!(await isMemberOrAdmin(groupId, req.user))) return reply.status(403).json({ error: 'Not a member of this group' });
+
+      const oldName = g[0].name;
+      if (newName === oldName) return reply.send({ ok: true, name: newName });
+
+      await pool.query('UPDATE chat_groups SET name=? WHERE id=?', [newName, groupId]);
+
+      const actorName = await nameFor(req.user.id);
+      await postSystemMessage(groupId, req.user.id, `${actorName} changed the name of the groupchat from ${oldName} to ${newName}`);
+
+      reply.send({ ok: true, name: newName });
+    } catch (e) {
+      log.err('Failed to rename group', { message: e.message });
+      reply.status(500).json({ error: 'Failed to rename group' });
     }
   });
 
@@ -450,7 +548,7 @@ module.exports = async function (fastify, opts) {
         [groupId, req.user.id, body ? body.trim() : '', attachment_id || null]);
 
       const [[message]] = await pool.query(`
-      SELECT m.id, m.sender_id, m.body, m.created_at, m.attachment_id,
+      SELECT m.id, m.sender_id, m.body, m.created_at, m.attachment_id, m.type,
              u.display_name, c.name as char_name, c.clan
       FROM chat_group_messages m
       LEFT JOIN users u ON m.sender_id = u.id
