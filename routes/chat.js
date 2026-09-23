@@ -3,6 +3,8 @@
 // SchreckNet chat: direct messages, group rooms, reactions, media, and the
 // edit/delete window. Realtime fan-out goes through fastify.io.
 
+const { isAdmin: checkIsAdmin, isOwnerOrAdmin } = require('../services/guards');
+
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, moderateLimiter, uploadLimiter, sendPushNotification, sharp } = opts;
 
@@ -183,7 +185,7 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/chat/unread-count', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const userId = req.user.id;
-      const isAdmin = req.user.role === 'admin' || req.user.permission_level === 'admin';
+      const isAdmin = checkIsAdmin(req.user);
       const npcSql = isAdmin
         ? `SELECT COUNT(*) FROM npc_messages m JOIN npcs n ON n.id = m.npc_id
            WHERE m.from_side = 'user' AND m.read_at IS NULL AND IFNULL(n.is_disabled, 0) = 0`
@@ -360,7 +362,7 @@ module.exports = async function (fastify, opts) {
 
       const [g] = await pool.query('SELECT created_by FROM chat_groups WHERE id=?', [groupId]);
       if (!g.length) return reply.status(404).json({ error: 'Group not found' });
-      if (g[0].created_by !== req.user.id && req.user.role !== 'admin') return reply.status(403).json({ error: 'Not authorized' });
+      if (!isOwnerOrAdmin(req.user, g[0].created_by)) return reply.status(403).json({ error: 'Not authorized' });
 
       const values = members.map(uid => [groupId, Number(uid)]);
       await pool.query('INSERT IGNORE INTO chat_group_members (group_id, user_id) VALUES ?', [values]);
@@ -399,7 +401,7 @@ module.exports = async function (fastify, opts) {
       const groupId = Number(req.params.id);
       const [g] = await pool.query('SELECT created_by FROM chat_groups WHERE id=?', [groupId]);
       if (!g.length) return reply.status(404).json({ error: 'Group not found' });
-      if (g[0].created_by !== req.user.id && req.user.role !== 'admin') return reply.status(403).json({ error: 'Only the creator can delete this group' });
+      if (!isOwnerOrAdmin(req.user, g[0].created_by)) return reply.status(403).json({ error: 'Only the creator can delete this group' });
 
       // ON DELETE CASCADE will automatically wipe the chat_group_members and chat_group_messages
       await pool.query('DELETE FROM chat_groups WHERE id=?', [groupId]);
@@ -420,7 +422,7 @@ module.exports = async function (fastify, opts) {
 
       const [g] = await pool.query('SELECT created_by FROM chat_groups WHERE id=?', [groupId]);
       if (!g.length) return reply.status(404).json({ error: 'Group not found' });
-      if (g[0].created_by !== req.user.id && req.user.role !== 'admin') return reply.status(403).json({ error: 'Only the creator can change this group\'s picture' });
+      if (!isOwnerOrAdmin(req.user, g[0].created_by)) return reply.status(403).json({ error: 'Only the creator can change this group\'s picture' });
 
       await pool.query('UPDATE chat_groups SET icon=? WHERE id=?', [groupIcon, groupId]);
 
@@ -620,7 +622,7 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/chat/npcs', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const myId = req.user.id;
-      const isAdmin = req.user.role === 'admin' || req.user.permission_level === 'admin';
+      const isAdmin = checkIsAdmin(req.user);
       let query, params;
 
       if (isAdmin) {
@@ -985,7 +987,7 @@ module.exports = async function (fastify, opts) {
     const cfg = EDITABLE_MESSAGE_TABLES[table];
     if (!cfg) return { status: 400, error: 'Invalid message table.' };
     const msgId = Number(req.params.id);
-    const isAdmin = req.user.role === 'admin' || req.user.permission_level === 'admin';
+    const isAdmin = checkIsAdmin(req.user);
     const extraWhere = !isAdmin && cfg.playerCondition ? ` AND ${cfg.playerCondition}` : '';
     const [rows] = await pool.query(`SELECT *, ${cfg.senderCol} as sender_id FROM ${table} WHERE id = ?${extraWhere}`, [msgId]);
     if (rows.length === 0) return { status: 404, error: 'Message not found.' };

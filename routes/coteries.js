@@ -16,8 +16,7 @@
 // pool arithmetic is treated as a display convenience, never as truth.
 
 const rules = require('../utils/coterieRules');
-
-const isAdmin = (user) => user && (user.role === 'admin' || user.permission_level === 'admin');
+const { isAdmin } = require('../services/guards');
 
 const safeParse = (val, fallback) => {
   if (val == null) return fallback;

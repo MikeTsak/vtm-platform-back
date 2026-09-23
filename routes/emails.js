@@ -3,6 +3,8 @@
 // The in-fiction email client: Storyteller identities and threads on one side,
 // the player inbox on the other.
 
+const { isAdmin: checkIsAdmin } = require('../services/guards');
+
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, sendPushNotification } = opts;
 
@@ -138,7 +140,7 @@ module.exports = async function (fastify, opts) {
   // inbox lists: players count sent identity mail, admins count player mail.
   fastify.get('/api/emails/unread-count', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      const isAdmin = req.user.role === 'admin' || req.user.permission_level === 'admin';
+      const isAdmin = checkIsAdmin(req.user);
       const [[row]] = isAdmin
         ? await pool.query(`SELECT COUNT(*) AS count FROM email_messages WHERE sender_type = 'user' AND is_read = 0`)
         : await pool.query(`

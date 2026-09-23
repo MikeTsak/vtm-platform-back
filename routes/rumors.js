@@ -5,6 +5,7 @@ const axios = require('axios');
 const { getSetting } = require('../utils/settings');
 const { sanitizeRichText } = require('../utils/sanitize');
 const { isVideoUrl, resolveMediaUrl } = require('../services/news');
+const { parseSheet } = require('../utils/sheet');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, broadcastNtfyAlert } = opts;
@@ -52,10 +53,8 @@ module.exports = async function (fastify, opts) {
         const [chars] = await pool.query('SELECT id, sheet FROM characters WHERE user_id = ?', [req.user.id]);
         let isActive = false;
         if (chars.length > 0) {
-          try {
-            const sheetData = typeof chars[0].sheet === 'string' ? JSON.parse(chars[0].sheet) : chars[0].sheet;
-            if (sheetData && sheetData.is_active) isActive = true;
-          } catch (e) { }
+          const sheetData = parseSheet(chars[0].sheet);
+          if (sheetData && sheetData.is_active) isActive = true;
         }
         if (!isActive) {
           return reply.status(403).json({ error: 'You must have an active character to post rumors.' });

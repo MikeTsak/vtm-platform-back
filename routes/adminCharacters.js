@@ -2,6 +2,8 @@
 //
 // Storyteller character administration: roster, ghouls, edit, delete.
 
+const { parseSheet } = require('../utils/sheet');
+
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin } = opts;
 
@@ -77,7 +79,7 @@ module.exports = async function (fastify, opts) {
 
     const [rows] = await pool.query('SELECT * FROM characters WHERE id=?', [id]);
     const ch = rows[0];
-    if (ch && ch.sheet && typeof ch.sheet === 'string') { try { ch.sheet = JSON.parse(ch.sheet); } catch { } }
+    if (ch) ch.sheet = parseSheet(ch.sheet);
     log.adm('Character updated', { id, fields });
     reply.send({ character: ch });
   });

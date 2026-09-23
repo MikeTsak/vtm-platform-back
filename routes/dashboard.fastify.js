@@ -3,6 +3,7 @@ module.exports = async function (fastify, opts) {
   const { getSetting } = require('../utils/settings');
   const { authRequired } = require('../authMiddleware.fastify');
   const { log } = require('../logger');
+  const { parseSheet } = require('../utils/sheet');
 
   // Helper to get first and last day of current month
   const startOfMonth = () => {
@@ -251,11 +252,7 @@ module.exports = async function (fastify, opts) {
         : req.user;
 
       let character = charRows[0][0] || null;
-      if (character && character.sheet && typeof character.sheet === 'string') {
-        try {
-          character.sheet = JSON.parse(character.sheet);
-        } catch { }
-      }
+      if (character) character.sheet = parseSheet(character.sheet);
 
       // Aggregate dashboard data
       const dashboard = await getDashboardData(userId, user?.role, character);

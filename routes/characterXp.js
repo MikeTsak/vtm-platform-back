@@ -1,5 +1,6 @@
 const { xpCost } = require('../utils/xpCost');
 const { idempotencyCheck, idempotencySave } = require('../utils/idempotency');
+const { parseSheet } = require('../utils/sheet');
 
 // Self-serve XP spend: always operates on the caller's OWN character
 // (`WHERE user_id = req.user.id`), so there's no :id param and no IDOR
@@ -106,7 +107,7 @@ module.exports = async function (fastify, opts) {
 
     const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [ch.id]);
     const outCh = out[0];
-    if (outCh && outCh.sheet && typeof outCh.sheet === 'string') { try { outCh.sheet = JSON.parse(outCh.sheet); } catch { } }
+    if (outCh) outCh.sheet = parseSheet(outCh.sheet);
 
     if (cost > 0) {
       log.ok('XP spend complete', { user_id: req.user.id, remaining_xp: outCh?.xp });

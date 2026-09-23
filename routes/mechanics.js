@@ -3,6 +3,8 @@
 // Server-authoritative V5 mechanics — rouse checks, willpower spends, damage.
 // These must stay server-side: the client is not trusted to apply them.
 
+const { isOwnerOrAdmin } = require('../services/guards');
+
 module.exports = async function (fastify, opts) {
   const { pool, authRequired } = opts;
 
@@ -15,7 +17,7 @@ module.exports = async function (fastify, opts) {
       // Simple permission check: must own character or be admin
       const [rows] = await pool.query('SELECT user_id, sheet FROM characters WHERE id=?', [charId]);
       if (!rows.length) return reply.status(404).json({ error: 'Not found' });
-      if (Number(rows[0].user_id) !== Number(req.user.id) && req.user.role !== 'admin') {
+      if (!isOwnerOrAdmin(req.user, rows[0].user_id)) {
         return reply.status(403).json({ error: 'Forbidden' });
       }
 
@@ -64,7 +66,7 @@ module.exports = async function (fastify, opts) {
 
       const [rows] = await pool.query('SELECT user_id, sheet FROM characters WHERE id=?', [charId]);
       if (!rows.length) return reply.status(404).json({ error: 'Not found' });
-      if (rows[0].user_id !== req.user.id && req.user.role !== 'admin') {
+      if (!isOwnerOrAdmin(req.user, rows[0].user_id)) {
         return reply.status(403).json({ error: 'Forbidden' });
       }
 
@@ -104,7 +106,7 @@ module.exports = async function (fastify, opts) {
 
       const [rows] = await pool.query('SELECT user_id, sheet FROM characters WHERE id=?', [charId]);
       if (!rows.length) return reply.status(404).json({ error: 'Not found' });
-      if (rows[0].user_id !== req.user.id && req.user.role !== 'admin') {
+      if (!isOwnerOrAdmin(req.user, rows[0].user_id)) {
         return reply.status(403).json({ error: 'Forbidden' });
       }
 

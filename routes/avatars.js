@@ -4,6 +4,7 @@
 // email identities). Uploads are resized and pushed to the image CDN.
 
 const axios = require('axios');
+const { isOwnerOrAdmin } = require('../services/guards');
 
 // The GET routes normally 302 to the image CDN (img.miketsak.gr), which sends
 // no CORS header. That's fine for a plain <img>, but the Domains map reads
@@ -146,7 +147,7 @@ module.exports = async function (fastify, opts) {
         [req.params.id]
       );
       if (!owner) return reply.status(404).send({ error: 'Retainer not found' });
-      if (owner.user_id !== req.user.id && req.user.role !== 'admin') {
+      if (!isOwnerOrAdmin(req.user, owner.user_id)) {
         return reply.status(403).send({ error: 'Not your retainer' });
       }
 
@@ -293,7 +294,7 @@ module.exports = async function (fastify, opts) {
 
   fastify.put('/api/users/:id/avatar', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      if (req.user.id !== parseInt(req.params.id) && req.user.role !== 'admin') {
+      if (!isOwnerOrAdmin(req.user, req.params.id)) {
         return reply.status(403).send({ error: 'Forbidden. You can only update your own avatar.' });
       }
       const fileData = await req.file();

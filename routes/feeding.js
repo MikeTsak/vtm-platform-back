@@ -13,19 +13,13 @@
 const { getSetting, setSetting } = require('../utils/settings');
 const { getCycleInfo, resolveCurrentFeedingCycle } = require('../utils/feedingCycle');
 const { huntingDifficulty } = require('../data/huntingDifficulty');
+const { isOwnerOrAdmin } = require('../services/guards');
 const { chasseBonus } = require('../data/chasseMerits');
 const { PREDATOR_HUNTING_POOLS, PREDATOR_SPECIALTIES } = require('../data/predatorHuntingPools');
 const { rollDice, computeFeedingOutcome, OUTCOME_DELTAS } = require('../services/feedingDice');
 const { pickFlavor } = require('../data/predatorFlavor');
 const { runFeedingDecay } = require('../services/feedingDecay');
-
-function parseSheet(raw) {
-  if (!raw) return {};
-  if (typeof raw === 'string') {
-    try { return JSON.parse(raw) || {}; } catch { return {}; }
-  }
-  return raw;
-}
+const { parseSheet } = require('../utils/sheet');
 
 // Character sheets store this as `predator_type` (snake_case) everywhere the
 // rest of the app reads it (CharacterEditor.jsx's edit field, CharacterView.jsx,
@@ -379,7 +373,7 @@ module.exports = async function (fastify, opts) {
 
     return withCharacterLock(rows[0].character_id, async (conn, locked) => {
       if (!locked) return { code: 404, body: { error: 'Character not found.' } };
-      if (locked.user_id !== req.user.id && req.user.role !== 'admin') {
+      if (!isOwnerOrAdmin(req.user, locked.user_id)) {
         return { code: 403, body: { error: 'Forbidden' } };
       }
       const [[feeding]] = await conn.query('SELECT * FROM feedings WHERE id=?', [feedingId]);
@@ -533,7 +527,7 @@ module.exports = async function (fastify, opts) {
       const id = Number(req.params.id);
       const [rows] = await pool.query('SELECT owner_user_id FROM domain_incidents WHERE id=?', [id]);
       if (!rows.length) return reply.status(404).send({ error: 'Not found' });
-      if (rows[0].owner_user_id !== req.user.id && req.user.role !== 'admin') {
+      if (!isOwnerOrAdmin(req.user, rows[0].owner_user_id)) {
         return reply.status(403).send({ error: 'Forbidden' });
       }
       await pool.query('UPDATE domain_incidents SET dismissed_at=NOW() WHERE id=?', [id]);
@@ -673,8 +667,7 @@ module.exports = async function (fastify, opts) {
       const [chars] = await pool.query('SELECT id, name, sheet FROM characters WHERE sheet IS NOT NULL');
       const roster = [];
       for (const row of chars) {
-        let sheet;
-        try { sheet = typeof row.sheet === 'string' ? JSON.parse(row.sheet) : row.sheet; } catch { continue; }
+        const sheet = parseSheet(row.sheet);
         const merits = Array.isArray(sheet?.advantages?.merits) ? sheet.advantages.merits : [];
         const herdEntry = merits.find(b =>
           String(b.id || '').toLowerCase().includes('herd__herd') ||
@@ -707,8 +700,7 @@ module.exports = async function (fastify, opts) {
 
       const [charRows] = await pool.query('SELECT id, name, sheet FROM characters WHERE id=? LIMIT 1', [character_id]);
       if (!charRows.length) return reply.status(404).send({ error: 'Character not found' });
-      let sheet;
-      try { sheet = typeof charRows[0].sheet === 'string' ? JSON.parse(charRows[0].sheet) : charRows[0].sheet; } catch { sheet = {}; }
+      const sheet = parseSheet(charRows[0].sheet);
 
       const merits = Array.isArray(sheet?.advantages?.merits) ? sheet.advantages.merits : [];
       const herdEntry = merits.find(b =>
@@ -740,9 +732,7 @@ module.exports = async function (fastify, opts) {
 
       const [charRows] = await pool.query('SELECT id, name, sheet FROM characters WHERE id=? LIMIT 1', [character_id]);
       if (!charRows.length) return reply.status(404).send({ error: 'Character not found' });
-      let sheet;
-      try { sheet = typeof charRows[0].sheet === 'string' ? JSON.parse(charRows[0].sheet) : charRows[0].sheet; } catch { sheet = {}; }
-      if (!sheet) sheet = {};
+      const sheet = parseSheet(charRows[0].sheet);
 
       const before = clamp(sheet.hunger !== undefined && sheet.hunger !== null ? Number(sheet.hunger) : 1, 0, 5);
       let after = before;

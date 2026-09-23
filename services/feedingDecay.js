@@ -13,6 +13,7 @@
 
 const { getSetting, setSetting } = require('../utils/settings');
 const { getCycleInfo, resolveCurrentFeedingCycle } = require('../utils/feedingCycle');
+const { parseSheet } = require('../utils/sheet');
 
 const MAX_DIVISION = 88;
 
@@ -75,9 +76,7 @@ async function runFeedingDecay(pool, log, { force = false } = {}) {
   const [charRows] = await pool.query('SELECT id, sheet FROM characters WHERE sheet IS NOT NULL');
   let herdRegen = 0;
   for (const row of charRows) {
-    let sheet;
-    try { sheet = typeof row.sheet === 'string' ? JSON.parse(row.sheet) : row.sheet; } catch { continue; }
-    if (!sheet) continue;
+    const sheet = parseSheet(row.sheet);
 
     const merits = Array.isArray(sheet.advantages?.merits) ? sheet.advantages.merits : [];
     const herdEntry = merits.find(b =>

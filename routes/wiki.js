@@ -1,5 +1,5 @@
 module.exports = async function (fastify, opts) {
-  const { pool, log, authRequired, optionalAuth, imageClient } = opts;
+  const { pool, log, authRequired, optionalAuth, requireAdmin, imageClient } = opts;
 
   /* -------------------- WIKI ARTICLES -------------------- */
 
@@ -501,9 +501,7 @@ module.exports = async function (fastify, opts) {
 
   /* -------------------- WIKIPEDIA IMPORT (wikijs) -------------------- */
   
-  fastify.get('/api/wiki/external/wikipedia/search', { preHandler: [authRequired] }, async (req, reply) => {
-    if (req.user.role !== 'admin') return reply.status(403).send({ error: 'Admin only' });
-    
+  fastify.get('/api/wiki/external/wikipedia/search', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const { q } = req.query;
     if (!q) return reply.send({ results: [] });
     
@@ -517,9 +515,7 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  fastify.get('/api/wiki/external/wikipedia/fetch', { preHandler: [authRequired] }, async (req, reply) => {
-    if (req.user.role !== 'admin') return reply.status(403).send({ error: 'Admin only' });
-
+  fastify.get('/api/wiki/external/wikipedia/fetch', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const { title } = req.query;
     if (!title) return reply.status(400).send({ error: 'Missing title' });
     
@@ -554,8 +550,7 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  fastify.post('/api/wiki/timeline', { preHandler: [authRequired] }, async (req, reply) => {
-    if (req.user.role !== 'admin') return reply.status(403).send({ error: 'Admin only' });
+  fastify.post('/api/wiki/timeline', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const { title, date_label, description, article_slug, category, sort_order } = req.body;
     if (!title || !date_label) return reply.status(400).send({ error: 'title and date_label are required' });
     try {
@@ -570,8 +565,7 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  fastify.put('/api/wiki/timeline/:id', { preHandler: [authRequired] }, async (req, reply) => {
-    if (req.user.role !== 'admin') return reply.status(403).send({ error: 'Admin only' });
+  fastify.put('/api/wiki/timeline/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const { id } = req.params;
     const { title, date_label, description, article_slug, category, sort_order } = req.body;
     try {
@@ -586,8 +580,7 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  fastify.delete('/api/wiki/timeline/:id', { preHandler: [authRequired] }, async (req, reply) => {
-    if (req.user.role !== 'admin') return reply.status(403).send({ error: 'Admin only' });
+  fastify.delete('/api/wiki/timeline/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       await pool.query('DELETE FROM wiki_timeline_events WHERE id=?', [req.params.id]);
       return reply.send({ success: true });
@@ -662,8 +655,7 @@ module.exports = async function (fastify, opts) {
 
   /* -------------------- ADMIN NOTES ON ARTICLES -------------------- */
 
-  fastify.get('/api/wiki/articles/:slug/admin-notes', { preHandler: [authRequired] }, async (req, reply) => {
-    if (req.user.role !== 'admin') return reply.status(403).send({ error: 'Admin only' });
+  fastify.get('/api/wiki/articles/:slug/admin-notes', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const [artRows] = await pool.query('SELECT id FROM wiki_articles WHERE slug=?', [req.params.slug]);
       if (!artRows.length) return reply.status(404).send({ error: 'Article not found' });
@@ -682,8 +674,7 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  fastify.post('/api/wiki/articles/:slug/admin-notes', { preHandler: [authRequired] }, async (req, reply) => {
-    if (req.user.role !== 'admin') return reply.status(403).send({ error: 'Admin only' });
+  fastify.post('/api/wiki/articles/:slug/admin-notes', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const { content } = req.body;
     if (!content?.trim()) return reply.status(400).send({ error: 'Content is required' });
     try {
@@ -700,8 +691,7 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  fastify.delete('/api/wiki/admin-notes/:id', { preHandler: [authRequired] }, async (req, reply) => {
-    if (req.user.role !== 'admin') return reply.status(403).send({ error: 'Admin only' });
+  fastify.delete('/api/wiki/admin-notes/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       await pool.query('DELETE FROM wiki_admin_notes WHERE id=?', [req.params.id]);
       return reply.send({ success: true });

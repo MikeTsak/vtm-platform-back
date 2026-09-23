@@ -4,6 +4,7 @@
 // that opens them.
 const { getSetting, setSetting, clearSettingCache } = require('../utils/settings');
 const { flushQueuedMessages } = require('../services/commsQueue');
+const { getAthensDate, getAthensHour, getAthensDayName, getAthensEuDate } = require('../utils/athensTime');
 
 function resolveCommsSchedule(scheduleStr, masterEnabledStr, nowInput = new Date()) {
   const masterEnabled = masterEnabledStr === 'true';
@@ -13,41 +14,6 @@ function resolveCommsSchedule(scheduleStr, masterEnabledStr, nowInput = new Date
   try {
     const schedule = typeof scheduleStr === 'string' ? JSON.parse(scheduleStr) : (scheduleStr || {});
     const now = nowInput instanceof Date && !isNaN(nowInput.getTime()) ? nowInput : new Date();
-
-    const getAthensDate = (d) => new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Europe/Athens',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit'
-    }).format(d);
-
-    const getAthensHour = (d) => {
-      const hourStr = new Intl.DateTimeFormat('en-GB', {
-        timeZone: 'Europe/Athens',
-        hour: '2-digit',
-        hour12: false
-      }).format(d);
-      const h = parseInt(hourStr, 10);
-      return isNaN(h) ? 0 : h;
-    };
-
-    const getAthensDayName = (d) => new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Europe/Athens',
-      weekday: 'long'
-    }).format(d);
-
-    const getAthensEuDate = (d) => {
-      const parts = new Intl.DateTimeFormat('en-GB', {
-        timeZone: 'Europe/Athens',
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric'
-      }).formatToParts(d);
-      const day = parts.find(p => p.type === 'day')?.value;
-      const month = parts.find(p => p.type === 'month')?.value;
-      const year = parts.find(p => p.type === 'year')?.value;
-      return `${day}/${month}/${year}`;
-    };
 
     const todayStr = getAthensDate(now);
     const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);

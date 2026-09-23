@@ -5,6 +5,7 @@
 const { getSetting, setSetting } = require('../utils/settings');
 const { startOfMonth, endOfMonth, feedingFromPredator } = require('../services/format');
 const { getCycleInfo, resolveCurrentFeedingCycle } = require('../utils/feedingCycle');
+const { parseSheet } = require('../utils/sheet');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, broadcastNtfyAlert } = opts;
@@ -316,10 +317,8 @@ module.exports = async function (fastify, opts) {
     if (!defaultFeed) {
       let pred = null;
       if (ch.sheet) {
-        try {
-          const parsed = typeof ch.sheet === 'string' ? JSON.parse(ch.sheet) : ch.sheet;
-          pred = parsed?.predator_type || parsed?.predatorType || null;
-        } catch { }
+        const parsed = parseSheet(ch.sheet);
+        pred = parsed?.predator_type || parsed?.predatorType || null;
       }
       defaultFeed = feedingFromPredator(pred);
     }

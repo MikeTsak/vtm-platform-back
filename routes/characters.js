@@ -1,5 +1,7 @@
 const { getSetting } = require('../utils/settings');
 const { DEFAULT_DISABLED_CLANS } = require('../utils/clans');
+const { isAdmin, userOwnsCharacter } = require('../services/guards');
+const { parseSheet } = require('../utils/sheet');
 
 async function isClanDisabled(clan) {
   const raw = await getSetting('disabled_clans', JSON.stringify(DEFAULT_DISABLED_CLANS));
@@ -19,9 +21,7 @@ module.exports = async function (fastify, opts) {
     const [rows] = await pool.query('SELECT * FROM characters WHERE user_id=?', [req.user.id]);
     const ch = rows[0] || null;
 
-    if (ch && ch.sheet && typeof ch.sheet === 'string') {
-      try { ch.sheet = JSON.parse(ch.sheet); } catch { }
-    }
+    if (ch) ch.sheet = parseSheet(ch.sheet);
 
     log.char('Fetch my character', { user_id: req.user.id, hasCharacter: !!ch });
 
@@ -57,7 +57,7 @@ module.exports = async function (fastify, opts) {
 
     const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [rows[0].id]);
     const ch = out[0];
-    if (ch && ch.sheet && typeof ch.sheet === 'string') { try { ch.sheet = JSON.parse(ch.sheet); } catch { } }
+    if (ch) ch.sheet = parseSheet(ch.sheet);
     log.char('Character updated', { id: rows[0].id, user_id: req.user.id, updates: fields });
     reply.send({ character: ch });
   });
@@ -148,10 +148,7 @@ module.exports = async function (fastify, opts) {
         return reply.status(409).json({ error: 'Character already exists' });
       }
 
-      let sheetObj = sheet || {};
-      if (typeof sheetObj === 'string') {
-        try { sheetObj = JSON.parse(sheetObj); } catch { sheetObj = {}; }
-      }
+      let sheetObj = parseSheet(sheet);
       sheetObj.is_active = false;
 
       const [r] = await pool.query(
@@ -161,7 +158,7 @@ module.exports = async function (fastify, opts) {
 
       const [rows] = await pool.query('SELECT * FROM characters WHERE id=?', [r.insertId]);
       const ch = rows[0];
-      if (ch && ch.sheet && typeof ch.sheet === 'string') { try { ch.sheet = JSON.parse(ch.sheet); } catch { } }
+      if (ch) ch.sheet = parseSheet(ch.sheet);
       log.char('Character created', { id: r.insertId, user_id: req.user.id, name, clan, xp: ch?.xp });
       broadcastNtfyAlert(`**${name}** (Clan: **${clan}**) was created by ${req.user.display_name} (${req.user.id}).`, { title: 'New Character', tags: 'vampire', priority: 'default' });
       reply.send({ character: ch });
@@ -257,7 +254,7 @@ module.exports = async function (fastify, opts) {
 
     const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [rows[0].id]);
     const ch = out[0];
-    if (ch && ch.sheet && typeof ch.sheet === 'string') { try { ch.sheet = JSON.parse(ch.sheet); } catch { } }
+    if (ch) ch.sheet = parseSheet(ch.sheet);
     log.char('Character updated', { id: rows[0].id, user_id: req.user.id, updates: fields });
     reply.send({ character: ch });
   });
@@ -268,9 +265,7 @@ module.exports = async function (fastify, opts) {
     try {
       const [rows] = await pool.query('SELECT * FROM characters WHERE id=?', [req.params.id]);
       const ch = rows[0] || null;
-      if (ch && ch.sheet && typeof ch.sheet === 'string') {
-        try { ch.sheet = JSON.parse(ch.sheet); } catch { }
-      }
+      if (ch) ch.sheet = parseSheet(ch.sheet);
       log.char('Fetch character by ID', { target_id: req.params.id, hasCharacter: !!ch });
       reply.send({ character: ch });
     } catch (e) {
@@ -303,9 +298,7 @@ module.exports = async function (fastify, opts) {
 
     const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [charId]);
     const ch = out[0];
-    if (ch && ch.sheet && typeof ch.sheet === 'string') {
-      try { ch.sheet = JSON.parse(ch.sheet); } catch { }
-    }
+    if (ch) ch.sheet = parseSheet(ch.sheet);
 
     log.char('Character updated by Admin', { id: charId, admin_id: req.user.id });
     reply.send({ character: ch });
@@ -354,9 +347,8 @@ module.exports = async function (fastify, opts) {
 
     try {
       const charId = Number(req.params.id);
-      if (req.user.role !== 'admin') {
-        const [charRows] = await pool.query('SELECT id FROM characters WHERE id = ? AND user_id = ?', [charId, req.user.id]);
-        if (!charRows.length) return reply.status(403).json({ error: 'Unauthorized' });
+      if (!isAdmin(req.user) && !(await userOwnsCharacter(pool, req.user.id, charId))) {
+        return reply.status(403).json({ error: 'Unauthorized' });
       }
 
       const [items] = await pool.query(
@@ -381,9 +373,8 @@ module.exports = async function (fastify, opts) {
     }
 
     try {
-      if (req.user.role !== 'admin') {
-        const [charRows] = await pool.query('SELECT id FROM characters WHERE id = ? AND user_id = ?', [charId, req.user.id]);
-        if (!charRows.length) return reply.status(403).json({ error: 'Unauthorized' });
+      if (!isAdmin(req.user) && !(await userOwnsCharacter(pool, req.user.id, charId))) {
+        return reply.status(403).json({ error: 'Unauthorized' });
       }
 
       const finalImage = await resolveItemImage(image, charId);
@@ -414,9 +405,8 @@ module.exports = async function (fastify, opts) {
     }
 
     try {
-      if (req.user.role !== 'admin') {
-        const [charRows] = await pool.query('SELECT id FROM characters WHERE id = ? AND user_id = ?', [charId, req.user.id]);
-        if (!charRows.length) return reply.status(403).json({ error: 'Unauthorized' });
+      if (!isAdmin(req.user) && !(await userOwnsCharacter(pool, req.user.id, charId))) {
+        return reply.status(403).json({ error: 'Unauthorized' });
       }
 
       // An absent `image` key means 'leave the picture alone'; an explicit
@@ -456,9 +446,8 @@ module.exports = async function (fastify, opts) {
     const itemId = Number(req.params.itemId);
 
     try {
-      if (req.user.role !== 'admin') {
-        const [charRows] = await pool.query('SELECT id FROM characters WHERE id = ? AND user_id = ?', [charId, req.user.id]);
-        if (!charRows.length) return reply.status(403).json({ error: 'Unauthorized' });
+      if (!isAdmin(req.user) && !(await userOwnsCharacter(pool, req.user.id, charId))) {
+        return reply.status(403).json({ error: 'Unauthorized' });
       }
 
       const [result] = await pool.query('DELETE FROM inventory_items WHERE id=? AND character_id=?', [itemId, charId]);
@@ -472,158 +461,19 @@ module.exports = async function (fastify, opts) {
 
   // --- Character Personal Inventory ---
 
-  // Get a character's inventory (owner or admin)
-  // DUP: fastify.get('/api/characters/:id/inventory', { preHandler: [authRequired] }, async (req, reply) => {
-  // DUP:   const charId = Number(req.params.id);
-  // DUP:   try {
-  // DUP:     // Check if the requesting user owns the character or is an admin
-  // DUP:     if (req.user.role !== 'admin') {
-  // DUP:       const [charRows] = await pool.query(
-  // DUP:         'SELECT id FROM characters WHERE id = ? AND user_id = ?',
-  // DUP:         [charId, req.user.id]
-  // DUP:       );
-  // DUP:       if (!charRows.length) {
-  // DUP:         return reply.status(403).json({ error: 'Unauthorized' });
-  // DUP:       }
-  // DUP:     }
-  // DUP:     const [items] = await pool.query(
-  // DUP:       'SELECT * FROM character_inventory WHERE character_id = ? ORDER BY id',
-  // DUP:       [charId]
-  // DUP:     );
-  // DUP:     reply.send({ items });
-  // DUP:   } catch (e) {
-  // DUP:     log.err('Failed to fetch character inventory', { message: e.message, character_id: charId });
-  // DUP:     reply.status(500).json({ error: 'Failed to fetch inventory' });
-  // DUP:   }
-  // DUP: });
-
-  // Add an item to a character's inventory (owner or admin)
-  // DUP: fastify.post('/api/characters/:id/inventory', { preHandler: [authRequired] }, async (req, reply) => {
-  // DUP:   const charId = Number(req.params.id);
-  // DUP: 
-  // DUP:   // Destructure all available payload fields
-  // DUP:   const {
-  // DUP:     name,
-  // DUP:     item_type,
-  // DUP:     description,
-  // DUP:     mechanic_notes,
-  // DUP:     quantity,
-  // DUP:     image,
-  // DUP:     researched
-  // DUP:   } = req.body;
-  // DUP: 
-  // DUP:   if (!name) {
-  // DUP:     return reply.status(400).json({ error: 'Item name is required' });
-  // DUP:   }
-  // DUP: 
-  // DUP:   try {
-  // DUP:     // Verify user owns the character (unless admin)
-  // DUP:     if (req.user.role !== 'admin') {
-  // DUP:       const [charRows] = await pool.query(
-  // DUP:         'SELECT id FROM characters WHERE id = ? AND user_id = ?',
-  // DUP:         [charId, req.user.id]
-  // DUP:       );
-  // DUP:       if (!charRows.length) {
-  // DUP:         return reply.status(403).json({ error: 'Unauthorized' });
-  // DUP:       }
-  // DUP:     }
-  // DUP: 
-  // DUP:     // Insert new item
-  // DUP:     const [r] = await pool.query(
-  // DUP:       `INSERT INTO inventory_items 
-  // DUP:         (character_id, name, item_type, description, mechanic_notes, quantity, image, researched) 
-  // DUP:        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  // DUP:       [
-  // DUP:         charId,
-  // DUP:         name,
-  // DUP:         item_type || 'Mundane',
-  // DUP:         description || null,
-  // DUP:         mechanic_notes || null,
-  // DUP:         quantity || 1,
-  // DUP:         image || null,
-  // DUP:         researched ?? false
-  // DUP:       ]
-  // DUP:     );
-  // DUP: 
-  // DUP:     const [[newItem]] = await pool.query('SELECT * FROM inventory_items WHERE id = ?', [r.insertId]);
-  // DUP:     reply.status(201).json({ item: newItem });
-  // DUP: 
-  // DUP:   } catch (e) {
-  // DUP:     log.err('Failed to add inventory item', { message: e.message, character_id: charId });
-  // DUP:     reply.status(500).json({ error: 'Failed to add item' });
-  // DUP:   }
-  // DUP: });
-
-  // Update an inventory item (owner or admin)
-  // DUP: fastify.put('/api/characters/:id/inventory/:itemId', { preHandler: [authRequired] }, async (req, reply) => {
-  // DUP:   const charId = Number(req.params.id);
-  // DUP:   const itemId = Number(req.params.itemId);
-  // DUP:   const { name, description, image, researched } = req.body;
-  // DUP:   if (!name) {
-  // DUP:     return reply.status(400).json({ error: 'Item name is required' });
-  // DUP:   }
-  // DUP:   try {
-  // DUP:     // Check ownership or admin
-  // DUP:     if (req.user.role !== 'admin') {
-  // DUP:       const [charRows] = await pool.query(
-  // DUP:         'SELECT c.id FROM character_inventory i JOIN characters c ON i.character_id = c.id WHERE i.id = ? AND c.user_id = ?',
-  // DUP:         [itemId, req.user.id]
-  // DUP:       );
-  // DUP:       if (!charRows.length) {
-  // DUP:         return reply.status(403).json({ error: 'Unauthorized' });
-  // DUP:       }
-  // DUP:     }
-  // DUP:     await pool.query(
-  // DUP:       'UPDATE character_inventory SET name=?, description=?, image=?, researched=? WHERE id=? AND character_id=?',
-  // DUP:       [name, description || null, image || null, researched ?? false, itemId, charId]
-  // DUP:     );
-  // DUP:     const [[updatedItem]] = await pool.query('SELECT * FROM character_inventory WHERE id = ?', [itemId]);
-  // DUP:     reply.send({ item: updatedItem });
-  // DUP:   } catch (e) {
-  // DUP:     log.err('Failed to update inventory item', { message: e.message, character_id: charId, item_id: itemId });
-  // DUP:     reply.status(500).json({ error: 'Failed to update item' });
-  // DUP:   }
-  // DUP: });
-
-  // Delete an inventory item (owner or admin)
-  // DUP: fastify.delete('/api/characters/:id/inventory/:itemId', { preHandler: [authRequired] }, async (req, reply) => {
-  // DUP:   const charId = Number(req.params.id);
-  // DUP:   const itemId = Number(req.params.itemId);
-  // DUP:   try {
-  // DUP:     // Check ownership or admin
-  // DUP:     if (req.user.role !== 'admin') {
-  // DUP:       const [charRows] = await pool.query(
-  // DUP:         'SELECT c.id FROM character_inventory i JOIN characters c ON i.character_id = c.id WHERE i.id = ? AND c.user_id = ?',
-  // DUP:         [itemId, req.user.id]
-  // DUP:       );
-  // DUP:       if (!charRows.length) {
-  // DUP:         return reply.status(403).json({ error: 'Unauthorized' });
-  // DUP:       }
-  // DUP:     }
-  // DUP:     await pool.query('DELETE FROM character_inventory WHERE id = ? AND character_id = ?', [itemId, charId]);
-  // DUP:     reply.send({ ok: true });
-  // DUP:   } catch (e) {
-  // DUP:     log.err('Failed to delete inventory item', { message: e.message, character_id: charId, item_id: itemId });
-  // DUP:     reply.status(500).json({ error: 'Failed to delete item' });
-  // DUP:   }
-  // DUP: });
-
   // ================== Retainers ==================
   // GET a character's retainers (owner or admin)
   fastify.get('/api/characters/:id/retainers', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const charId = Number(req.params.id);
-      if (req.user.role !== 'admin') {
-        const [charRows] = await pool.query('SELECT id FROM characters WHERE id = ? AND user_id = ?', [charId, req.user.id]);
-        if (!charRows.length) return reply.status(403).json({ error: 'Unauthorized' });
+      if (!isAdmin(req.user) && !(await userOwnsCharacter(pool, req.user.id, charId))) {
+        return reply.status(403).json({ error: 'Unauthorized' });
       }
 
       const [rows] = await pool.query('SELECT id, character_id, name, tier, sheet, xp, created_at, is_favorite FROM retainers WHERE character_id=?', [charId]);
       const results = [];
       for (const row of rows) {
-        if (row.sheet && typeof row.sheet === 'string') {
-          try { row.sheet = JSON.parse(row.sheet); } catch (e) {}
-        }
+        row.sheet = parseSheet(row.sheet);
         results.push({ ...row }); // Ensure it's a plain object
       }
         const payload = JSON.stringify(results);
@@ -641,9 +491,8 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/characters/:id/retainers', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const charId = Number(req.params.id);
-      if (req.user.role !== 'admin') {
-        const [charRows] = await pool.query('SELECT id FROM characters WHERE id = ? AND user_id = ?', [charId, req.user.id]);
-        if (!charRows.length) return reply.status(403).json({ error: 'Unauthorized' });
+      if (!isAdmin(req.user) && !(await userOwnsCharacter(pool, req.user.id, charId))) {
+        return reply.status(403).json({ error: 'Unauthorized' });
       }
 
       const { name, tier, sheet, xp } = req.body;
@@ -716,9 +565,7 @@ module.exports = async function (fastify, opts) {
       const [updatedRows] = await pool.query('SELECT * FROM retainers WHERE id=?', [req.params.retainerId]);
       if (updatedRows.length > 0) {
          const ret = updatedRows[0];
-         if (ret.sheet && typeof ret.sheet === 'string') {
-             try { ret.sheet = JSON.parse(ret.sheet); } catch(e){}
-         }
+         ret.sheet = parseSheet(ret.sheet);
          reply.send(ret);
       } else {
          reply.send({ success: true });
@@ -749,9 +596,7 @@ module.exports = async function (fastify, opts) {
       const [updatedRows] = await pool.query('SELECT * FROM retainers WHERE id=?', [retainerId]);
       if (updatedRows.length > 0) {
          const ret = updatedRows[0];
-         if (ret.sheet && typeof ret.sheet === 'string') {
-             try { ret.sheet = JSON.parse(ret.sheet); } catch(e){}
-         }
+         ret.sheet = parseSheet(ret.sheet);
          reply.send(ret);
       } else {
          reply.send({ success: true });
@@ -780,9 +625,7 @@ module.exports = async function (fastify, opts) {
         JOIN characters c ON r.character_id = c.id
       `);
       for (const row of rows) {
-        if (row.sheet && typeof row.sheet === 'string') {
-          try { row.sheet = JSON.parse(row.sheet); } catch (e) {}
-        }
+        row.sheet = parseSheet(row.sheet);
       }
         const payload = JSON.stringify(rows);
         return reply
@@ -841,10 +684,7 @@ module.exports = async function (fastify, opts) {
         await pool.query('DELETE FROM xp_log WHERE character_id=?', [charId]);
       } catch (e) { /* ignore if table missing */ }
 
-      let sheetObj = sheet || {};
-      if (typeof sheetObj === 'string') {
-        try { sheetObj = JSON.parse(sheetObj); } catch { sheetObj = {}; }
-      }
+      let sheetObj = parseSheet(sheet);
       sheetObj.is_active = false;
 
       // Overwrite the character data and reset XP to 50
@@ -856,9 +696,7 @@ module.exports = async function (fastify, opts) {
       // Fetch and return the updated character
       const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [charId]);
       const ch = out[0];
-      if (ch && ch.sheet && typeof ch.sheet === 'string') {
-        try { ch.sheet = JSON.parse(ch.sheet); } catch { }
-      }
+      if (ch) ch.sheet = parseSheet(ch.sheet);
 
       log.char('Character rebuilt', { id: charId, user_id: req.user.id, name, clan });
       reply.send({ character: ch });

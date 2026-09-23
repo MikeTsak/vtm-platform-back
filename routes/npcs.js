@@ -2,6 +2,7 @@
 //
 // NPC CRUD and NPC XP spending — Storyteller only.
 const { xpCost } = require('../utils/xpCost');
+const { parseSheet } = require('../utils/sheet');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin } = opts;
@@ -12,9 +13,7 @@ module.exports = async function (fastify, opts) {
 
     // Parse JSON sheet if stored as string
     rows.forEach(r => {
-      if (r.sheet && typeof r.sheet === 'string') {
-        try { r.sheet = JSON.parse(r.sheet); } catch { }
-      }
+      r.sheet = parseSheet(r.sheet);
     });
 
     // DEBUG: confirm DB and count to diagnose “empty” responses
@@ -41,7 +40,7 @@ module.exports = async function (fastify, opts) {
 
     const [rows] = await pool.query('SELECT id, name, clan, sheet, xp, created_at, updated_at, camarilla_titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, is_disabled FROM npcs WHERE id=?', [r.insertId]);
     const npc = rows[0];
-    if (npc?.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch { } }
+    if (npc) npc.sheet = parseSheet(npc.sheet);
     reply.send({ npc });
   });
 
@@ -50,7 +49,7 @@ module.exports = async function (fastify, opts) {
     const [rows] = await pool.query('SELECT id, name, clan, sheet, xp, created_at, updated_at, camarilla_titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, is_disabled FROM npcs WHERE id=?', [req.params.id]);
     if (!rows.length) return reply.status(404).json({ error: 'NPC not found' });
     const npc = rows[0];
-    if (npc?.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch { } }
+    npc.sheet = parseSheet(npc.sheet);
     reply.send({ npc });
   });
 
@@ -69,7 +68,7 @@ module.exports = async function (fastify, opts) {
 
     const [rows] = await pool.query('SELECT id, name, clan, sheet, xp, created_at, updated_at, camarilla_titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, is_disabled FROM npcs WHERE id=?', [req.params.id]);
     const npc = rows[0];
-    if (npc?.sheet && typeof npc.sheet === 'string') { try { npc.sheet = JSON.parse(npc.sheet); } catch { } }
+    if (npc) npc.sheet = parseSheet(npc.sheet);
     reply.send({ npc });
   });
 
@@ -120,7 +119,7 @@ module.exports = async function (fastify, opts) {
 
     const [out] = await pool.query('SELECT id, name, clan, sheet, xp, created_at, updated_at, camarilla_titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, is_disabled FROM npcs WHERE id=?', [ch.id]);
     const outCh = out[0];
-    if (outCh?.sheet && typeof outCh.sheet === 'string') { try { outCh.sheet = JSON.parse(outCh.sheet); } catch { } }
+    if (outCh) outCh.sheet = parseSheet(outCh.sheet);
     reply.send({ character: outCh, spent: cost });
   });
 };

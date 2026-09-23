@@ -1,29 +1,7 @@
 const pool = require('../db');
 const { log } = require('../logger');
 const { authRequired, requireAdmin } = require('../authMiddleware.fastify');
-
-function getAthensHour(dateInput) {
-  const d = new Date(dateInput);
-  if (isNaN(d.getTime())) return 0;
-  const hourStr = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Europe/Athens',
-    hour: '2-digit',
-    hour12: false,
-  }).format(d);
-  const h = parseInt(hourStr, 10);
-  return isNaN(h) ? 0 : h;
-}
-
-function getAthensDate(dateInput) {
-  const d = new Date(dateInput);
-  if (isNaN(d.getTime())) return '';
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Europe/Athens',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(d);
-}
+const { getAthensHour, getAthensDate } = require('../utils/athensTime');
 
 async function activityRoutes(fastify, options) {
   fastify.get('/stats', { preHandler: [authRequired, requireAdmin] }, async (request, reply) => {

@@ -4,6 +4,7 @@
 // events, broadcasts, timelines, domain problems, the blood web, audit logs.
 
 const { getSetting, setSetting } = require('../utils/settings');
+const { parseSheet } = require('../utils/sheet');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, sendPushNotification, broadcastNtfyAlert } = opts;
@@ -242,8 +243,7 @@ module.exports = async function (fastify, opts) {
     try {
       const [chars] = await pool.query('SELECT c.id, c.name, c.sheet, u.display_name FROM characters c JOIN users u ON c.user_id = u.id WHERE c.is_ex = 0 AND c.is_deceased = 0');
       const web = chars.map(c => {
-        let sheet = {};
-        try { sheet = typeof c.sheet === 'string' ? JSON.parse(c.sheet) : (c.sheet || {}); } catch (e) { }
+        const sheet = parseSheet(c.sheet);
         return { id: c.id, name: c.name, player: c.display_name, hunger: Number(sheet.hunger) || 0, bloodPotency: Number(sheet.bloodPotency) || 0 };
       });
       reply.send({ web });
@@ -257,8 +257,7 @@ module.exports = async function (fastify, opts) {
       const { id, hunger, bloodPotency } = req.body;
       const [[char]] = await pool.query('SELECT sheet FROM characters WHERE id = ?', [id]);
       if (!char) return reply.status(404).json({ error: 'Character not found' });
-      let sheet = {};
-      try { sheet = typeof char.sheet === 'string' ? JSON.parse(char.sheet) : (char.sheet || {}); } catch (e) { }
+      const sheet = parseSheet(char.sheet);
       if (hunger !== undefined) sheet.hunger = Math.max(0, Math.min(5, Number(hunger)));
       if (bloodPotency !== undefined) sheet.bloodPotency = Math.max(0, Math.min(10, Number(bloodPotency)));
       await pool.query('UPDATE characters SET sheet = ? WHERE id = ?', [JSON.stringify(sheet), id]);

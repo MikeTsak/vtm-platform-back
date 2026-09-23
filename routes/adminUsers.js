@@ -4,6 +4,7 @@
 // cookie after an admin changes the caller's own role or display name.
 const { setAuthCookie } = require('../utils/authCookie');
 const { issueToken } = require('../services/token');
+const { parseSheet } = require('../utils/sheet');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin } = opts;
@@ -22,9 +23,7 @@ module.exports = async function (fastify, opts) {
     );
 
     rows.forEach(r => {
-      if (r.sheet && typeof r.sheet === 'string') {
-        try { r.sheet = JSON.parse(r.sheet); } catch { }
-      }
+      r.sheet = parseSheet(r.sheet);
     });
 
     log.adm('Admin users list', { count: rows.length });
