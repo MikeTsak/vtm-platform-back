@@ -33,34 +33,46 @@ function loadMigrations() {
 // Accepts an optional pool so the test suite can build a schema-identical,
 // fully isolated test database by running the exact same migrations against
 // a different pool/database — see back/tests/setup/testDb.js.
-async function runMigrations(pool = defaultPool) {
+//
+// `onProgress` receives { phase: 'start' | 'applying' | 'applied', ... } so a
+// caller (the remote `npm run migrations` stream) can drive a progress bar.
+// `dryRun` reports what is pending without applying anything. Returns the
+// names of the migrations that were (or, on a dry run, would be) applied.
+async function runMigrations(pool = defaultPool, { onProgress, dryRun = false } = {}) {
   await ensureMigrationsTable(pool);
 
   const [appliedRows] = await pool.query('SELECT name FROM schema_migrations');
   const applied = new Set(appliedRows.map((r) => r.name));
 
-  const migrations = loadMigrations();
-  let ranCount = 0;
-
-  for (const { file, mod } of migrations) {
+  const pending = [];
+  for (const { file, mod } of loadMigrations()) {
     if (!mod || typeof mod.up !== 'function' || !mod.name) {
       log.warn('Skipping malformed migration file', { file });
       continue;
     }
-    if (applied.has(mod.name)) continue;
+    if (!applied.has(mod.name)) pending.push(mod);
+  }
 
+  const total = pending.length;
+  onProgress?.({ phase: 'start', total, pending: pending.map((m) => m.name), appliedCount: applied.size });
+  if (dryRun) return pending.map((m) => m.name);
+
+  for (let i = 0; i < total; i++) {
+    const mod = pending[i];
     log.info(`Applying migration: ${mod.name}`);
+    onProgress?.({ phase: 'applying', index: i, total, name: mod.name });
     await mod.up(pool);
     await pool.query('INSERT INTO schema_migrations (name) VALUES (?)', [mod.name]);
-    ranCount++;
     log.ok(`Migration applied: ${mod.name}`);
+    onProgress?.({ phase: 'applied', index: i + 1, total, name: mod.name });
   }
 
-  if (ranCount === 0) {
+  if (total === 0) {
     log.ok('Schema is up to date. No migrations to run.');
   } else {
-    log.ok(`Applied ${ranCount} migration(s).`);
+    log.ok(`Applied ${total} migration(s).`);
   }
+  return pending.map((m) => m.name);
 }
 
 module.exports = { runMigrations };
