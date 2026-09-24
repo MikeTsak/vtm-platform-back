@@ -19,6 +19,16 @@ const baseCoterie = (over = {}) => ({
   ...over,
 });
 
+describe('Contributable backgrounds', () => {
+  it('maps every character merit id to a real, non-Flaw coterie Background', () => {
+    for (const [id, key] of Object.entries(rules.CONTRIBUTABLE_BACKGROUNDS)) {
+      expect(rules.COTERIE_BACKGROUNDS[key]).toBeDefined();
+      expect(rules.COTERIE_BACKGROUNDS[key].flaw).toBeFalsy();
+      expect(id).toMatch(/^backgrounds_[a-z_]+__[a-z_]+$/);
+    }
+  });
+});
+
 describe('Domain trait mechanics', () => {
   it('gives Chasse 1 a hunting Difficulty of 6 and reduces it per dot', () => {
     expect(rules.huntingDifficulty(1)).toBe(6);

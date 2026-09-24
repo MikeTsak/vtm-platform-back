@@ -1,6 +1,7 @@
 const { xpCost } = require('../utils/xpCost');
 const { idempotencyCheck, idempotencySave } = require('../utils/idempotency');
 const { parseSheet } = require('../utils/sheet');
+const { isPredatorDiscipline } = require('../data/predatorDisciplines');
 
 // Self-serve XP spend: always operates on the caller's OWN character
 // (`WHERE user_id = req.user.id`), so there's no :id param and no IDOR
@@ -27,23 +28,30 @@ module.exports = async function (fastify, opts) {
       return reply.status(400).json({ error: 'Create a character first' });
     }
 
-    // V5 hard cap: no discipline (clan, Caitiff, or unlocked out-of-clan) can
-    // exceed 5 dots — there's no power data or ceremony/ritual content past
-    // level 5, so letting this through silently soft-locks the player's own
-    // XP shop (the "assign a power for this new dot" prompt can never be
-    // satisfied and keeps reopening). The frontend already caps the shop UI
-    // at 5; this is the server-side backstop for clan/Caitiff purchases,
-    // matching the out-of-clan cap enforced just below.
+    // Discipline cap: 5 dots, except the house rule that ONE in-clan
+    // discipline per character may reach 6. The 6th dot buys an extra power
+    // picked from levels 1-5 (there is no level-6 power data).
     if (type === 'discipline' && Number(newLevel) > 5) {
-      log.warn('XP spend blocked: discipline level above V5 cap', { user_id: req.user.id, target, newLevel });
-      return reply.status(400).json({ error: `${target || 'Disciplines'} cannot exceed 5 dots.` });
+      const dots = parseSheet(ch.sheet).disciplines || {};
+      const otherAtSix = Object.entries(dots).some(([d, v]) => d !== target && Number(v) > 5);
+      const allowed = Number(newLevel) === 6
+        && (disciplineKind === 'clan' || disciplineKind === 'select')
+        && !otherAtSix;
+      if (!allowed) {
+        log.warn('XP spend blocked: discipline level above cap', { user_id: req.user.id, target, newLevel, disciplineKind, otherAtSix });
+        return reply.status(400).json({
+          error: Number(newLevel) === 6 && disciplineKind === 'clan' && otherAtSix
+            ? 'Only one discipline can be raised to 6 dots.'
+            : `${target || 'Disciplines'} can only exceed 5 dots as your one in-clan discipline at 6.`,
+        });
+      }
     }
 
     // Out-of-clan disciplines are only purchasable once an ST has unlocked
     // them for this character (see routes/disciplineAccess.js) — everything
-    // else (in-clan, Caitiff's "any discipline", power selection) is
-    // unrestricted, same as before.
-    if (type === 'discipline' && disciplineKind === 'other') {
+    // else (in-clan, Caitiff's "any discipline", power selection, and the
+    // character's predator-type discipline) is unrestricted.
+    if (type === 'discipline' && disciplineKind === 'other' && !isPredatorDiscipline(parseSheet(ch.sheet), ch.clan, target)) {
       const [[access]] = await pool.query(
         'SELECT max_level FROM discipline_access WHERE character_id=? AND discipline=?',
         [ch.id, target]

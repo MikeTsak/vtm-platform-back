@@ -94,6 +94,28 @@ const COTERIE_BACKGROUNDS = {
 
 const COTERIE_BACKGROUND_KEYS = Object.keys(COTERIE_BACKGROUNDS);
 
+// Maps a character sheet merit/background entry id (from
+// front/src/data/merits_flaws.js, `slug(category)__slug(name)`) to the
+// coterie Background it can be freely contributed to (corebook p.195:
+// "Players may also contribute their own characters' Advantage dots to the
+// coterie pool"). Only the base Background merit of each catalog group
+// matches 1:1 — sub-perks (Haven's Watchmen, etc.) and Flaw counterparts
+// (Adversary, Enemy, No Haven) have no clean coterie-side equivalent and are
+// intentionally left out.
+const CONTRIBUTABLE_BACKGROUNDS = {
+  backgrounds_allies__allies: 'ally',
+  backgrounds_contacts__contacts: 'contacts',
+  backgrounds_fame__fame: 'fame',
+  backgrounds_influence__influence: 'influence',
+  backgrounds_haven__haven: 'haven',
+  backgrounds_herd__herd: 'herd',
+  backgrounds_mask__mask: 'mask',
+  backgrounds_mawla__mawla: 'mawla',
+  backgrounds_resources__resources: 'resources',
+  backgrounds_retainers__retainers: 'retainers',
+  backgrounds_status__status: 'status',
+};
+
 /* ------------------------------------------------------------------ *
  * Coterie Merits (Players Guide) — these cost pool dots / XP
  * ------------------------------------------------------------------ */
@@ -437,6 +459,7 @@ module.exports = {
   CHASSE_SIZE_TABLE,
   COTERIE_BACKGROUNDS,
   COTERIE_BACKGROUND_KEYS,
+  CONTRIBUTABLE_BACKGROUNDS,
   COTERIE_MERITS,
   COTERIE_MERITS_GENERAL,
   COTERIE_MERITS_DOMAIN,

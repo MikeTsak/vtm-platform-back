@@ -44,6 +44,17 @@ module.exports = async function (fastify, opts) {
     return row?.char_name || row?.display_name || 'Someone';
   }
 
+  // A reply may only quote a message from the same conversation; `sql` must
+  // select that message's id scoped to the thread. Anything else (a forged
+  // id, or a message deleted between tapping Reply and sending) is dropped
+  // and the message goes out as a plain, non-reply message.
+  async function validReplyTo(replyToId, sql, params) {
+    const id = Number(replyToId);
+    if (!Number.isInteger(id) || id <= 0) return null;
+    const [rows] = await pool.query(sql, [id, ...params]);
+    return rows.length ? id : null;
+  }
+
   // Any current member (or a global admin) may rename a group, change its
   // icon, or add/kick members — this isn't creator-only.
   async function isMemberOrAdmin(groupId, user) {
@@ -352,11 +363,16 @@ module.exports = async function (fastify, opts) {
       // 2. Fetch Messages
       const [messages] = await pool.query(`
       SELECT m.id, m.sender_id, m.body, m.created_at, m.type,
-            m.attachment_id,
-            u.display_name, c.name as char_name, c.clan
+            m.attachment_id, m.reply_to_id,
+            u.display_name, c.name as char_name, c.clan,
+            r.id AS reply_found, LEFT(r.body, 300) AS reply_body, r.sender_id AS reply_sender_id,
+            r.attachment_id AS reply_attachment_id, COALESCE(rc.name, ru.display_name) AS reply_sender_name
       FROM chat_group_messages m
       LEFT JOIN users u ON m.sender_id = u.id
       LEFT JOIN characters c ON c.user_id = u.id
+      LEFT JOIN chat_group_messages r ON r.id = m.reply_to_id
+      LEFT JOIN users ru ON ru.id = r.sender_id
+      LEFT JOIN characters rc ON rc.user_id = r.sender_id
       WHERE m.group_id = ?
       ORDER BY m.created_at ASC
     `, [groupId]);
@@ -536,7 +552,7 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/chat/groups/:id/messages', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const groupId = Number(req.params.id);
-      const { body, attachment_id } = req.body;
+      const { body, attachment_id, reply_to_id } = req.body;
 
       // Verify membership ... (keep existing check)
       const [m] = await pool.query('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?', [groupId, req.user.id]);
@@ -544,11 +560,14 @@ module.exports = async function (fastify, opts) {
 
       if (!attachment_id && (!body || !body.trim())) return reply.status(400).json({ error: 'Content required' });
 
-      const [r] = await pool.query('INSERT INTO chat_group_messages (group_id, sender_id, body, attachment_id) VALUES (?,?,?,?)',
-        [groupId, req.user.id, body ? body.trim() : '', attachment_id || null]);
+      const replyTo = await validReplyTo(reply_to_id,
+        "SELECT id FROM chat_group_messages WHERE id=? AND group_id=? AND type != 'system'", [groupId]);
+
+      const [r] = await pool.query('INSERT INTO chat_group_messages (group_id, sender_id, body, attachment_id, reply_to_id) VALUES (?,?,?,?,?)',
+        [groupId, req.user.id, body ? body.trim() : '', attachment_id || null, replyTo]);
 
       const [[message]] = await pool.query(`
-      SELECT m.id, m.sender_id, m.body, m.created_at, m.attachment_id, m.type,
+      SELECT m.id, m.sender_id, m.body, m.created_at, m.attachment_id, m.type, m.reply_to_id,
              u.display_name, c.name as char_name, c.clan
       FROM chat_group_messages m
       LEFT JOIN users u ON m.sender_id = u.id
@@ -775,12 +794,15 @@ module.exports = async function (fastify, opts) {
         `SELECT * FROM (
          SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at,
                 cm.read_at, cm.delivered_at,
-                cm.attachment_id,
-                u_sender.display_name as sender_name
+                cm.attachment_id, cm.reply_to_id,
+                u_sender.display_name as sender_name,
+                r.id AS reply_found, LEFT(r.body, 300) AS reply_body,
+                r.sender_id AS reply_sender_id, r.attachment_id AS reply_attachment_id
          FROM chat_messages cm
          JOIN users u_sender ON cm.sender_id = u_sender.id
-         WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)
-         ORDER BY created_at DESC
+         LEFT JOIN chat_messages r ON r.id = cm.reply_to_id
+         WHERE (cm.sender_id = ? AND cm.recipient_id = ?) OR (cm.sender_id = ? AND cm.recipient_id = ?)
+         ORDER BY cm.created_at DESC
          LIMIT 500
        ) sub
        ORDER BY created_at ASC`,
@@ -799,21 +821,25 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/chat/messages', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       // Added attachment_id to destructuring
-      const { recipient_id, body, attachment_id } = req.body;
+      const { recipient_id, body, attachment_id, reply_to_id } = req.body;
 
       // Allow empty body ONLY if there is an attachment
       if (!recipient_id || (!attachment_id && (!body || !body.trim()))) {
         return reply.status(400).send({ error: 'Recipient and content required' });
       }
 
+      const replyTo = await validReplyTo(reply_to_id,
+        'SELECT id FROM chat_messages WHERE id=? AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?))',
+        [req.user.id, recipient_id, recipient_id, req.user.id]);
+
       const [r] = await pool.query(
-        'INSERT INTO chat_messages (sender_id, recipient_id, body, attachment_id) VALUES (?, ?, ?, ?)',
-        [req.user.id, recipient_id, body ? body.trim() : '', attachment_id || null]
+        'INSERT INTO chat_messages (sender_id, recipient_id, body, attachment_id, reply_to_id) VALUES (?, ?, ?, ?, ?)',
+        [req.user.id, recipient_id, body ? body.trim() : '', attachment_id || null, replyTo]
       );
 
       // Fetch back with attachment info
       const [[message]] = await pool.query(
-        `SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at, cm.attachment_id,
+        `SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at, cm.attachment_id, cm.reply_to_id,
               u_sender.display_name as sender_name
        FROM chat_messages cm
        JOIN users u_sender ON cm.sender_id = u_sender.id

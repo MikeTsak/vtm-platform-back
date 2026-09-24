@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Erebus Portal API",
-    "version": "1.0.65",
+    "version": "1.0.72",
     "description": "API documentation for the Vampire: The Masquerade RPG portal."
   },
   "servers": [
@@ -2294,6 +2294,25 @@
         }
       }
     },
+    "/api/admin/schema-versions/stream": {
+      "get": {
+        "description": "",
+        "parameters": [
+          {
+            "name": "dry",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "409": {
+            "description": "Conflict"
+          }
+        }
+      }
+    },
     "/api/clans/config": {
       "get": {
         "description": "",
@@ -3060,6 +3079,9 @@
                   },
                   "attachment_id": {
                     "example": "any"
+                  },
+                  "reply_to_id": {
+                    "example": "any"
                   }
                 }
               }
@@ -3143,6 +3165,9 @@
                     "example": "any"
                   },
                   "queue": {
+                    "example": "any"
+                  },
+                  "reply_to_id": {
                     "example": "any"
                   }
                 }
@@ -3745,6 +3770,9 @@
                   },
                   "attachment_id": {
                     "example": "any"
+                  },
+                  "reply_to_id": {
+                    "example": "any"
                   }
                 }
               }
@@ -3887,6 +3915,9 @@
                     "example": "any"
                   },
                   "attachment_id": {
+                    "example": "any"
+                  },
+                  "reply_to_id": {
                     "example": "any"
                   }
                 }
@@ -6965,6 +6996,38 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/coteries/{id}/contribute": {
+      "post": {
+        "description": "",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "500": {
+            "description": "Internal Server Error"
           }
         }
       }

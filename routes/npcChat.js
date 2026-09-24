@@ -6,6 +6,19 @@ const axios = require('axios');
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, requireCourt, sendPushNotification } = opts;
 
+  // A reply may only quote a message from the same NPC<->player thread.
+  // `includeQueued` is false for the player side: a player can't see (or
+  // quote) an NPC message the Storyteller has queued but not released.
+  async function validReplyTo(replyToId, npcId, userId, includeQueued) {
+    const id = Number(replyToId);
+    if (!Number.isInteger(id) || id <= 0) return null;
+    const [rows] = await pool.query(
+      `SELECT id FROM npc_messages WHERE id=? AND npc_id=? AND user_id=?${includeQueued ? '' : " AND status != 'queued'"}`,
+      [id, Number(npcId), Number(userId)]
+    );
+    return rows.length ? id : null;
+  }
+
   fastify.get('/api/admin/chat/npc-conversations/:npcId', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const npcId = Number(req.params.npcId);
     try {
@@ -44,10 +57,13 @@ module.exports = async function (fastify, opts) {
     try {
       // FIX: Changed to npc_messages
       const [messages] = await pool.query(
-        `SELECT id, body, from_side, created_at, attachment_id, status, edited, read_at
-        FROM npc_messages
-        WHERE npc_id = ? AND user_id = ?
-        ORDER BY created_at ASC`,
+        `SELECT m.id, m.body, m.from_side, m.created_at, m.attachment_id, m.status, m.edited, m.read_at, m.reply_to_id,
+                r.id AS reply_found, LEFT(r.body, 300) AS reply_body, r.from_side AS reply_from_side,
+                r.attachment_id AS reply_attachment_id
+        FROM npc_messages m
+        LEFT JOIN npc_messages r ON r.id = m.reply_to_id
+        WHERE m.npc_id = ? AND m.user_id = ?
+        ORDER BY m.created_at ASC`,
         [npcId, userId]
       );
 
@@ -107,10 +123,13 @@ module.exports = async function (fastify, opts) {
       const userId = req.user.id;
 
       const [rows] = await pool.query(
-        `SELECT id, npc_id, user_id, from_side, body, created_at, attachment_id
-        FROM npc_messages
-        WHERE npc_id=? AND user_id=? AND status != 'queued'
-        ORDER BY created_at ASC`,
+        `SELECT m.id, m.npc_id, m.user_id, m.from_side, m.body, m.created_at, m.attachment_id, m.reply_to_id,
+                r.id AS reply_found, LEFT(r.body, 300) AS reply_body, r.from_side AS reply_from_side,
+                r.attachment_id AS reply_attachment_id
+        FROM npc_messages m
+        LEFT JOIN npc_messages r ON r.id = m.reply_to_id AND r.status != 'queued'
+        WHERE m.npc_id=? AND m.user_id=? AND m.status != 'queued'
+        ORDER BY m.created_at ASC`,
         [npcId, userId]
       );
 
@@ -125,7 +144,7 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/chat/npc/messages', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const userId = req.user.id;
-      const { npc_id, body, attachment_id } = req.body || {};
+      const { npc_id, body, attachment_id, reply_to_id } = req.body || {};
 
       if (!npc_id || (!attachment_id && (!body || !body.trim()))) {
         return reply.status(400).json({ error: 'NPC and content required' });
@@ -136,9 +155,11 @@ module.exports = async function (fastify, opts) {
         return reply.status(403).json({ error: 'Cannot send message to this NPC at this time.' });
       }
 
+      const replyTo = await validReplyTo(reply_to_id, npc_id, userId, false);
+
       const [r] = await pool.query(
-        'INSERT INTO npc_messages (npc_id, user_id, from_side, body, attachment_id) VALUES (?,?,?,?,?)',
-        [Number(npc_id), userId, 'user', body ? body.trim() : '', attachment_id || null]
+        'INSERT INTO npc_messages (npc_id, user_id, from_side, body, attachment_id, reply_to_id) VALUES (?,?,?,?,?,?)',
+        [Number(npc_id), userId, 'user', body ? body.trim() : '', attachment_id || null, replyTo]
       );
 
       // FIX: Define the message object so notifications and the response don't crash
@@ -149,6 +170,7 @@ module.exports = async function (fastify, opts) {
         from_side: 'user',
         body: body ? body.trim() : '',
         attachment_id: attachment_id || null,
+        reply_to_id: replyTo,
         created_at: new Date()
       };
 
@@ -232,16 +254,17 @@ module.exports = async function (fastify, opts) {
 
   fastify.post('/api/admin/chat/npc/messages', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const { npc_id, user_id, body, attachment_id, queue } = req.body || {};
+      const { npc_id, user_id, body, attachment_id, queue, reply_to_id } = req.body || {};
       if (!npc_id || !user_id || (!attachment_id && (!body || !body.trim()))) {
         return reply.status(400).json({ error: 'Missing fields' });
       }
 
       const status = queue ? 'queued' : 'sent';
+      const replyTo = await validReplyTo(reply_to_id, npc_id, user_id, true);
 
       const [r] = await pool.query(
-        'INSERT INTO npc_messages (npc_id, user_id, from_side, body, attachment_id, status) VALUES (?,?,?,?,?,?)',
-        [Number(npc_id), Number(user_id), 'npc', body ? body.trim() : '', attachment_id || null, status]
+        'INSERT INTO npc_messages (npc_id, user_id, from_side, body, attachment_id, status, reply_to_id) VALUES (?,?,?,?,?,?,?)',
+        [Number(npc_id), Number(user_id), 'npc', body ? body.trim() : '', attachment_id || null, status, replyTo]
       );
 
       // FIX: Define the message object so notifications and the response don't crash
@@ -252,6 +275,7 @@ module.exports = async function (fastify, opts) {
         from_side: 'npc',
         body: body ? body.trim() : '',
         attachment_id: attachment_id || null,
+        reply_to_id: replyTo,
         created_at: new Date(),
         status
       };

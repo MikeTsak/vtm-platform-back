@@ -51,6 +51,42 @@ describe('discipline access & requests', () => {
     expect(JSON.parse(res.body).error).toMatch(/protean/i);
   });
 
+  it('predator-type discipline can be raised without a grant; the unpicked option stays locked', async () => {
+    const player = await registerUser(app);
+    const id = await createCharacter(player.user.id, 50, 'Brujah');
+    await pool.query('UPDATE characters SET sheet=? WHERE id=?',
+      [JSON.stringify({ predator_type: 'Pursuer', disciplines: { Auspex: 1 } }), id]);
+    const spend = (target, currentLevel, newLevel) => app.inject({
+      method: 'POST',
+      url: '/api/characters/xp/spend',
+      headers: { cookie: player.cookie },
+      payload: { type: 'discipline', disciplineKind: 'other', target, currentLevel, newLevel },
+    });
+
+    expect((await spend('Auspex', 1, 2)).statusCode).toBe(200);
+    expect((await spend('Animalism', 0, 1)).statusCode).toBe(403);
+  });
+
+  it('one in-clan discipline may reach 6; a second one, or 7, is refused', async () => {
+    const player = await registerUser(app);
+    const id = await createCharacter(player.user.id, 200, 'Hecata');
+    await pool.query('UPDATE characters SET sheet=? WHERE id=?',
+      [JSON.stringify({ disciplines: { Oblivion: 5, Auspex: 5 } }), id]);
+    const spend = (target, currentLevel, newLevel) => app.inject({
+      method: 'POST',
+      url: '/api/characters/xp/spend',
+      headers: { cookie: player.cookie },
+      payload: {
+        type: 'discipline', disciplineKind: 'clan', target, currentLevel, newLevel,
+        patchSheet: { disciplines: { Oblivion: 6, Auspex: 5 } },
+      },
+    });
+
+    expect((await spend('Oblivion', 5, 6)).statusCode).toBe(200);
+    expect((await spend('Auspex', 5, 6)).statusCode).toBe(400);
+    expect((await spend('Oblivion', 6, 7)).statusCode).toBe(400);
+  });
+
   it('player request -> admin approve -> spend succeeds up to the granted level, not beyond', async () => {
     const player = await registerUser(app);
     const admin = await makeAdmin(await registerUser(app));

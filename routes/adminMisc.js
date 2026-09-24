@@ -244,7 +244,7 @@ module.exports = async function (fastify, opts) {
       const [chars] = await pool.query('SELECT c.id, c.name, c.sheet, u.display_name FROM characters c JOIN users u ON c.user_id = u.id WHERE c.is_ex = 0 AND c.is_deceased = 0');
       const web = chars.map(c => {
         const sheet = parseSheet(c.sheet);
-        return { id: c.id, name: c.name, player: c.display_name, hunger: Number(sheet.hunger) || 0, bloodPotency: Number(sheet.bloodPotency) || 0 };
+        return { id: c.id, name: c.name, player: c.display_name, hunger: Number(sheet.hunger) || 0, bloodPotency: Number(sheet.blood_potency ?? sheet.bloodPotency) || 0 };
       });
       reply.send({ web });
     } catch (e) {
@@ -259,7 +259,8 @@ module.exports = async function (fastify, opts) {
       if (!char) return reply.status(404).json({ error: 'Character not found' });
       const sheet = parseSheet(char.sheet);
       if (hunger !== undefined) sheet.hunger = Math.max(0, Math.min(5, Number(hunger)));
-      if (bloodPotency !== undefined) sheet.bloodPotency = Math.max(0, Math.min(10, Number(bloodPotency)));
+      // blood_potency is the key the sheet reads; keep the legacy camelCase copy in sync (same as liveSessions.js).
+      if (bloodPotency !== undefined) sheet.blood_potency = sheet.bloodPotency = Math.max(0, Math.min(10, Number(bloodPotency)));
       await pool.query('UPDATE characters SET sheet = ? WHERE id = ?', [JSON.stringify(sheet), id]);
       reply.send({ ok: true });
     } catch (e) {

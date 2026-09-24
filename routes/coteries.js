@@ -17,6 +17,7 @@
 
 const rules = require('../utils/coterieRules');
 const { isAdmin } = require('../services/guards');
+const { parseSheet } = require('../utils/sheet');
 
 const safeParse = (val, fallback) => {
   if (val == null) return fallback;
@@ -808,6 +809,125 @@ module.exports = async function (fastify, opts) {
       await conn.rollback();
       log.err('Coterie purchase failed', { message: e.message, stack: e.stack });
       reply.status(500).json({ error: 'Failed to complete the purchase' });
+    } finally {
+      conn.release();
+    }
+  });
+
+  /* ================================================================ *
+   * Contribute — hand a personal Background over to the coterie
+   * ================================================================ */
+
+  /**
+   * Moves one Background off the caller's own character sheet and into the
+   * coterie's shared Backgrounds, free of XP (the dots were already paid for).
+   * Only entries listed in rules.CONTRIBUTABLE_BACKGROUNDS are eligible. The
+   * coterie keeps the higher of its current rating and the contributed one.
+   *
+   * body: { character_entry_id: string }
+   */
+  fastify.post('/api/coteries/:id/contribute', { preHandler: [authRequired] }, async (req, reply) => {
+    const id = Number(req.params.id);
+    const entryId = String((req.body || {}).character_entry_id || '');
+
+    const { member } = await access(req, id);
+    if (!member) return reply.status(403).json({ error: 'Only a member can contribute to this coterie' });
+
+    const key = rules.CONTRIBUTABLE_BACKGROUNDS[entryId];
+    if (!key) return reply.status(400).json({ error: 'That merit has no coterie-shared equivalent.' });
+    const def = rules.COTERIE_BACKGROUNDS[key];
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const [[ch]] = await conn.query(
+        'SELECT id, name, sheet FROM characters WHERE user_id=? ORDER BY id ASC LIMIT 1 FOR UPDATE',
+        [req.user.id]
+      );
+      if (!ch) {
+        await conn.rollback();
+        return reply.status(400).json({ error: 'You need a character sheet to contribute.' });
+      }
+
+      const sheet = parseSheet(ch.sheet);
+      const holders = [sheet.backgrounds, sheet.advantages && sheet.advantages.merits]
+        .filter(Array.isArray);
+      let arr = null;
+      let idx = -1;
+      for (const a of holders) {
+        idx = a.findIndex((e) => e && e.id === entryId && Number(e.dots) > 0);
+        if (idx !== -1) { arr = a; break; }
+      }
+      if (!arr) {
+        await conn.rollback();
+        return reply.status(400).json({ error: `Your character has no ${def.name} to contribute.` });
+      }
+      const [entry] = arr.splice(idx, 1);
+      const givenDots = Number(entry.dots) || 0;
+
+      const [[row]] = await conn.query('SELECT * FROM coteries WHERE id=? FOR UPDATE', [id]);
+      if (!row) { await conn.rollback(); return reply.status(404).json({ error: 'Not found' }); }
+
+      const backgrounds = safeParse(row.backgrounds_json, []);
+      const existing = backgrounds.find((b) => b && b.key === key);
+      const fromDots = existing ? Number(existing.dots) || 0 : 0;
+      const toDots = Math.max(fromDots, givenDots);
+      if (existing) existing.dots = toDots;
+      else backgrounds.push({ key, name: def.name, dots: toDots, note: null });
+
+      const members = await loadMembers(conn, id);
+      const check = rules.validateCoterie({
+        name: row.name,
+        memberCount: members.length,
+        pointsPerMember: row.points_per_member,
+        bonusPoints: row.bonus_points,
+        domainId: row.domain_id,
+        traits: { chasse: row.chasse, lien: row.lien, portillon: row.portillon },
+        backgrounds,
+        merits: safeParse(row.merits_json, []),
+        flaws: safeParse(row.flaws_json, []),
+        // Same as /purchase: post-creation changes may exceed the creation pool.
+        rulesOverride: true,
+      });
+      if (check.errors.length) {
+        await conn.rollback();
+        return reply.status(400).json({ error: check.errors[0], errors: check.errors });
+      }
+
+      await conn.query('UPDATE coteries SET backgrounds_json=? WHERE id=?', [
+        JSON.stringify(check.backgrounds), id,
+      ]);
+      await conn.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), ch.id]);
+      await conn.query(
+        `INSERT INTO coterie_xp_log
+          (coterie_id, user_id, kind, bank_delta, personal_delta, character_id,
+           target_type, target_key, target_name, from_dots, to_dots, note)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [
+          id, req.user.id, 'contribute', 0, 0, ch.id,
+          'background', key, def.name, fromDots, toDots,
+          `Contributed ${givenDots} dot(s) by ${ch.name || 'a member'}`.slice(0, 500),
+        ]
+      );
+
+      await conn.commit();
+
+      const [[updated]] = await pool.query('SELECT * FROM coteries WHERE id=?', [id]);
+      log.adm('Coterie background contributed', {
+        coterie_id: id, by_user_id: req.user.id, character_id: ch.id,
+        key, given: givenDots, from: fromDots, to: toDots,
+      });
+      reply.send({
+        coterie: presentCoterie(updated, members),
+        members,
+        contributed: { key, name: def.name, dots: toDots, given: givenDots },
+        warnings: check.warnings,
+      });
+    } catch (e) {
+      await conn.rollback();
+      log.err('Coterie contribute failed', { message: e.message, stack: e.stack });
+      reply.status(500).json({ error: 'Failed to contribute the background' });
     } finally {
       conn.release();
     }

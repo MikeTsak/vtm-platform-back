@@ -1,6 +1,6 @@
 {
   "name": "back",
-  "version": "1.0.65",
+  "version": "1.0.72",
   "private": true,
   "scripts": {
     "dev": "node swagger-autogen.js && nodemon server.fastify.js",
@@ -16,6 +16,8 @@
     "migrate": "node scripts/migrate.js",
     "migrate:status": "node scripts/migrate-status.js",
     "migrate:legacy": "node migrations/run-migrations.js",
+    "migrations": "node scripts/migrate-remote.mjs",
+    "migrations:status": "node scripts/migrate-remote.mjs --status",
     "backup": "node scripts/backup-db.js",
     "backup:list": "node scripts/backup-db.js --list",
     "migrate-avatar-thumbs": "node migrate-avatar-thumbs.js",

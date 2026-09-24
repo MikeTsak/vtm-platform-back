@@ -509,4 +509,60 @@ module.exports = async function (fastify, opts) {
       schemaRunInProgress = false;
     }
   });
+
+  // Same runner, streamed over SSE for `npm run migrations` (scripts/
+  // migrate-remote.mjs), which authenticates with the FTP-delivered deploy
+  // token like the pre-deploy backup does. `?dry=true` only reports what's
+  // pending. The run keeps going if the client disconnects mid-stream.
+  fastify.get('/api/admin/schema-versions/stream', { preHandler: [authOrDeployToken] }, (req, reply) => {
+    const dry = String(req.query.dry) === 'true';
+    if (!dry && schemaRunInProgress) return reply.status(409).send({ error: 'Migrations are already running.' });
+    if (!dry) schemaRunInProgress = true;
+
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      ...sseCorsHeaders(req),
+    });
+    reply.raw.flushHeaders();
+
+    let closed = false;
+    req.raw.on('close', () => { closed = true; });
+    const sendEvent = (event, data) => {
+      if (closed) return;
+      reply.raw.write(`event: ${event}\n`);
+      reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+      if (reply.raw.flush) reply.raw.flush();
+    };
+
+    let current = null;
+    runMigrations(pool, {
+      dryRun: dry,
+      onProgress: (p) => {
+        if (p.phase === 'start') {
+          sendEvent('start', { total: p.total, pending: p.pending, appliedCount: p.appliedCount, database: process.env.DB_NAME });
+        } else if (p.phase === 'applying') {
+          current = p.name;
+          sendEvent('applying', { index: p.index, total: p.total, name: p.name });
+        } else if (p.phase === 'applied') {
+          sendEvent('progress', { current: p.index, total: p.total, name: p.name });
+        }
+      },
+    })
+      .then((ran) => {
+        if (!dry) log.adm('Schema migrations run via stream', { admin: req.user.id, deploy: Boolean(req.user.deploy), ran });
+        sendEvent('done', { ok: true, dry, ran });
+      })
+      .catch((e) => {
+        log.err('Streamed schema migration run failed', { error: e.message, migration: current });
+        sendEvent('done', { ok: false, error: e.message, failedMigration: current });
+      })
+      .finally(() => {
+        if (!dry) schemaRunInProgress = false;
+        setTimeout(() => reply.raw.end(), 300);
+      });
+  });
 };
