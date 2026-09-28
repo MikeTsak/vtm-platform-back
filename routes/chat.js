@@ -4,6 +4,7 @@
 // edit/delete window. Realtime fan-out goes through fastify.io.
 
 const { isAdmin: checkIsAdmin, isOwnerOrAdmin } = require('../services/guards');
+const { idempotencyCheck, idempotencySave } = require('../utils/idempotency');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, moderateLimiter, uploadLimiter, sendPushNotification, sharp } = opts;
@@ -549,7 +550,7 @@ module.exports = async function (fastify, opts) {
   });
 
   // Send a message to a group
-  fastify.post('/api/chat/groups/:id/messages', { preHandler: [authRequired] }, async (req, reply) => {
+  fastify.post('/api/chat/groups/:id/messages', { preHandler: [authRequired, idempotencyCheck], onSend: [idempotencySave] }, async (req, reply) => {
     try {
       const groupId = Number(req.params.id);
       const { body, attachment_id, reply_to_id } = req.body;
@@ -598,8 +599,11 @@ module.exports = async function (fastify, opts) {
         [members] = await pool.query('SELECT user_id FROM chat_group_members WHERE group_id=? AND user_id!=?', [groupId, req.user.id]);
 
         // 4. Στέλνουμε push notification στο κάθε μέλος
+        // Not awaited: the sender's request used to wait on every member's
+        // web push in turn, so one slow push endpoint made the send look
+        // stuck, and the retry stored the message twice.
         for (const member of members) {
-          await sendPushNotification(member.user_id, notifTitle, notifBody, { url: '/schrecknet', icon: `/api/users/${req.user.id}/avatar` }, 'chat').catch(() => { });
+          sendPushNotification(member.user_id, notifTitle, notifBody, { url: '/schrecknet', icon: `/api/users/${req.user.id}/avatar` }, 'chat').catch(() => { });
         }
       } catch (pushErr) {
         log.err('Failed to notify group members', { error: pushErr.message });
@@ -818,7 +822,7 @@ module.exports = async function (fastify, opts) {
 
 
   // Send a message
-  fastify.post('/api/chat/messages', { preHandler: [authRequired] }, async (req, reply) => {
+  fastify.post('/api/chat/messages', { preHandler: [authRequired, idempotencyCheck], onSend: [idempotencySave] }, async (req, reply) => {
     try {
       // Added attachment_id to destructuring
       const { recipient_id, body, attachment_id, reply_to_id } = req.body;

@@ -137,6 +137,17 @@ function buildTestApp(pool) {
     sendPushNotification: capturePushNotification,
   });
 
+  app.register(require('../../routes/chat'), {
+    pool,
+    log: testLog,
+    authRequired,
+    requireAdmin,
+    moderateLimiter: noopLimiter,
+    uploadLimiter: noopLimiter,
+    sendPushNotification: capturePushNotification,
+    sharp: null,
+  });
+
   return app;
 }
 

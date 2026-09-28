@@ -27,7 +27,18 @@ const pool = require('../db');
 const { log } = require('../logger');
 
 const RETENTION_HOURS = 48; // long enough to cover any realistic client retry; not "forever"
+const IN_FLIGHT_WAIT_MS = 10000; // how long a duplicate waits for the first request to finish
+const STALE_CLAIM_SECONDS = 60;  // a claim never completed after this long was left by a crash
 
+const SCOPE = 'idempotency_key = ? AND user_id = ? AND request_path = ?';
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// The key is claimed BEFORE the handler runs, by inserting its row with a
+// NULL response_code (the unique (key, user, path) index lets exactly one
+// concurrent request win). Checking first and saving afterwards, as this used
+// to, left a gap: a duplicate arriving while the first was still running
+// found no row and executed a second time. Now the loser waits for the
+// winner's response and replays it.
 async function idempotencyCheck(req, reply) {
   const key = req.headers['idempotency-key'];
   if (!key) return; // this route wasn't called with a key — behave normally
@@ -36,17 +47,41 @@ async function idempotencyCheck(req, reply) {
   // route *pattern* ("/api/admin/characters/:id/xp/spend"), which would
   // conflate two different admin targets (character 42 vs 43) into the same
   // scope. req.url carries the actual resolved path.
-  const path = req.url;
+  const scope = [key, req.user.id, req.url];
+  const deadline = Date.now() + IN_FLIGHT_WAIT_MS;
   try {
-    const [rows] = await pool.query(
-      'SELECT response_code, response_body FROM idempotency_keys WHERE idempotency_key = ? AND user_id = ? AND request_path = ? LIMIT 1',
-      [key, req.user.id, path]
-    );
-    if (rows.length) {
-      let body = rows[0].response_body;
-      try { body = JSON.parse(body); } catch { /* stored as-is */ }
-      reply.header('X-Idempotent-Replay', 'true');
-      return reply.status(rows[0].response_code).send(body);
+    for (;;) {
+      try {
+        await pool.query(
+          'INSERT INTO idempotency_keys (idempotency_key, user_id, request_path, request_method) VALUES (?, ?, ?, ?)',
+          [...scope, req.method]
+        );
+        req.idempotencyClaimed = true;
+        return;
+      } catch (e) {
+        if (e.code !== 'ER_DUP_ENTRY') throw e;
+      }
+
+      const [[row]] = await pool.query(
+        `SELECT response_code, response_body, created_at < NOW() - INTERVAL ? SECOND AS stale
+         FROM idempotency_keys WHERE ${SCOPE} LIMIT 1`,
+        [STALE_CLAIM_SECONDS, ...scope]
+      );
+      if (!row) continue; // the other request failed and released its claim: take it
+      if (row.response_code !== null) {
+        let body = row.response_body;
+        try { body = JSON.parse(body); } catch { /* stored as-is */ }
+        reply.header('X-Idempotent-Replay', 'true');
+        return reply.status(row.response_code).send(body);
+      }
+      if (row.stale) {
+        await pool.query(`DELETE FROM idempotency_keys WHERE ${SCOPE} AND response_code IS NULL`, scope);
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        return reply.status(409).send({ error: 'This request is still being processed. Try again in a moment.' });
+      }
+      await sleep(250);
     }
   } catch (e) {
     log.err('Idempotency check failed — proceeding without it', { error: e.message });
@@ -54,20 +89,24 @@ async function idempotencyCheck(req, reply) {
 }
 
 async function idempotencySave(req, reply, payload) {
-  const key = req.headers['idempotency-key'];
-  if (!key || !req.user) return payload;
-  // Don't cache 5xx — a server error should be safe (and expected) to retry,
-  // not permanently pinned as "the" response for this key.
-  if (reply.statusCode >= 500) return payload;
+  // Only the request that claimed the key records it: a replay or a 409 from
+  // idempotencyCheck must not overwrite the stored response.
+  if (!req.idempotencyClaimed) return payload;
 
-  const path = req.url; // see the matching comment in idempotencyCheck above
-  pool.query(
-    `INSERT INTO idempotency_keys (idempotency_key, user_id, request_path, request_method, response_code, response_body)
-     VALUES (?, ?, ?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE response_code = VALUES(response_code), response_body = VALUES(response_body)`,
-    [key, req.user.id, path, req.method, reply.statusCode, typeof payload === 'string' ? payload : JSON.stringify(payload)]
-  ).catch((e) => log.err('Failed to save idempotency response', { error: e.message }));
-
+  const scope = [req.headers['idempotency-key'], req.user.id, req.url];
+  // Not awaited. A retry that lands before this write finds the claim still
+  // open and waits for it. Awaiting here would also hold the hook past the
+  // handler's return, and Fastify then sends a second, empty reply for
+  // handlers that call reply.send() without `return reply`.
+  const write = reply.statusCode >= 500
+    // Release the claim: a server error should be safe (and expected) to
+    // retry, not permanently pinned as "the" response for this key.
+    ? pool.query(`DELETE FROM idempotency_keys WHERE ${SCOPE}`, scope)
+    : pool.query(
+      `UPDATE idempotency_keys SET response_code = ?, response_body = ? WHERE ${SCOPE}`,
+      [reply.statusCode, typeof payload === 'string' ? payload : JSON.stringify(payload), ...scope]
+    );
+  write.catch((e) => log.err('Failed to save idempotency response', { error: e.message }));
   return payload;
 }
 

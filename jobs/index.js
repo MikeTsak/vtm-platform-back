@@ -16,6 +16,7 @@ const { runFeedingDecay } = require('../services/feedingDecay');
 const { sendPushNotification } = require('../services/push');
 const { flushQueuedMessages } = require('../services/commsQueue');
 const { resolveCommsSchedule } = require('../routes/comms');
+const { purgeOldIdempotencyKeys } = require('../utils/idempotency');
 
 // ============================================================================
 // AUTOMATED LOGISTICS - DOWNTIME DEADLINE PINGS
@@ -262,6 +263,22 @@ function scheduleQueuedMessageFlush(io) {
   });
 }
 
+// ============================================================================
+// IDEMPOTENCY KEY PURGE
+// ============================================================================
+// Daily: every chat send stores its idempotency row (see utils/idempotency.js),
+// so drop the ones past the retry window instead of letting the table grow.
+function scheduleIdempotencyPurge() {
+  return cron.schedule('20 0 * * *', async () => {
+    try {
+      const purged = await purgeOldIdempotencyKeys();
+      if (purged) log.info(`Idempotency purge: ${purged} row(s) removed.`);
+    } catch (error) {
+      log.err('Idempotency purge cron failed', { error: error.message });
+    }
+  });
+}
+
 let started = false;
 function startJobs(fastify) {
   if (started) return;
@@ -273,6 +290,7 @@ function startJobs(fastify) {
   scheduleNightlyBackup();
   scheduleFeedingCycleDecay();
   scheduleQueuedMessageFlush(fastify?.io);
+  scheduleIdempotencyPurge();
   log.start('Background jobs scheduled.');
 }
 

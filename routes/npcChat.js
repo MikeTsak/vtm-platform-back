@@ -2,6 +2,7 @@
 //
 // Player <-> NPC direct messages, and the Storyteller side that answers them.
 const axios = require('axios');
+const { idempotencyCheck, idempotencySave } = require('../utils/idempotency');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, requireCourt, sendPushNotification } = opts;
@@ -141,7 +142,7 @@ module.exports = async function (fastify, opts) {
   });
 
   // Player: send message to an NPC
-  fastify.post('/api/chat/npc/messages', { preHandler: [authRequired] }, async (req, reply) => {
+  fastify.post('/api/chat/npc/messages', { preHandler: [authRequired, idempotencyCheck], onSend: [idempotencySave] }, async (req, reply) => {
     try {
       const userId = req.user.id;
       const { npc_id, body, attachment_id, reply_to_id } = req.body || {};
@@ -194,8 +195,8 @@ module.exports = async function (fastify, opts) {
         for (const admin of admins) {
           // Prevent sending a push to the admin if the admin is the one testing/playing as a user
           if (admin.id !== userId) {
-            // Web Push
-            await sendPushNotification(admin.id, notifTitle, notifBody, { url: '/schrecknet', icon: `/api/users/${userId}/avatar` }, 'chat').catch(() => { });
+            // Web Push (not awaited, so a slow push can't stall the send)
+            sendPushNotification(admin.id, notifTitle, notifBody, { url: '/schrecknet', icon: `/api/users/${userId}/avatar` }, 'chat').catch(() => { });
 
             // Ntfy Push (Only if subscribed)
             if (admin.ntfy_topic && admin.ntfy_subscribed_npcs) {
@@ -252,7 +253,7 @@ module.exports = async function (fastify, opts) {
     reply.status(501).json({ error: 'AI features have been disabled to optimize server memory.' });
   });
 
-  fastify.post('/api/admin/chat/npc/messages', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  fastify.post('/api/admin/chat/npc/messages', { preHandler: [authRequired, requireAdmin, idempotencyCheck], onSend: [idempotencySave] }, async (req, reply) => {
     try {
       const { npc_id, user_id, body, attachment_id, queue, reply_to_id } = req.body || {};
       if (!npc_id || !user_id || (!attachment_id && (!body || !body.trim()))) {
@@ -288,8 +289,8 @@ module.exports = async function (fastify, opts) {
           const npcName = npcInfo?.name || 'NPC';
           const notifBody = message.attachment_id ? '📷 Image Attachment' : message.body;
 
-          // Send push directly to the player
-          await sendPushNotification(user_id, npcName, notifBody, { url: '/schrecknet', icon: `/api/npcs/${npc_id}/avatar` }, 'chat').catch(() => { });
+          // Send push directly to the player (not awaited, see above)
+          sendPushNotification(user_id, npcName, notifBody, { url: '/schrecknet', icon: `/api/npcs/${npc_id}/avatar` }, 'chat').catch(() => { });
         } catch (pushErr) {
           log.err('Failed to notify player of NPC reply', { error: pushErr.message });
         }
