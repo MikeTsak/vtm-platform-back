@@ -888,8 +888,7 @@ module.exports = async function (fastify, opts) {
       }
 
       // emoji is varchar(32). Without this a longer body is silently
-      // truncated (or 500s under strict mode) instead of being rejected —
-      // the client only ever sends a short emoji or a ':Clan_Name:' token.
+      // truncated (or 500s under strict mode) instead of being rejected.
       if (typeof emoji !== 'string' || emoji.length > 32) {
         return reply.status(400).send({ error: 'Invalid reaction' });
       }
@@ -909,20 +908,37 @@ module.exports = async function (fastify, opts) {
         );
       }
 
-      // Fetch updated aggregate reactions for this message
+      // Fetch updated aggregate reactions for this message with user details
       const [rows] = await pool.query(
-        `SELECT emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
-       FROM chat_message_reactions
-       WHERE message_table = ? AND message_id = ?
-       GROUP BY emoji`,
+        `SELECT r.emoji, r.user_id, COALESCE(c.name, u.display_name, 'Unknown') as user_name, c.clan
+         FROM chat_message_reactions r
+         LEFT JOIN users u ON u.id = r.user_id
+         LEFT JOIN characters c ON c.user_id = u.id
+         WHERE r.message_table = ? AND r.message_id = ?
+         ORDER BY r.id ASC`,
         [table, messageId]
       );
 
-      const reactions = rows.map(r => ({
-        emoji: r.emoji,
-        count: Number(r.count),
-        users: r.users ? r.users.split(',').map(Number) : []
-      }));
+      const emojiMap = {};
+      for (const r of rows) {
+        if (!emojiMap[r.emoji]) {
+          emojiMap[r.emoji] = {
+            emoji: r.emoji,
+            count: 0,
+            users: [],
+            reactors: []
+          };
+        }
+        emojiMap[r.emoji].count += 1;
+        emojiMap[r.emoji].users.push(Number(r.user_id));
+        emojiMap[r.emoji].reactors.push({
+          id: Number(r.user_id),
+          name: r.user_name,
+          clan: r.clan || null
+        });
+      }
+
+      const reactions = Object.values(emojiMap);
 
       if (fastify.io) {
         const payload = { table, messageId };
@@ -972,24 +988,41 @@ module.exports = async function (fastify, opts) {
       }
 
       const [rows] = await pool.query(
-        `SELECT message_id, emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
-       FROM chat_message_reactions
-       WHERE message_table = ? AND message_id IN (?)
-       GROUP BY message_id, emoji`,
+        `SELECT r.message_id, r.emoji, r.user_id, COALESCE(c.name, u.display_name, 'Unknown') as user_name, c.clan
+         FROM chat_message_reactions r
+         LEFT JOIN users u ON u.id = r.user_id
+         LEFT JOIN characters c ON c.user_id = u.id
+         WHERE r.message_table = ? AND r.message_id IN (?)
+         ORDER BY r.id ASC`,
         [table, cleanIds]
       );
 
       const map = {};
       for (const r of rows) {
-        if (!map[r.message_id]) map[r.message_id] = [];
-        map[r.message_id].push({
-          emoji: r.emoji,
-          count: Number(r.count),
-          users: r.users ? r.users.split(',').map(Number) : []
+        if (!map[r.message_id]) map[r.message_id] = {};
+        if (!map[r.message_id][r.emoji]) {
+          map[r.message_id][r.emoji] = {
+            emoji: r.emoji,
+            count: 0,
+            users: [],
+            reactors: []
+          };
+        }
+        map[r.message_id][r.emoji].count += 1;
+        map[r.message_id][r.emoji].users.push(Number(r.user_id));
+        map[r.message_id][r.emoji].reactors.push({
+          id: Number(r.user_id),
+          name: r.user_name,
+          clan: r.clan || null
         });
       }
 
-      reply.send({ reactions: map });
+      const resultMap = {};
+      for (const [msgId, eMap] of Object.entries(map)) {
+        resultMap[msgId] = Object.values(eMap);
+      }
+
+      reply.send({ reactions: resultMap });
     } catch (e) {
       log.err('Failed to batch fetch reactions', { error: e.message });
       reply.status(500).send({ error: 'Failed to batch fetch reactions' });

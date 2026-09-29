@@ -564,4 +564,173 @@ module.exports = async function (fastify, opts) {
       reply.status(500).json({ error: 'Delete failed' });
     }
   });
+
+  // GET /api/news/:id/reactions - Get reactions for an announcement
+  fastify.get('/api/news/:id/reactions', async (req, reply) => {
+    try {
+      const entryId = Number(req.params.id);
+      if (!entryId) return reply.status(400).send({ error: 'Invalid id' });
+
+      const [rows] = await pool.query(
+        `SELECT r.emoji, r.user_id, COALESCE(c.name, u.display_name, 'Unknown') as user_name, c.clan
+         FROM announcement_reactions r
+         LEFT JOIN users u ON u.id = r.user_id
+         LEFT JOIN characters c ON c.user_id = u.id
+         WHERE r.announcement_id = ?
+         ORDER BY r.id ASC`,
+        [entryId]
+      );
+
+      const emojiMap = {};
+      for (const r of rows) {
+        if (!emojiMap[r.emoji]) {
+          emojiMap[r.emoji] = {
+            emoji: r.emoji,
+            count: 0,
+            users: [],
+            reactors: []
+          };
+        }
+        emojiMap[r.emoji].count += 1;
+        emojiMap[r.emoji].users.push(Number(r.user_id));
+        emojiMap[r.emoji].reactors.push({
+          id: Number(r.user_id),
+          name: r.user_name,
+          clan: r.clan || null
+        });
+      }
+
+      reply.send({ reactions: Object.values(emojiMap) });
+    } catch (e) {
+      log.err('Fetch news reactions failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to load reactions' });
+    }
+  });
+
+  // POST /api/news/:id/reactions - Toggle reaction for an announcement
+  fastify.post('/api/news/:id/reactions', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const entryId = Number(req.params.id);
+      const { emoji } = req.body || {};
+      const userId = req.user.id;
+
+      if (!entryId || !emoji || typeof emoji !== 'string' || emoji.length > 32) {
+        return reply.status(400).send({ error: 'Invalid reaction parameters' });
+      }
+
+      const [news] = await pool.query('SELECT id FROM news_entries WHERE id = ?', [entryId]);
+      if (news.length === 0) {
+        return reply.status(404).send({ error: 'Announcement not found' });
+      }
+
+      const [existing] = await pool.query(
+        'SELECT id FROM announcement_reactions WHERE announcement_id = ? AND user_id = ? AND emoji = ?',
+        [entryId, userId, emoji]
+      );
+
+      if (existing.length > 0) {
+        await pool.query('DELETE FROM announcement_reactions WHERE id = ?', [existing[0].id]);
+      } else {
+        await pool.query(
+          'INSERT INTO announcement_reactions (announcement_id, user_id, emoji) VALUES (?, ?, ?)',
+          [entryId, userId, emoji]
+        );
+      }
+
+      const [rows] = await pool.query(
+        `SELECT r.emoji, r.user_id, COALESCE(c.name, u.display_name, 'Unknown') as user_name, c.clan
+         FROM announcement_reactions r
+         LEFT JOIN users u ON u.id = r.user_id
+         LEFT JOIN characters c ON c.user_id = u.id
+         WHERE r.announcement_id = ?
+         ORDER BY r.id ASC`,
+        [entryId]
+      );
+
+      const emojiMap = {};
+      for (const r of rows) {
+        if (!emojiMap[r.emoji]) {
+          emojiMap[r.emoji] = {
+            emoji: r.emoji,
+            count: 0,
+            users: [],
+            reactors: []
+          };
+        }
+        emojiMap[r.emoji].count += 1;
+        emojiMap[r.emoji].users.push(Number(r.user_id));
+        emojiMap[r.emoji].reactors.push({
+          id: Number(r.user_id),
+          name: r.user_name,
+          clan: r.clan || null
+        });
+      }
+
+      const reactions = Object.values(emojiMap);
+      if (fastify.io) {
+        const payload = { announcementId: entryId, messageId: entryId };
+        fastify.io.emit('announcements:reactions', payload);
+      }
+
+      reply.send({ reactions });
+    } catch (e) {
+      log.err('Toggle news reaction failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to toggle reaction' });
+    }
+  });
+
+  // POST /api/news/reactions/batch - Batch fetch reactions for multiple announcements
+  fastify.post('/api/news/reactions/batch', async (req, reply) => {
+    try {
+      const { ids } = req.body || {};
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return reply.send({ reactions: {} });
+      }
+
+      const cleanIds = ids.map(Number).filter(n => Number.isInteger(n) && n > 0).slice(0, 150);
+      if (cleanIds.length === 0) {
+        return reply.send({ reactions: {} });
+      }
+
+      const [rows] = await pool.query(
+        `SELECT r.announcement_id, r.emoji, r.user_id, COALESCE(c.name, u.display_name, 'Unknown') as user_name, c.clan
+         FROM announcement_reactions r
+         LEFT JOIN users u ON u.id = r.user_id
+         LEFT JOIN characters c ON c.user_id = u.id
+         WHERE r.announcement_id IN (?)
+         ORDER BY r.id ASC`,
+        [cleanIds]
+      );
+
+      const map = {};
+      for (const r of rows) {
+        if (!map[r.announcement_id]) map[r.announcement_id] = {};
+        if (!map[r.announcement_id][r.emoji]) {
+          map[r.announcement_id][r.emoji] = {
+            emoji: r.emoji,
+            count: 0,
+            users: [],
+            reactors: []
+          };
+        }
+        map[r.announcement_id][r.emoji].count += 1;
+        map[r.announcement_id][r.emoji].users.push(Number(r.user_id));
+        map[r.announcement_id][r.emoji].reactors.push({
+          id: Number(r.user_id),
+          name: r.user_name,
+          clan: r.clan || null
+        });
+      }
+
+      const resultMap = {};
+      for (const [annId, eMap] of Object.entries(map)) {
+        resultMap[annId] = Object.values(eMap);
+      }
+
+      reply.send({ reactions: resultMap });
+    } catch (e) {
+      log.err('Batch fetch announcement reactions failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to batch fetch reactions' });
+    }
+  });
 };
