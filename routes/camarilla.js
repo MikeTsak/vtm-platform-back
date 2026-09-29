@@ -36,7 +36,13 @@ module.exports = async function (fastify, opts) {
       }));
 
       const combined = [...format(players), ...format(npcs)];
-      combined.sort((a, b) => (b.status || 0) - (a.status || 0));
+      combined.sort((a, b) => {
+        const statusDiff = (b.status || 0) - (a.status || 0);
+        if (statusDiff !== 0) return statusDiff;
+        const clanDiff = (a.clan || '').localeCompare(b.clan || '');
+        if (clanDiff !== 0) return clanDiff;
+        return (a.name || '').localeCompare(b.name || '');
+      });
 
       reply.send({ roster: combined });
     } catch (e) {
@@ -79,7 +85,13 @@ module.exports = async function (fastify, opts) {
       }));
 
       const combined = [...format(players), ...format(npcs)];
-      combined.sort((a, b) => (b.status || 0) - (a.status || 0));
+      combined.sort((a, b) => {
+        const statusDiff = (b.status || 0) - (a.status || 0);
+        if (statusDiff !== 0) return statusDiff;
+        const clanDiff = (a.clan || '').localeCompare(b.clan || '');
+        if (clanDiff !== 0) return clanDiff;
+        return (a.name || '').localeCompare(b.name || '');
+      });
 
       reply.send({ roster: combined });
     } catch (e) {

@@ -75,6 +75,9 @@ discordClient.on('messageCreate', async (message) => {
   // Ignore bots to prevent infinite loops
   if (message.author.bot) return;
 
+  // --- Meme Reply Interceptor (tag creator, suppress AI trigger) ---
+  if (await handleMemeReply(message, discordClient)) return;
+
   // --- @bot whoami TEST COMMAND (No Tokens Burned) ---
   const botMentionPrefix = `<@${discordClient.user.id}>`;
   if (message.content.startsWith(botMentionPrefix)) {
@@ -519,52 +522,7 @@ if (commandText === 'whoami') {
         totalImageHeight += resizedMeta.height; 
       }
 
-      const fontSize = Math.max(16, Math.floor(targetWidth / 15)); 
-      const maxWidth = targetWidth * 0.9; 
-      
-      const fontOptions = { 
-        x: 0, 
-        y: 0, 
-        fontSize: fontSize, 
-        anchor: 'top', 
-        attributes: { fill: 'black' } 
-      };
-
-      const words = text.split(' ');
-      const lines = [];
-      let currentLine = '';
-
-      words.forEach(word => {
-        const testLine = currentLine ? currentLine + ' ' + word : word;
-        const metrics = textToSVG.getMetrics(testLine, fontOptions);
-        
-        if (metrics.width > maxWidth && currentLine) {
-          lines.push(currentLine);
-          currentLine = word;
-        } else {
-          currentLine = testLine;
-        }
-      });
-      if (currentLine) lines.push(currentLine);
-
-      const textPaddingHeight = Math.floor((lines.length * fontSize * 1.3) + (fontSize * 1.0));
-
-      let combinedSvgPaths = '';
-      lines.forEach((line, i) => {
-        const yOffset = Math.floor((i * fontSize * 1.3) + (fontSize * 0.5));
-        
-        const metrics = textToSVG.getMetrics(line, fontOptions);
-        const xOffset = (targetWidth - metrics.width) / 2;
-        
-        const path = textToSVG.getPath(line, { ...fontOptions, x: xOffset, y: yOffset });
-        combinedSvgPaths += path;
-      });
-
-      const svg = `
-        <svg width="${targetWidth}" height="${textPaddingHeight}" xmlns="http://www.w3.org/2000/svg">
-          ${combinedSvgPaths}
-        </svg>
-      `;
+      const { svg, textPaddingHeight } = await renderMemeCaptionSvg(text, targetWidth, textToSVG);
 
       let outputBuffer;
       let fileName = 'meme.jpg';
@@ -626,8 +584,282 @@ if (commandText === 'whoami') {
 });
 }
 
+// --- Meme Emoji & Caption Helpers ---
+const EMOJI_TOKEN_REGEX = /(<a?:[a-zA-Z0-9_]+:\d+>|[\u{1F1E6}-\u{1F1FF}]{2}|[0-9#*]\uFE0F?\u20E3|\p{Extended_Pictographic}(?:[\uFE0E\uFE0F]|[\u{1F3FB}-\u{1F3FF}])?(?:\u200D\p{Extended_Pictographic}(?:[\uFE0E\uFE0F]|[\u{1F3FB}-\u{1F3FF}])?)*)/gu;
+
+function toCodePoint(unicodeSurrogates, sep = '-') {
+  const r = [];
+  let c = 0, p = 0, i = 0;
+  while (i < unicodeSurrogates.length) {
+    c = unicodeSurrogates.charCodeAt(i++);
+    if (p) {
+      r.push((0x10000 + ((p - 0xD800) << 10) + (c - 0xDC00)).toString(16));
+      p = 0;
+    } else if (0xD800 <= c && c <= 0xDBFF) {
+      p = c;
+    } else {
+      r.push(c.toString(16));
+    }
+  }
+  return r.join(sep);
+}
+
+function grabTheRightIcon(rawText) {
+  return toCodePoint(rawText.indexOf('\u200D') < 0 ? rawText.replace(/\uFE0F/g, '') : rawText);
+}
+
+const emojiDataUriCache = new Map();
+const MAX_EMOJI_CACHE = 1000;
+
+async function getEmojiDataUri(rawEmoji) {
+  if (emojiDataUriCache.has(rawEmoji)) {
+    return emojiDataUriCache.get(rawEmoji);
+  }
+
+  const discordMatch = rawEmoji.match(/^<a?:([a-zA-Z0-9_]+):(\d+)>$/);
+  if (discordMatch) {
+    const id = discordMatch[2];
+    const url = `https://cdn.discordapp.com/emojis/${id}.png?size=96&quality=lossless`;
+    try {
+      const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 5000 });
+      const dataUri = `data:image/png;base64,${Buffer.from(res.data).toString('base64')}`;
+      if (emojiDataUriCache.size >= MAX_EMOJI_CACHE) {
+        const firstKey = emojiDataUriCache.keys().next().value;
+        emojiDataUriCache.delete(firstKey);
+      }
+      emojiDataUriCache.set(rawEmoji, dataUri);
+      return dataUri;
+    } catch (e) {
+      emojiDataUriCache.set(rawEmoji, null);
+      return null;
+    }
+  }
+
+  const code = grabTheRightIcon(rawEmoji);
+  const url = `https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/${code}.svg`;
+  try {
+    const res = await axios.get(url, { timeout: 5000, responseType: 'text' });
+    const dataUri = `data:image/svg+xml;base64,${Buffer.from(res.data, 'utf8').toString('base64')}`;
+    if (emojiDataUriCache.size >= MAX_EMOJI_CACHE) {
+      const firstKey = emojiDataUriCache.keys().next().value;
+      emojiDataUriCache.delete(firstKey);
+    }
+    emojiDataUriCache.set(rawEmoji, dataUri);
+    return dataUri;
+  } catch (e) {
+    emojiDataUriCache.set(rawEmoji, null);
+    return null;
+  }
+}
+
+async function renderMemeCaptionSvg(text, targetWidth, textToSvgEngine) {
+  const fontSize = Math.max(16, Math.floor(targetWidth / 15));
+  const maxWidth = targetWidth * 0.9;
+  const fontOptions = {
+    x: 0,
+    y: 0,
+    fontSize: fontSize,
+    anchor: 'top',
+    attributes: { fill: 'black' }
+  };
+
+  const sampleMetrics = textToSvgEngine.getMetrics('M', fontOptions);
+  const fontBaseline = sampleMetrics.baseline;
+  const emojiSize = Math.round(fontSize * 1.0);
+  const emojiSpacing = Math.max(2, Math.round(fontSize * 0.08));
+  const emojiTotalWidth = emojiSize + emojiSpacing * 2;
+  const spaceWidth = textToSvgEngine.getMetrics(' ', fontOptions).width;
+
+  const allEmojiMatches = [...text.matchAll(EMOJI_TOKEN_REGEX)].map(m => m[0]);
+  const uniqueEmojis = [...new Set(allEmojiMatches)];
+  await Promise.all(uniqueEmojis.map(e => getEmojiDataUri(e)));
+
+  const wordsRaw = text.trim().split(/\s+/);
+  const words = [];
+
+  for (const w of wordsRaw) {
+    let lastIndex = 0;
+    const tokens = [];
+    let match;
+    EMOJI_TOKEN_REGEX.lastIndex = 0;
+
+    while ((match = EMOJI_TOKEN_REGEX.exec(w)) !== null) {
+      if (match.index > lastIndex) {
+        const textContent = w.slice(lastIndex, match.index);
+        tokens.push({
+          type: 'text',
+          content: textContent,
+          width: textToSvgEngine.getMetrics(textContent, fontOptions).width
+        });
+      }
+      const rawEmoji = match[0];
+      const dataUri = emojiDataUriCache.get(rawEmoji);
+      if (dataUri) {
+        tokens.push({
+          type: 'emoji',
+          raw: rawEmoji,
+          dataUri,
+          width: emojiTotalWidth
+        });
+      } else {
+        const discordMatch = rawEmoji.match(/^<a?:([a-zA-Z0-9_]+):(\d+)>$/);
+        const fallbackText = discordMatch ? `:${discordMatch[1]}:` : rawEmoji;
+        tokens.push({
+          type: 'text',
+          content: fallbackText,
+          width: textToSvgEngine.getMetrics(fallbackText, fontOptions).width
+        });
+      }
+      lastIndex = EMOJI_TOKEN_REGEX.lastIndex;
+    }
+
+    if (lastIndex < w.length) {
+      const textContent = w.slice(lastIndex);
+      tokens.push({
+        type: 'text',
+        content: textContent,
+        width: textToSvgEngine.getMetrics(textContent, fontOptions).width
+      });
+    }
+
+    const wordWidth = tokens.reduce((acc, t) => acc + t.width, 0);
+    words.push({ tokens, width: wordWidth });
+  }
+
+  const lines = [];
+  let currentLineTokens = [];
+  let currentLineWidth = 0;
+
+  for (const word of words) {
+    const addWidth = currentLineTokens.length > 0 ? (spaceWidth + word.width) : word.width;
+    if (currentLineTokens.length > 0 && (currentLineWidth + addWidth) > maxWidth) {
+      lines.push(currentLineTokens);
+      currentLineTokens = [];
+      currentLineWidth = 0;
+    }
+
+    if (currentLineTokens.length === 0 && word.width > maxWidth && word.tokens.length > 1) {
+      for (const tok of word.tokens) {
+        if (currentLineTokens.length > 0 && (currentLineWidth + tok.width) > maxWidth) {
+          lines.push(currentLineTokens);
+          currentLineTokens = [];
+          currentLineWidth = 0;
+        }
+        currentLineTokens.push(tok);
+        currentLineWidth += tok.width;
+      }
+    } else {
+      if (currentLineTokens.length > 0) {
+        currentLineTokens.push({ type: 'text', content: ' ', width: spaceWidth });
+        currentLineWidth += spaceWidth;
+      }
+      for (const tok of word.tokens) {
+        currentLineTokens.push(tok);
+        currentLineWidth += tok.width;
+      }
+    }
+  }
+  if (currentLineTokens.length > 0) {
+    lines.push(currentLineTokens);
+  }
+
+  const mergedLines = lines.map(line => {
+    const merged = [];
+    for (const tok of line) {
+      const last = merged[merged.length - 1];
+      if (tok.type === 'text' && last && last.type === 'text') {
+        last.content += tok.content;
+        last.width = textToSvgEngine.getMetrics(last.content, fontOptions).width;
+      } else {
+        merged.push({ ...tok });
+      }
+    }
+    return merged;
+  });
+
+  const lineHeight = Math.floor(fontSize * 1.3);
+  const textPaddingHeight = Math.floor((mergedLines.length * lineHeight) + (fontSize * 1.0));
+  let combinedSvgElements = '';
+
+  mergedLines.forEach((line, i) => {
+    const yOffset = Math.floor((i * lineHeight) + (fontSize * 0.5));
+    const lineWidth = line.reduce((sum, seg) => sum + seg.width, 0);
+    let currentX = Math.round((targetWidth - lineWidth) / 2);
+
+    for (const seg of line) {
+      if (seg.type === 'text') {
+        const path = textToSvgEngine.getPath(seg.content, { ...fontOptions, x: currentX, y: yOffset });
+        combinedSvgElements += path;
+        currentX += seg.width;
+      } else if (seg.type === 'emoji') {
+        const emojiX = Math.round(currentX + (seg.width - emojiSize) / 2);
+        const emojiY = Math.round(yOffset + fontBaseline - (emojiSize * 0.86));
+        combinedSvgElements += `<image href="${seg.dataUri}" x="${emojiX}" y="${emojiY}" width="${emojiSize}" height="${emojiSize}" />`;
+        currentX += seg.width;
+      }
+    }
+  });
+
+  const svg = `<svg width="${targetWidth}" height="${textPaddingHeight}" xmlns="http://www.w3.org/2000/svg">${combinedSvgElements}</svg>`;
+  return { svg, textPaddingHeight };
+}
+
+async function handleMemeReply(message, client) {
+  if (!message || !message.reference || !message.reference.messageId) {
+    return false;
+  }
+
+  const botUserId = client?.user?.id;
+  let refMsg = message.channel?.messages?.cache?.get(message.reference.messageId);
+  if (!refMsg && message.channel?.messages?.fetch) {
+    try {
+      refMsg = await message.channel.messages.fetch(message.reference.messageId);
+    } catch {
+      refMsg = null;
+    }
+  }
+
+  if (!refMsg) {
+    return false;
+  }
+
+  // Ensure the message being replied to was authored by our bot
+  if (botUserId && refMsg.author?.id !== botUserId) {
+    return false;
+  }
+
+  // Case A: Reply to a meme posted by the bot
+  const memeMatch = refMsg.content && refMsg.content.match(/🎨\s*Meme created by:\s*<@!?([a-zA-Z0-9_]+)>/i);
+  if (memeMatch) {
+    const creatorId = memeMatch[1];
+    if (creatorId && creatorId !== message.author.id) {
+      try {
+        await message.reply({
+          content: `<@${creatorId}>, you have a new reply to your meme!`,
+          allowedMentions: { users: [creatorId], repliedUser: false }
+        });
+      } catch (err) {
+        log.err('Failed to tag meme creator on reply', { error: err.message });
+      }
+    }
+    return true; // Handled as meme reply, stop further processing and suppress AI trigger
+  }
+
+  // Case B: Reply to a meme reply notification itself
+  if (refMsg.content && refMsg.content.includes('you have a new reply to your meme!')) {
+    return true; // Ignore without triggering AI
+  }
+
+  return false;
+}
+
 module.exports = {
   getClient: () => discordClient,
-  getLoginError: () => discordLoginError
+  getLoginError: () => discordLoginError,
+  renderMemeCaptionSvg,
+  getEmojiDataUri,
+  handleMemeReply
 };
+
+
 
