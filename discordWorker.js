@@ -21,6 +21,7 @@ try {
 // --- Discord Bot Setup ---
 let discordClient = null;
 let discordLoginError = null; // <--- 1. New variable to hold the specific error
+const BOT_INSTANCE_ID = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
 // Only initialize if token is present
 if (process.env.DISCORD_BOT_TOKEN) {
@@ -41,15 +42,37 @@ if (process.env.DISCORD_BOT_TOKEN) {
     log.err('Discord login failed', e);
   });
 
-  // When ready: Clear errors and Send Startup Message
+  // When ready: Clear errors, register active instance, and Send Startup Message
   discordClient.once('ready', async () => {
     discordLoginError = null;
-    log.start(`Discord Bot logged in as ${discordClient.user.tag}`);
+    log.start(`Discord Bot logged in as ${discordClient.user.tag} (instance: ${BOT_INSTANCE_ID})`);
 
-    // Heartbeat for the admin panel
+    try {
+      await pool.query(
+        "INSERT INTO app_settings (setting_key, setting_value) VALUES ('discord_bot_active_instance', ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)",
+        [BOT_INSTANCE_ID]
+      );
+    } catch (e) {
+      log.err('Failed to register active bot instance', { error: e.message });
+    }
+
+    // Heartbeat for admin panel and instance verification
     setInterval(async () => {
-      await setSetting('discord_bot_last_heartbeat', Date.now().toString());
-      await setSetting('discord_bot_name', discordClient.user.tag);
+      try {
+        const [[row]] = await pool.query(
+          "SELECT setting_value FROM app_settings WHERE setting_key = 'discord_bot_active_instance'"
+        );
+        const active = row ? row.setting_value : BOT_INSTANCE_ID;
+        if (active && active !== BOT_INSTANCE_ID) {
+          log.warn(`Secondary Discord bot instance detected (${BOT_INSTANCE_ID} vs active ${active}). Disconnecting redundant worker.`);
+          if (discordClient) {
+            discordClient.destroy();
+          }
+          return;
+        }
+        await setSetting('discord_bot_last_heartbeat', Date.now().toString());
+        await setSetting('discord_bot_name', discordClient.user.tag);
+      } catch (_) {}
     }, 15000);
 
     // --- Send "System Online" Message ---
@@ -67,8 +90,32 @@ if (process.env.DISCORD_BOT_TOKEN) {
     }
   });
 
+// Graceful gateway disconnection on process termination
+const shutdownBotClient = () => {
+  if (discordClient) {
+    try { discordClient.destroy(); } catch (_) {}
+  }
+};
+process.on('SIGTERM', shutdownBotClient);
+process.on('SIGINT', shutdownBotClient);
+
 // --- Main discord client ---
 discordClient.on('messageCreate', async (message) => {
+  // Deduplicate against rolling restart worker instances
+  try {
+    const [[row]] = await pool.query(
+      "SELECT setting_value FROM app_settings WHERE setting_key = 'discord_bot_active_instance'"
+    );
+    const active = row ? row.setting_value : BOT_INSTANCE_ID;
+    if (active && active !== BOT_INSTANCE_ID) {
+      log.warn(`Message received by inactive bot instance (${BOT_INSTANCE_ID} vs active ${active}). Disconnecting.`);
+      if (discordClient) {
+        discordClient.destroy();
+      }
+      return;
+    }
+  } catch (_) {}
+
   // Check Master Switch
   const isEnabled = await getSetting('discord_enabled', 'true') === 'true';
   if (!isEnabled) return;
@@ -522,7 +569,7 @@ if (commandText === 'whoami') {
         totalImageHeight += resizedMeta.height; 
       }
 
-      const { svg, textPaddingHeight } = await renderMemeCaptionSvg(text, targetWidth, textToSVG);
+      const { svg, textPaddingHeight, emojiOverlays } = await renderMemeCaptionSvg(text, targetWidth, textToSVG);
 
       let outputBuffer;
       let fileName = 'meme.jpg';
@@ -534,14 +581,16 @@ if (commandText === 'whoami') {
             background: { r: 255, g: 255, b: 255, alpha: 1 }
           })
           .composite([
-            { input: Buffer.from(svg), top: 0, left: 0 }
+            { input: Buffer.from(svg), top: 0, left: 0 },
+            ...(emojiOverlays || [])
           ])
           .gif()
           .toBuffer();
         fileName = 'meme.gif';
       } else {
         const compositeLayers = [
-          { input: Buffer.from(svg), top: 0, left: 0 }
+          { input: Buffer.from(svg), top: 0, left: 0 },
+          ...(emojiOverlays || [])
         ];
 
         let currentY = textPaddingHeight;
@@ -608,12 +657,12 @@ function grabTheRightIcon(rawText) {
   return toCodePoint(rawText.indexOf('\u200D') < 0 ? rawText.replace(/\uFE0F/g, '') : rawText);
 }
 
-const emojiDataUriCache = new Map();
+const emojiBufferCache = new Map();
 const MAX_EMOJI_CACHE = 1000;
 
-async function getEmojiDataUri(rawEmoji) {
-  if (emojiDataUriCache.has(rawEmoji)) {
-    return emojiDataUriCache.get(rawEmoji);
+async function getEmojiBuffer(rawEmoji) {
+  if (emojiBufferCache.has(rawEmoji)) {
+    return emojiBufferCache.get(rawEmoji);
   }
 
   const discordMatch = rawEmoji.match(/^<a?:([a-zA-Z0-9_]+):(\d+)>$/);
@@ -622,15 +671,15 @@ async function getEmojiDataUri(rawEmoji) {
     const url = `https://cdn.discordapp.com/emojis/${id}.png?size=96&quality=lossless`;
     try {
       const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 5000 });
-      const dataUri = `data:image/png;base64,${Buffer.from(res.data).toString('base64')}`;
-      if (emojiDataUriCache.size >= MAX_EMOJI_CACHE) {
-        const firstKey = emojiDataUriCache.keys().next().value;
-        emojiDataUriCache.delete(firstKey);
+      const buffer = Buffer.from(res.data);
+      if (emojiBufferCache.size >= MAX_EMOJI_CACHE) {
+        const firstKey = emojiBufferCache.keys().next().value;
+        emojiBufferCache.delete(firstKey);
       }
-      emojiDataUriCache.set(rawEmoji, dataUri);
-      return dataUri;
+      emojiBufferCache.set(rawEmoji, buffer);
+      return buffer;
     } catch (e) {
-      emojiDataUriCache.set(rawEmoji, null);
+      emojiBufferCache.set(rawEmoji, null);
       return null;
     }
   }
@@ -638,18 +687,27 @@ async function getEmojiDataUri(rawEmoji) {
   const code = grabTheRightIcon(rawEmoji);
   const url = `https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/${code}.svg`;
   try {
-    const res = await axios.get(url, { timeout: 5000, responseType: 'text' });
-    const dataUri = `data:image/svg+xml;base64,${Buffer.from(res.data, 'utf8').toString('base64')}`;
-    if (emojiDataUriCache.size >= MAX_EMOJI_CACHE) {
-      const firstKey = emojiDataUriCache.keys().next().value;
-      emojiDataUriCache.delete(firstKey);
+    const res = await axios.get(url, { timeout: 5000, responseType: 'arraybuffer' });
+    const buffer = Buffer.from(res.data);
+    if (emojiBufferCache.size >= MAX_EMOJI_CACHE) {
+      const firstKey = emojiBufferCache.keys().next().value;
+      emojiBufferCache.delete(firstKey);
     }
-    emojiDataUriCache.set(rawEmoji, dataUri);
-    return dataUri;
+    emojiBufferCache.set(rawEmoji, buffer);
+    return buffer;
   } catch (e) {
-    emojiDataUriCache.set(rawEmoji, null);
+    emojiBufferCache.set(rawEmoji, null);
     return null;
   }
+}
+
+async function getEmojiDataUri(rawEmoji) {
+  const buf = await getEmojiBuffer(rawEmoji);
+  if (!buf) return null;
+  const isSvg = !rawEmoji.startsWith('<');
+  return isSvg
+    ? `data:image/svg+xml;base64,${buf.toString('base64')}`
+    : `data:image/png;base64,${buf.toString('base64')}`;
 }
 
 async function renderMemeCaptionSvg(text, targetWidth, textToSvgEngine) {
@@ -672,7 +730,7 @@ async function renderMemeCaptionSvg(text, targetWidth, textToSvgEngine) {
 
   const allEmojiMatches = [...text.matchAll(EMOJI_TOKEN_REGEX)].map(m => m[0]);
   const uniqueEmojis = [...new Set(allEmojiMatches)];
-  await Promise.all(uniqueEmojis.map(e => getEmojiDataUri(e)));
+  await Promise.all(uniqueEmojis.map(e => getEmojiBuffer(e)));
 
   const wordsRaw = text.trim().split(/\s+/);
   const words = [];
@@ -693,12 +751,12 @@ async function renderMemeCaptionSvg(text, targetWidth, textToSvgEngine) {
         });
       }
       const rawEmoji = match[0];
-      const dataUri = emojiDataUriCache.get(rawEmoji);
-      if (dataUri) {
+      const buffer = emojiBufferCache.get(rawEmoji);
+      if (buffer) {
         tokens.push({
           type: 'emoji',
           raw: rawEmoji,
-          dataUri,
+          buffer,
           width: emojiTotalWidth
         });
       } else {
@@ -780,8 +838,10 @@ async function renderMemeCaptionSvg(text, targetWidth, textToSvgEngine) {
   const lineHeight = Math.floor(fontSize * 1.3);
   const textPaddingHeight = Math.floor((mergedLines.length * lineHeight) + (fontSize * 1.0));
   let combinedSvgElements = '';
+  const emojiOverlays = [];
 
-  mergedLines.forEach((line, i) => {
+  for (let i = 0; i < mergedLines.length; i++) {
+    const line = mergedLines[i];
     const yOffset = Math.floor((i * lineHeight) + (fontSize * 0.5));
     const lineWidth = line.reduce((sum, seg) => sum + seg.width, 0);
     let currentX = Math.round((targetWidth - lineWidth) / 2);
@@ -794,14 +854,26 @@ async function renderMemeCaptionSvg(text, targetWidth, textToSvgEngine) {
       } else if (seg.type === 'emoji') {
         const emojiX = Math.round(currentX + (seg.width - emojiSize) / 2);
         const emojiY = Math.round(yOffset + fontBaseline - (emojiSize * 0.86));
-        combinedSvgElements += `<image href="${seg.dataUri}" x="${emojiX}" y="${emojiY}" width="${emojiSize}" height="${emojiSize}" />`;
+        try {
+          const resized = await sharp(seg.buffer)
+            .resize(emojiSize, emojiSize)
+            .png()
+            .toBuffer();
+          emojiOverlays.push({
+            input: resized,
+            top: emojiY,
+            left: emojiX
+          });
+        } catch (e) {
+          log.warn('Could not resize emoji for meme overlay', { emoji: seg.raw, error: e.message });
+        }
         currentX += seg.width;
       }
     }
-  });
+  }
 
   const svg = `<svg width="${targetWidth}" height="${textPaddingHeight}" xmlns="http://www.w3.org/2000/svg">${combinedSvgElements}</svg>`;
-  return { svg, textPaddingHeight };
+  return { svg, textPaddingHeight, emojiOverlays };
 }
 
 async function handleMemeReply(message, client) {
@@ -858,6 +930,7 @@ module.exports = {
   getLoginError: () => discordLoginError,
   renderMemeCaptionSvg,
   getEmojiDataUri,
+  getEmojiBuffer,
   handleMemeReply
 };
 
