@@ -241,11 +241,17 @@ const sumDots = (list) =>
 // players to begin with a coterie pool of two free dots per character.)
 // Players may also contribute their own characters' Advantage dots to the
 // coterie pool." Coterie Flaws add further dots.
-function computePool({ memberCount, pointsPerMember, bonusPoints, flaws }) {
+//
+// advancementDots: dots gained after creation (XP purchases, contributed
+// personal Backgrounds). They are counted in the spend like any other dot,
+// so they are credited here too; otherwise every advancement would read as
+// overspending the creation pool.
+function computePool({ memberCount, pointsPerMember, bonusPoints, advancementDots, flaws }) {
   const base = (Number(memberCount) || 0) * (Number(pointsPerMember) || 1);
   const bonus = Number(bonusPoints) || 0;
+  const advancement = Number(advancementDots) || 0;
   const fromFlaws = sumDots(flaws);
-  return { base, bonus, fromFlaws, total: base + bonus + fromFlaws };
+  return { base, bonus, advancement, fromFlaws, total: base + bonus + advancement + fromFlaws };
 }
 
 // Every dot the coterie holds is paid from the pool — including the Domain
@@ -323,6 +329,7 @@ function validateCoterie(input = {}) {
     memberCount,
     pointsPerMember,
     bonusPoints: Number(input.bonusPoints) || 0,
+    advancementDots: Number(input.advancementDots) || 0,
     traits,
     backgrounds,
     merits,

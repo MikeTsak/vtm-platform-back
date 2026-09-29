@@ -51,6 +51,8 @@ const post = (url, cookie, payload) =>
 const get = (url, cookie) => app.inject({ method: 'GET', url, headers: { cookie } });
 const put = (url, cookie, payload) =>
   app.inject({ method: 'PUT', url, headers: { cookie }, payload });
+const remainingOf = async (id) =>
+  JSON.parse((await get(`/api/coteries/${id}`, members[0].cookie)).body).coterie.budget.remaining;
 
 beforeAll(async () => {
   await setupTestDatabase();
@@ -330,8 +332,11 @@ describe('POST /api/coteries/:id/purchase', () => {
     expect(res.statusCode).toBe(403);
   });
 
-  // Advancement legitimately takes a coterie past its creation pool.
-  it('allows advancement to exceed the original creation pool', async () => {
+  // Advancement legitimately takes a coterie past its creation pool. The
+  // bought dots are credited to the pool as they are spent, so the creation
+  // budget stays where it was instead of reading as overspent.
+  it('allows advancement past the creation pool without unbalancing it', async () => {
+    const before = await remainingOf(coterieId);
     await post(`/api/coteries/${coterieId}/xp`, admin.cookie, { delta: 60 });
     const res = await post(`/api/coteries/${coterieId}/purchase`, members[0].cookie, {
       target: { kind: 'domain', key: 'lien' },
@@ -340,7 +345,45 @@ describe('POST /api/coteries/:id/purchase', () => {
     expect(res.statusCode).toBe(200);
     const { coterie } = JSON.parse(res.body);
     expect(coterie.traits.lien).toBe(5);
-    expect(coterie.budget.remaining).toBeLessThan(0); // over the creation pool, by design
+    expect(coterie.budget.pool.advancement).toBe(4);
+    expect(coterie.budget.remaining).toBe(before);
+  });
+
+  // Used to fail with "Overspending the coterie pool" after any purchase.
+  it('still lets the builder save the coterie after a purchase', async () => {
+    await post(`/api/coteries/${coterieId}/xp`, admin.cookie, { delta: 30 });
+    // Lien 1 -> 4: three bought dots, one more than the pool had left.
+    await post(`/api/coteries/${coterieId}/purchase`, members[0].cookie, {
+      target: { kind: 'domain', key: 'lien' },
+      to_dots: 4, from_bank: 9, from_personal: 0,
+    });
+    const detail = JSON.parse((await get(`/api/coteries/${coterieId}`, members[0].cookie)).body);
+    const res = await put(`/api/coteries/${coterieId}`, members[0].cookie, {
+      concept: 'Renamed after advancing',
+      traits: detail.coterie.traits,
+      backgrounds: detail.coterie.backgrounds,
+      merits: detail.coterie.merits,
+      flaws: detail.coterie.flaws,
+      advancement_dots: 99, // server-owned: must be ignored
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).coterie.advancement_dots).toBe(3);
+  });
+
+  it('credits a contributed personal Background to the pool', async () => {
+    const before = await remainingOf(coterieId);
+    await pool.query('UPDATE characters SET sheet=? WHERE user_id=?', [
+      JSON.stringify({ backgrounds: [{ id: 'backgrounds_herd__herd', name: 'Herd', dots: 2 }] }),
+      members[1].user.id,
+    ]);
+    const res = await post(`/api/coteries/${coterieId}/contribute`, members[1].cookie, {
+      character_entry_id: 'backgrounds_herd__herd',
+    });
+    expect(res.statusCode).toBe(200);
+    const { coterie } = JSON.parse(res.body);
+    expect(coterie.backgrounds).toEqual([expect.objectContaining({ key: 'herd', dots: 2 })]);
+    expect(coterie.budget.pool.advancement).toBe(2);
+    expect(coterie.budget.remaining).toBe(before);
   });
 
   it('rejects purchasing Chasse dots with XP', async () => {

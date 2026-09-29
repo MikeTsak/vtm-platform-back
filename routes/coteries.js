@@ -62,6 +62,7 @@ function presentCoterie(row, members = []) {
     memberCount: members.length,
     pointsPerMember: Number(row.points_per_member) || 1,
     bonusPoints: Number(row.bonus_points) || 0,
+    advancementDots: Number(row.advancement_dots) || 0,
     traits,
     backgrounds,
     merits,
@@ -82,6 +83,7 @@ function presentCoterie(row, members = []) {
     extras: safeParse(row.extras_json, []),
     points_per_member: Number(row.points_per_member) || 1,
     bonus_points: Number(row.bonus_points) || 0,
+    advancement_dots: Number(row.advancement_dots) || 0,
     coterie_xp: Number(row.coterie_xp) || 0,
     rules_override: !!row.rules_override,
     created_by: row.created_by,
@@ -421,6 +423,8 @@ module.exports = async function (fastify, opts) {
           ? body.points_per_member : existing.points_per_member,
         bonusPoints: body.bonus_points !== undefined
           ? body.bonus_points : existing.bonus_points,
+        // Server-owned: only /purchase and /contribute move it.
+        advancementDots: existing.advancement_dots,
         domainId: body.domain_id !== undefined ? body.domain_id : existing.domain_id,
         traits: body.traits !== undefined ? body.traits : {
           chasse: existing.chasse, lien: existing.lien, portillon: existing.portillon,
@@ -736,6 +740,7 @@ module.exports = async function (fastify, opts) {
         memberCount: members.length,
         pointsPerMember: row.points_per_member,
         bonusPoints: row.bonus_points,
+        advancementDots: (Number(row.advancement_dots) || 0) + (toDots - fromDots),
         domainId: row.domain_id,
         traits,
         backgrounds,
@@ -752,12 +757,13 @@ module.exports = async function (fastify, opts) {
 
       await conn.query(
         `UPDATE coteries
-            SET chasse=?, lien=?, portillon=?, backgrounds_json=?, merits_json=?, coterie_xp=?
+            SET chasse=?, lien=?, portillon=?, backgrounds_json=?, merits_json=?, coterie_xp=?,
+                advancement_dots = advancement_dots + ?
           WHERE id=?`,
         [
           check.traits.chasse, check.traits.lien, check.traits.portillon,
           JSON.stringify(check.backgrounds), JSON.stringify(check.merits),
-          bank - fromBank, id,
+          bank - fromBank, toDots - fromDots, id,
         ]
       );
 
@@ -882,6 +888,7 @@ module.exports = async function (fastify, opts) {
         memberCount: members.length,
         pointsPerMember: row.points_per_member,
         bonusPoints: row.bonus_points,
+        advancementDots: (Number(row.advancement_dots) || 0) + (toDots - fromDots),
         domainId: row.domain_id,
         traits: { chasse: row.chasse, lien: row.lien, portillon: row.portillon },
         backgrounds,
@@ -895,8 +902,8 @@ module.exports = async function (fastify, opts) {
         return reply.status(400).json({ error: check.errors[0], errors: check.errors });
       }
 
-      await conn.query('UPDATE coteries SET backgrounds_json=? WHERE id=?', [
-        JSON.stringify(check.backgrounds), id,
+      await conn.query('UPDATE coteries SET backgrounds_json=?, advancement_dots = advancement_dots + ? WHERE id=?', [
+        JSON.stringify(check.backgrounds), toDots - fromDots, id,
       ]);
       await conn.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), ch.id]);
       await conn.query(
