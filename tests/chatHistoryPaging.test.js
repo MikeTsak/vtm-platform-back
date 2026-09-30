@@ -62,6 +62,10 @@ describe('DM history paging + conversation settings', () => {
       method: 'GET', url: `/api/chat/history/${a.user.id}?limit=5`, headers: { cookie: b.cookie },
     })).body);
     expect(seenByB.settings).toEqual({ theme: 'Toreador', emoji: '🔥' });
+    expect(seenByB.messages.map(m => ({ body: m.body, type: m.type }))).toEqual([
+      { body: `${a.user.display_name} changed the theme to Toreador`, type: 'system' },
+      { body: `${a.user.display_name} set the conversation emoji to 🔥`, type: 'system' }
+    ]);
 
     expect((await put(a, { kind: 'user', id: b.user.id, theme: '<script>' })).statusCode).toBe(400);
 
@@ -69,6 +73,11 @@ describe('DM history paging + conversation settings', () => {
     await pool.query('INSERT INTO chat_group_members (group_id, user_id) VALUES (?, ?)', [g.insertId, a.user.id]);
     expect((await put(b, { kind: 'group', id: g.insertId, theme: 'Brujah' })).statusCode).toBe(403);
     expect((await put(a, { kind: 'group', id: g.insertId, theme: 'Brujah' })).statusCode).toBe(200);
+
+    const groupHistory = JSON.parse((await app.inject({
+      method: 'GET', url: `/api/chat/groups/${g.insertId}/history`, headers: { cookie: a.cookie },
+    })).body);
+    expect(groupHistory.messages.some(m => m.type === 'system' && m.body.includes('changed the theme to Brujah'))).toBe(true);
   });
 
   it('stores a hold-to-grow emoji size, and ignores it on ordinary text', async () => {

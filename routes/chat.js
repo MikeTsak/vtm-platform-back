@@ -84,6 +84,39 @@ module.exports = async function (fastify, opts) {
     return r.insertId;
   }
 
+  // Posts a system message to any conversation kind (group, DM, or NPC thread)
+  // and notifies participants in real time.
+  async function postConversationSystemMessage(conv, actorUser, text) {
+    if (conv.kind === 'group' || conv.groupId) {
+      const gId = conv.groupId || conv.id;
+      return await postSystemMessage(gId, actorUser.id, text);
+    }
+    if (conv.kind === 'user') {
+      const otherId = conv.otherUserId;
+      const [r] = await pool.query(
+        "INSERT INTO chat_messages (sender_id, recipient_id, body, type) VALUES (?, ?, ?, 'system')",
+        [actorUser.id, otherId, text]
+      );
+      if (fastify.io) {
+        fastify.io.to(`user_${actorUser.id}`).emit('chat:refresh', { type: 'player', partnerId: otherId });
+        fastify.io.to(`user_${otherId}`).emit('chat:refresh', { type: 'player', partnerId: actorUser.id });
+      }
+      return r.insertId;
+    }
+    if (conv.kind === 'npc') {
+      const [r] = await pool.query(
+        "INSERT INTO npc_messages (npc_id, user_id, from_side, body, type) VALUES (?, ?, 'user', ?, 'system')",
+        [conv.npcId, conv.playerId, text]
+      );
+      if (fastify.io) {
+        fastify.io.to(`user_${conv.playerId}`).emit('chat:refresh', { type: 'npc', npcId: conv.npcId });
+        fastify.io.to('admin_chat').emit('chat:refresh', { type: 'npc', npcId: conv.npcId });
+      }
+      return r.insertId;
+    }
+  }
+
+
   fastify.get('/api/chat/my-recent', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const userId = req.user.id;
@@ -812,7 +845,7 @@ module.exports = async function (fastify, opts) {
       const [messages] = await pool.query(
         `SELECT * FROM (
          SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at,
-                cm.read_at, cm.delivered_at, cm.edited, cm.emoji_size,
+                cm.read_at, cm.delivered_at, cm.edited, cm.emoji_size, cm.type,
                 cm.attachment_id, cm.reply_to_id,
                 u_sender.display_name as sender_name,
                 r.id AS reply_found, LEFT(r.body, 300) AS reply_body,
@@ -848,7 +881,7 @@ module.exports = async function (fastify, opts) {
       }
 
       const replyTo = await validReplyTo(reply_to_id,
-        'SELECT id FROM chat_messages WHERE id=? AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?))',
+        "SELECT id FROM chat_messages WHERE id=? AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)) AND IFNULL(type, 'text') != 'system'",
         [req.user.id, recipient_id, recipient_id, req.user.id]);
 
       const [r] = await pool.query(
@@ -931,6 +964,12 @@ module.exports = async function (fastify, opts) {
       // truncated (or 500s under strict mode) instead of being rejected.
       if (typeof emoji !== 'string' || emoji.length > 32) {
         return reply.status(400).send({ error: 'Invalid reaction' });
+      }
+
+      // Disallow reactions on system messages
+      const [[targetMsg]] = await pool.query(`SELECT type FROM ${table} WHERE id=? LIMIT 1`, [messageId]);
+      if (targetMsg && targetMsg.type === 'system') {
+        return reply.status(400).send({ error: 'Cannot react to system messages' });
       }
 
       // Toggle reaction: delete if exists, otherwise insert
@@ -1214,6 +1253,7 @@ module.exports = async function (fastify, opts) {
     const [rows] = await pool.query(`SELECT *, ${cfg.senderCol} as sender_id FROM ${table} WHERE id = ?${extraWhere}`, [msgId]);
     if (rows.length === 0) return { status: 404, error: 'Message not found.' };
     const msg = rows[0];
+    if (msg.type === 'system') return { status: 403, error: 'Cannot modify system messages.' };
     if (isAdmin) return { msg, isAdmin };
     if (String(msg.sender_id) !== String(req.user.id)) {
       return { status: 403, error: `You can only ${verb} your own messages.` };
@@ -1331,7 +1371,8 @@ module.exports = async function (fastify, opts) {
     if (!id) return { error: 400 };
     if (kind === 'user') {
       return {
-        table: 'chat_messages', where: '((m.sender_id=? AND m.recipient_id=?) OR (m.sender_id=? AND m.recipient_id=?))',
+        kind: 'user', otherUserId: id, me,
+        table: 'chat_messages', where: "((m.sender_id=? AND m.recipient_id=?) OR (m.sender_id=? AND m.recipient_id=?)) AND IFNULL(m.type, 'text') <> 'system'",
         params: [me, id, id, me], sender: 'm.sender_id, NULL AS from_side',
         key: convKey('user', me, id), rooms: [`user_${me}`, `user_${id}`],
       };
@@ -1340,16 +1381,18 @@ module.exports = async function (fastify, opts) {
       const [rows] = await pool.query('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?', [id, me]);
       if (!rows.length) return { error: 403 };
       return {
+        kind: 'group', groupId: id,
         table: 'chat_group_messages', where: "m.group_id=? AND IFNULL(m.type, 'text') <> 'system'",
         params: [id], sender: 'm.sender_id, NULL AS from_side',
-        key: convKey('group', id), rooms: [`group_${id}`], groupId: id,
+        key: convKey('group', id), rooms: [`group_${id}`],
       };
     }
     if (kind === 'npc') {
       const player = checkIsAdmin(req.user) ? Number(rawUserId) : me;
       if (!player) return { error: 400 };
       return {
-        table: 'npc_messages', where: "m.npc_id=? AND m.user_id=? AND m.status <> 'queued'",
+        kind: 'npc', npcId: id, playerId: player,
+        table: 'npc_messages', where: "m.npc_id=? AND m.user_id=? AND m.status <> 'queued' AND IFNULL(m.type, 'text') <> 'system'",
         params: [id, player], sender: 'NULL AS sender_id, m.from_side',
         key: convKey('npc', id, player), rooms: [`user_${player}`, 'admin_chat'],
       };
@@ -1360,7 +1403,8 @@ module.exports = async function (fastify, opts) {
   const THEME_RE = /^[A-Za-z][A-Za-z _-]{0,31}$/;
 
   // Shared theme / conversation emoji: anyone in the conversation can change
-  // it and everyone sees it. Groups also get a system line saying who did.
+  // it and everyone sees it. Sends a system message into the conversation
+  // stating who made the change.
   fastify.put('/api/chat/settings', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const { kind, id, user_id } = req.body || {};
@@ -1386,14 +1430,14 @@ module.exports = async function (fastify, opts) {
         [conv.key, next.theme, next.emoji, req.user.id]
       );
 
-      if (conv.groupId) {
-        const [[actor]] = await pool.query(
-          'SELECT COALESCE(c.name, u.display_name) AS name FROM users u LEFT JOIN characters c ON c.user_id = u.id WHERE u.id=? LIMIT 1',
-          [req.user.id]
-        );
-        const who = actor?.name || 'Someone';
-        if (next.theme !== current.theme) await postSystemMessage(conv.groupId, req.user.id, next.theme ? `${who} changed the theme to ${next.theme}` : `${who} reset the theme`);
-        if (next.emoji !== current.emoji) await postSystemMessage(conv.groupId, req.user.id, next.emoji ? `${who} set the conversation emoji to ${next.emoji}` : `${who} reset the conversation emoji`);
+      const who = await nameFor(req.user.id);
+      if (next.theme !== current.theme) {
+        const themeText = next.theme ? `${who} changed the theme to ${next.theme}` : `${who} reset the theme`;
+        await postConversationSystemMessage(conv, req.user, themeText);
+      }
+      if (next.emoji !== current.emoji) {
+        const emojiText = next.emoji ? `${who} set the conversation emoji to ${next.emoji}` : `${who} reset the conversation emoji`;
+        await postConversationSystemMessage(conv, req.user, emojiText);
       }
       if (fastify.io) for (const room of conv.rooms) fastify.io.to(room).emit('chat:refresh', { type: 'settings' });
 

@@ -60,7 +60,7 @@ module.exports = async function (fastify, opts) {
       const w = await historyWindow(pool, 'npc_messages', 'm', req.query);
       const [messages] = await pool.query(
         `SELECT * FROM (
-        SELECT m.id, m.body, m.from_side, m.created_at, m.attachment_id, m.status, m.edited, m.read_at, m.reply_to_id, m.emoji_size,
+        SELECT m.id, m.body, m.from_side, m.created_at, m.attachment_id, m.status, m.edited, m.read_at, m.reply_to_id, m.emoji_size, m.type,
                 r.id AS reply_found, LEFT(r.body, 300) AS reply_body, r.from_side AS reply_from_side,
                 r.attachment_id AS reply_attachment_id
         FROM npc_messages m
@@ -188,7 +188,7 @@ module.exports = async function (fastify, opts) {
       const w = await historyWindow(pool, 'npc_messages', 'm', req.query);
       const [rows] = await pool.query(
         `SELECT * FROM (
-        SELECT m.id, m.npc_id, m.user_id, m.from_side, m.body, m.created_at, m.attachment_id, m.reply_to_id, m.edited, m.emoji_size,
+        SELECT m.id, m.npc_id, m.user_id, m.from_side, m.body, m.created_at, m.attachment_id, m.reply_to_id, m.edited, m.emoji_size, m.type,
                 r.id AS reply_found, LEFT(r.body, 300) AS reply_body, r.from_side AS reply_from_side,
                 r.attachment_id AS reply_attachment_id
         FROM npc_messages m

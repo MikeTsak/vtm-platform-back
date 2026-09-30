@@ -177,23 +177,68 @@ module.exports = async function (fastify, opts) {
 
     const massReleaseMode = await getSetting('downtime_mass_release_mode', 'false');
     const massReleaseDate = await getSetting('downtime_mass_release_date', null);
+    const activePhase = await getSetting('downtime_active_phase', 'standard');
 
-    let hideResolutions = false;
+    let isMassReleaseActive = false;
     if (massReleaseMode === 'true' && massReleaseDate) {
       const releaseTime = new Date(massReleaseDate).getTime();
       if (!isNaN(releaseTime) && Date.now() < releaseTime) {
-        hideResolutions = true;
+        isMassReleaseActive = true;
       }
     }
 
-    if (hideResolutions) {
-      rows.forEach(r => {
-        r.gm_resolution = null;
-        r.gm_notes = null;
-      });
+    let currentCycleStart = null;
+    try {
+      const cycleInfo = await resolveCurrentFeedingCycle();
+      if (cycleInfo?.cycleStart && !isNaN(cycleInfo.cycleStart.getTime())) {
+        currentCycleStart = cycleInfo.cycleStart;
+      }
+    } catch (e) {}
+
+    if (!currentCycleStart) {
+      try {
+        const openingStr = await getSetting('downtime_opening', null);
+        if (openingStr) {
+          const parsed = new Date(openingStr);
+          if (!isNaN(parsed.getTime())) {
+            currentCycleStart = parsed;
+          }
+        }
+      } catch (e) {}
+    }
+
+    if (!isMassReleaseActive) {
+      const unreleasedIds = rows.filter(r => r.is_released === 0 || r.is_released === false).map(r => r.id);
+      if (unreleasedIds.length > 0) {
+        pool.query('UPDATE downtimes SET is_released = 1 WHERE id IN (?)', [unreleasedIds]).catch(() => {});
+      }
     }
 
     rows.forEach(r => {
+      let pendingRelease = false;
+
+      if (isMassReleaseActive) {
+        const alreadyRead = r.is_read === 1 || r.is_read === true;
+        const isProject = r.title && r.title.startsWith('[PROJECT]');
+        const projectMismatch = isProject && activePhase === 'standard';
+        const pastCycle = currentCycleStart && new Date(r.created_at).getTime() < currentCycleStart.getTime();
+
+        if (!alreadyRead && !projectMismatch && !pastCycle) {
+          const s = String(r.status || '').toLowerCase();
+          const isResolvedOrApproved = ['resolved', 'approved', 'rejected', 'resolved in scene'].includes(s) || s.startsWith('approved');
+          if (isResolvedOrApproved || r.gm_resolution) {
+            pendingRelease = true;
+          }
+        }
+      }
+
+      r.is_pending_release = pendingRelease;
+
+      if (pendingRelease) {
+        r.gm_resolution = null;
+        r.gm_notes = null;
+      }
+
       if (r.status && r.status.toLowerCase().startsWith('approved')) {
         r.status = 'approved';
       }
@@ -323,9 +368,19 @@ module.exports = async function (fastify, opts) {
       defaultFeed = feedingFromPredator(pred);
     }
 
+    const massReleaseMode = await getSetting('downtime_mass_release_mode', 'false');
+    const massReleaseDate = await getSetting('downtime_mass_release_date', null);
+    let initialReleased = 1;
+    if (massReleaseMode === 'true' && massReleaseDate) {
+      const releaseTime = new Date(massReleaseDate).getTime();
+      if (!isNaN(releaseTime) && Date.now() < releaseTime) {
+        initialReleased = 0;
+      }
+    }
+
     const [r] = await pool.query(
-      'INSERT INTO downtimes (character_id, title, feeding_type, body) VALUES (?,?,?,?)',
-      [ch.id, title, defaultFeed || null, body]
+      'INSERT INTO downtimes (character_id, title, feeding_type, body, is_released) VALUES (?,?,?,?,?)',
+      [ch.id, title, defaultFeed || null, body, initialReleased]
     );
     const [rows] = await pool.query('SELECT * FROM downtimes WHERE id=?', [r.insertId]);
     log.dt('Downtime created', { user_id: req.user.id, downtime_id: r.insertId, feeding_type: defaultFeed || feeding_type || null });
@@ -375,6 +430,20 @@ module.exports = async function (fastify, opts) {
     if (status === 'resolved') {
       fields.push('resolved_at=?');
       vals.push(new Date());
+    }
+
+    const massReleaseMode = await getSetting('downtime_mass_release_mode', 'false');
+    const massReleaseDate = await getSetting('downtime_mass_release_date', null);
+    let isMassReleaseActive = false;
+    if (massReleaseMode === 'true' && massReleaseDate) {
+      const releaseTime = new Date(massReleaseDate).getTime();
+      if (!isNaN(releaseTime) && Date.now() < releaseTime) {
+        isMassReleaseActive = true;
+      }
+    }
+    if (!isMassReleaseActive) {
+      fields.push('is_released=?');
+      vals.push(1);
     }
 
     if (!fields.length) return reply.status(400).json({ error: 'Nothing to update' });
@@ -440,6 +509,7 @@ module.exports = async function (fastify, opts) {
         await setSetting('downtime_mass_release_mode', downtime_mass_release_mode ? 'true' : 'false');
 
         if (oldMassReleaseMode === 'true' && !downtime_mass_release_mode) {
+          await pool.query('UPDATE downtimes SET is_released = 1 WHERE is_released = 0').catch(() => {});
           const hasNotified = await getSetting('downtime_mass_release_notified', 'false');
           if (hasNotified === 'false') {
             broadcastNtfyAlert('Downtime Resolutions have been released manually to all players!', {
@@ -448,6 +518,22 @@ module.exports = async function (fastify, opts) {
               priority: 'default'
             }).catch(() => { });
             await setSetting('downtime_mass_release_notified', 'true');
+          }
+        } else if (oldMassReleaseMode !== 'true' && downtime_mass_release_mode) {
+          let start = null;
+          try {
+            const cycleInfo = await resolveCurrentFeedingCycle();
+            if (cycleInfo?.cycleStart) start = cycleInfo.cycleStart;
+          } catch (_) {}
+          if (!start) {
+            const op = await getSetting('downtime_opening', null);
+            if (op) start = new Date(op);
+          }
+          if (start) {
+            await pool.query(
+              'UPDATE downtimes SET is_released = 0 WHERE created_at >= ? AND is_read = 0 AND title NOT LIKE "[PROJECT]%"',
+              [start]
+            ).catch(() => {});
           }
         }
       }

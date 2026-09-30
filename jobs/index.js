@@ -114,6 +114,7 @@ function scheduleMassReleasePings() {
 
           // Mark as notified so we don't spam every minute
           await setSetting('downtime_mass_release_notified', 'true');
+          await pool.query('UPDATE downtimes SET is_released = 1 WHERE is_released = 0').catch(() => {});
         }
       }
     } catch (error) {

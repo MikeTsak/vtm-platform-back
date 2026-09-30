@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Erebus Portal API",
-    "version": "1.0.80",
+    "version": "1.0.84",
     "description": "API documentation for the Vampire: The Masquerade RPG portal."
   },
   "servers": [
@@ -2974,6 +2974,54 @@
         }
       }
     },
+    "/api/admin/chat/npc-unread/{npcId}/{userId}": {
+      "post": {
+        "description": "",
+        "parameters": [
+          {
+            "name": "npcId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "req": {
+                    "example": "any"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/chat/reply-as-npc/{npcId}/{userId}": {
       "post": {
         "description": "",
@@ -3071,6 +3119,9 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "emoji_size": {
+                    "example": "any"
+                  },
                   "npc_id": {
                     "example": "any"
                   },
@@ -3152,6 +3203,9 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "emoji_size": {
+                    "example": "any"
+                  },
                   "npc_id": {
                     "example": "any"
                   },
@@ -3725,27 +3779,6 @@
           }
         ],
         "responses": {
-          "0": {
-            "description": ""
-          },
-          "1": {
-            "description": ""
-          },
-          "2": {
-            "description": ""
-          },
-          "3": {
-            "description": ""
-          },
-          "4": {
-            "description": ""
-          },
-          "5": {
-            "description": ""
-          },
-          "200": {
-            "description": "OK"
-          },
           "201": {
             "description": "Created"
           },
@@ -3765,6 +3798,9 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "emoji_size": {
+                    "example": "any"
+                  },
                   "body": {
                     "example": "any"
                   },
@@ -3908,6 +3944,9 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "emoji_size": {
+                    "example": "any"
+                  },
                   "recipient_id": {
                     "example": "any"
                   },
@@ -4159,6 +4198,134 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/chat/settings": {
+      "put": {
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "theme": {
+                    "example": "any"
+                  },
+                  "emoji": {
+                    "example": "any"
+                  },
+                  "kind": {
+                    "example": "any"
+                  },
+                  "id": {
+                    "example": "any"
+                  },
+                  "user_id": {
+                    "example": "any"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/search": {
+      "get": {
+        "description": "",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        }
+      }
+    },
+    "/api/chat/media-list": {
+      "get": {
+        "description": "",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "500": {
+            "description": "Internal Server Error"
           }
         }
       }
