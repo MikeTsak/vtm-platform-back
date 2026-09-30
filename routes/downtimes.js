@@ -390,7 +390,7 @@ module.exports = async function (fastify, opts) {
 
   fastify.get('/api/admin/downtimes', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const [rows] = await pool.query(
-      `SELECT d.*, c.name AS char_name, c.clan, u.display_name AS player_name, u.email
+      `SELECT d.*, c.user_id, c.name AS char_name, c.clan, u.display_name AS player_name, u.email
      FROM downtimes d
      JOIN characters c ON c.id=d.character_id
      JOIN users u ON u.id=c.user_id

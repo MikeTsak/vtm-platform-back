@@ -15,7 +15,7 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/news/public', async (req, reply) => {
     try {
       const [rows] = await pool.query(`
-      SELECT n.*, u.display_name as author_real_name,
+      SELECT n.*, u.display_name as author_real_name, u.role as author_role,
              c.name as char_name, c.camarilla_titles as char_titles, c.image_url as char_image
       FROM news_entries n
       LEFT JOIN users u ON n.author_id = u.id
@@ -35,7 +35,7 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/news/public/:id', async (req, reply) => {
     try {
       const [rows] = await pool.query(`
-      SELECT n.*, u.display_name as author_real_name,
+      SELECT n.*, u.display_name as author_real_name, u.role as author_role,
              c.name as char_name, c.camarilla_titles as char_titles, c.image_url as char_image
       FROM news_entries n
       LEFT JOIN users u ON n.author_id = u.id
@@ -84,7 +84,7 @@ module.exports = async function (fastify, opts) {
     try {
       // Join with users to get the real name for Announcements
       const [rows] = await pool.query(`
-      SELECT n.*, u.display_name as author_real_name,
+      SELECT n.*, u.display_name as author_real_name, u.role as author_role,
              c.name as char_name, c.camarilla_titles as char_titles, c.image_url as char_image
       FROM news_entries n
       LEFT JOIN users u ON n.author_id = u.id
@@ -539,7 +539,7 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/admin/news', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const [rows] = await pool.query(`
-      SELECT n.*, u.display_name as author_real_name,
+      SELECT n.*, u.display_name as author_real_name, u.role as author_role,
              c.name as char_name, c.camarilla_titles as char_titles, c.image_url as char_image
       FROM news_entries n
       LEFT JOIN users u ON n.author_id = u.id
