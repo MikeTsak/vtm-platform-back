@@ -598,7 +598,9 @@ module.exports = async function (fastify, opts) {
 
   fastify.post('/api/admin/feeding/run-decay', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const result = await runFeedingDecay(pool, log, { force: true });
+      // No force: re-running an already processed cycle would stack a second
+      // -1 on every division (this happened once on prod via a misclick).
+      const result = await runFeedingDecay(pool, log);
       log.adm('Feeding decay manually triggered', { user: req.user.id, result });
       reply.send(result);
     } catch (err) {

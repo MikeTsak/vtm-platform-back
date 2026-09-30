@@ -17,7 +17,7 @@ const { parseSheet } = require('../utils/sheet');
 
 const MAX_DIVISION = 88;
 
-async function runFeedingDecay(pool, log, { force = false } = {}) {
+async function runFeedingDecay(pool, log) {
   const enabled = (await getSetting('feeding_enabled', 'true')) === 'true';
   if (!enabled) return { skipped: 'disabled' };
 
@@ -34,7 +34,7 @@ async function runFeedingDecay(pool, log, { force = false } = {}) {
   if (completedCycle < 0) return { skipped: 'no completed cycle yet' };
 
   const lastProcessed = parseInt(await getSetting('feeding_last_decay_cycle_index', '-1'), 10);
-  if (!force && completedCycle <= lastProcessed) return { skipped: 'already processed', completedCycle, lastProcessed };
+  if (completedCycle <= lastProcessed) return { skipped: 'already processed', completedCycle, lastProcessed };
 
   const [rows] = await pool.query(
     // Herd feeds never touch the domain, so they don't count as activity here.
