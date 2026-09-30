@@ -3,6 +3,7 @@
 // Player <-> NPC direct messages, and the Storyteller side that answers them.
 const axios = require('axios');
 const { idempotencyCheck, idempotencySave } = require('../utils/idempotency');
+const { convKey, loadConvSettings, historyWindow, emojiSize } = require('../utils/chatConversation');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, requireCourt, sendPushNotification } = opts;
@@ -56,23 +57,84 @@ module.exports = async function (fastify, opts) {
     const userId = Number(req.params.userId);
 
     try {
-      // FIX: Changed to npc_messages
+      const w = await historyWindow(pool, 'npc_messages', 'm', req.query);
       const [messages] = await pool.query(
-        `SELECT m.id, m.body, m.from_side, m.created_at, m.attachment_id, m.status, m.edited, m.read_at, m.reply_to_id,
+        `SELECT * FROM (
+        SELECT m.id, m.body, m.from_side, m.created_at, m.attachment_id, m.status, m.edited, m.read_at, m.reply_to_id, m.emoji_size,
                 r.id AS reply_found, LEFT(r.body, 300) AS reply_body, r.from_side AS reply_from_side,
                 r.attachment_id AS reply_attachment_id
         FROM npc_messages m
         LEFT JOIN npc_messages r ON r.id = m.reply_to_id
-        WHERE m.npc_id = ? AND m.user_id = ?
-        ORDER BY m.created_at ASC`,
-        [npcId, userId]
+        WHERE m.npc_id = ? AND m.user_id = ?${w.sql}
+        ${w.order}
+        ) sub
+        ORDER BY created_at ASC, id ASC`,
+        [npcId, userId, ...w.params]
       );
 
-
-      reply.send({ messages });
+      const settings = await loadConvSettings(pool, convKey('npc', npcId, userId));
+      reply.send({ messages, has_more: w.hasMore(messages), settings });
     } catch (e) {
       log.err('Admin fetch NPC chat history failed', { message: e.message, stack: e.stack });
       reply.status(500).json({ error: 'Failed to fetch chat history' });
+    }
+  });
+
+  /** Admin: Mark NPC conversation with a user as unread so another ST can answer */
+  fastify.post('/api/admin/chat/npc-unread/:npcId/:userId', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    const npcId = Number(req.params.npcId);
+    const userId = Number(req.params.userId);
+    const fromMessageId = req.body?.fromMessageId ? Number(req.body.fromMessageId) : null;
+
+    if (!Number.isInteger(npcId) || npcId <= 0 || !Number.isInteger(userId) || userId <= 0) {
+      return reply.status(400).json({ error: 'Valid npcId and userId are required' });
+    }
+
+    try {
+      if (fromMessageId && Number.isInteger(fromMessageId) && fromMessageId > 0) {
+        await pool.query(
+          "UPDATE npc_messages SET read_at = NULL WHERE npc_id = ? AND user_id = ? AND from_side = 'user' AND id >= ?",
+          [npcId, userId, fromMessageId]
+        );
+      } else {
+        // If not targeting a specific message, unread all incoming user messages since the last replied NPC message
+        const [lastNpc] = await pool.query(
+          "SELECT created_at FROM npc_messages WHERE npc_id = ? AND user_id = ? AND from_side = 'npc' AND status != 'queued' ORDER BY created_at DESC LIMIT 1",
+          [npcId, userId]
+        );
+
+        let result;
+        if (lastNpc.length > 0 && lastNpc[0].created_at) {
+          [result] = await pool.query(
+            "UPDATE npc_messages SET read_at = NULL WHERE npc_id = ? AND user_id = ? AND from_side = 'user' AND created_at >= ?",
+            [npcId, userId, lastNpc[0].created_at]
+          );
+        }
+
+        // If no rows were affected (e.g. no NPC reply yet, or user messages were prior to reply), mark the latest incoming message(s) unread
+        if (!result || result.affectedRows === 0) {
+          await pool.query(
+            "UPDATE npc_messages SET read_at = NULL WHERE id = (SELECT id FROM (SELECT id FROM npc_messages WHERE npc_id = ? AND user_id = ? AND from_side = 'user' ORDER BY created_at DESC LIMIT 1) AS t)",
+            [npcId, userId]
+          );
+        }
+      }
+
+      const [countRows] = await pool.query(
+        "SELECT COUNT(*) AS unread_count FROM npc_messages WHERE npc_id = ? AND user_id = ? AND from_side = 'user' AND read_at IS NULL",
+        [npcId, userId]
+      );
+      const unreadCount = countRows[0]?.unread_count || 1;
+
+      if (fastify.io) {
+        fastify.io.to('admin_chat').emit('chat:refresh', { type: 'npc_unread', partnerId: npcId, userId, unreadCount });
+        fastify.io.to(`user_${req.user.id}`).emit('chat:refresh', { type: 'npc_unread', partnerId: npcId, userId, unreadCount });
+      }
+
+      reply.send({ ok: true, unread_count: unreadCount });
+    } catch (e) {
+      log.err('Failed to mark NPC conversation unread', { npcId, userId, message: e.message });
+      reply.status(500).json({ error: 'Failed to mark conversation unread' });
     }
   });
 
@@ -123,18 +185,23 @@ module.exports = async function (fastify, opts) {
       const npcId = Number(req.params.npcId);
       const userId = req.user.id;
 
+      const w = await historyWindow(pool, 'npc_messages', 'm', req.query);
       const [rows] = await pool.query(
-        `SELECT m.id, m.npc_id, m.user_id, m.from_side, m.body, m.created_at, m.attachment_id, m.reply_to_id,
+        `SELECT * FROM (
+        SELECT m.id, m.npc_id, m.user_id, m.from_side, m.body, m.created_at, m.attachment_id, m.reply_to_id, m.edited, m.emoji_size,
                 r.id AS reply_found, LEFT(r.body, 300) AS reply_body, r.from_side AS reply_from_side,
                 r.attachment_id AS reply_attachment_id
         FROM npc_messages m
         LEFT JOIN npc_messages r ON r.id = m.reply_to_id AND r.status != 'queued'
-        WHERE m.npc_id=? AND m.user_id=? AND m.status != 'queued'
-        ORDER BY m.created_at ASC`,
-        [npcId, userId]
+        WHERE m.npc_id=? AND m.user_id=? AND m.status != 'queued'${w.sql}
+        ${w.order}
+        ) sub
+        ORDER BY created_at ASC, id ASC`,
+        [npcId, userId, ...w.params]
       );
 
-      reply.send({ messages: rows });
+      const settings = await loadConvSettings(pool, convKey('npc', npcId, Number(userId)));
+      reply.send({ messages: rows, has_more: w.hasMore(rows), settings });
     } catch (e) {
       log.err('Failed to get NPC chat history', { message: e.message });
       reply.status(500).json({ error: 'Failed to get history' });
@@ -158,9 +225,10 @@ module.exports = async function (fastify, opts) {
 
       const replyTo = await validReplyTo(reply_to_id, npc_id, userId, false);
 
+      const size = attachment_id ? null : emojiSize(body, req.body.emoji_size);
       const [r] = await pool.query(
-        'INSERT INTO npc_messages (npc_id, user_id, from_side, body, attachment_id, reply_to_id) VALUES (?,?,?,?,?,?)',
-        [Number(npc_id), userId, 'user', body ? body.trim() : '', attachment_id || null, replyTo]
+        'INSERT INTO npc_messages (npc_id, user_id, from_side, body, attachment_id, reply_to_id, emoji_size) VALUES (?,?,?,?,?,?,?)',
+        [Number(npc_id), userId, 'user', body ? body.trim() : '', attachment_id || null, replyTo, size]
       );
 
       // FIX: Define the message object so notifications and the response don't crash
@@ -171,6 +239,7 @@ module.exports = async function (fastify, opts) {
         from_side: 'user',
         body: body ? body.trim() : '',
         attachment_id: attachment_id || null,
+        emoji_size: size,
         reply_to_id: replyTo,
         created_at: new Date()
       };
@@ -263,9 +332,10 @@ module.exports = async function (fastify, opts) {
       const status = queue ? 'queued' : 'sent';
       const replyTo = await validReplyTo(reply_to_id, npc_id, user_id, true);
 
+      const size = attachment_id ? null : emojiSize(body, req.body.emoji_size);
       const [r] = await pool.query(
-        'INSERT INTO npc_messages (npc_id, user_id, from_side, body, attachment_id, status, reply_to_id) VALUES (?,?,?,?,?,?,?)',
-        [Number(npc_id), Number(user_id), 'npc', body ? body.trim() : '', attachment_id || null, status, replyTo]
+        'INSERT INTO npc_messages (npc_id, user_id, from_side, body, attachment_id, status, reply_to_id, emoji_size) VALUES (?,?,?,?,?,?,?,?)',
+        [Number(npc_id), Number(user_id), 'npc', body ? body.trim() : '', attachment_id || null, status, replyTo, size]
       );
 
       // FIX: Define the message object so notifications and the response don't crash
@@ -276,6 +346,7 @@ module.exports = async function (fastify, opts) {
         from_side: 'npc',
         body: body ? body.trim() : '',
         attachment_id: attachment_id || null,
+        emoji_size: size,
         reply_to_id: replyTo,
         created_at: new Date(),
         status

@@ -46,14 +46,50 @@ function attachRealtime(fastify) {
     }
   });
 
+  // Presence for SchreckNet's online dots: userId -> { count, admin }, where
+  // count is open sockets (tabs/devices). "Online" = has the site open.
+  // ponytail: in-memory and per-process, like the socket rooms themselves;
+  // needs a shared adapter (e.g. Redis) if the server ever runs >1 process.
+  const presence = new Map();
+  const presenceSnapshot = () => {
+    const online = [];
+    const admins = [];
+    for (const [id, p] of presence) {
+      online.push(id);
+      if (p.admin) admins.push(id);
+    }
+    return { online, admins };
+  };
+
   io.on('connection', (socket) => {
     // Real-time chat: automatically join authenticated user's private room
-    if (socket.user?.id) {
-      socket.join(`user_${socket.user.id}`);
+    const uid = socket.user?.id ? Number(socket.user.id) : null;
+    if (uid) {
+      socket.join(`user_${uid}`);
       if (socket.user.role === 'admin' || socket.user.role === 'courtuser') {
         socket.join('admin_chat');
       }
+
+      // Admins are who answer as NPCs, so clients use them for NPC presence.
+      const entry = presence.get(uid) || { count: 0, admin: socket.user.role === 'admin' };
+      entry.count += 1;
+      presence.set(uid, entry);
+      if (entry.count === 1) io.emit('presence:update', { userId: uid, online: true, admin: entry.admin });
+
+      socket.on('disconnect', () => {
+        const e = presence.get(uid);
+        if (!e) return;
+        e.count -= 1;
+        if (e.count <= 0) {
+          presence.delete(uid);
+          io.emit('presence:update', { userId: uid, online: false, admin: e.admin });
+        }
+      });
     }
+
+    socket.on('presence:get', (ack) => {
+      if (typeof ack === 'function') ack(presenceSnapshot());
+    });
 
     // Real-time group chat rooms
     socket.on('join_group', async (groupId) => {

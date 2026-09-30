@@ -5,6 +5,7 @@
 
 const { isAdmin: checkIsAdmin, isOwnerOrAdmin } = require('../services/guards');
 const { idempotencyCheck, idempotencySave } = require('../utils/idempotency');
+const { convKey, loadConvSettings, historyWindow, courtStanding, emojiSize } = require('../utils/chatConversation');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, moderateLimiter, uploadLimiter, sendPushNotification, sharp } = opts;
@@ -362,8 +363,10 @@ module.exports = async function (fastify, opts) {
       if (!m.length) return reply.status(403).json({ error: 'Not a member of this group' });
 
       // 2. Fetch Messages
+      const w = await historyWindow(pool, 'chat_group_messages', 'm', req.query);
       const [messages] = await pool.query(`
-      SELECT m.id, m.sender_id, m.body, m.created_at, m.type,
+      SELECT * FROM (
+      SELECT m.id, m.sender_id, m.body, m.created_at, m.type, m.edited, m.emoji_size,
             m.attachment_id, m.reply_to_id,
             u.display_name, c.name as char_name, c.clan,
             r.id AS reply_found, LEFT(r.body, 300) AS reply_body, r.sender_id AS reply_sender_id,
@@ -374,12 +377,14 @@ module.exports = async function (fastify, opts) {
       LEFT JOIN chat_group_messages r ON r.id = m.reply_to_id
       LEFT JOIN users ru ON ru.id = r.sender_id
       LEFT JOIN characters rc ON rc.user_id = r.sender_id
-      WHERE m.group_id = ?
-      ORDER BY m.created_at ASC
-    `, [groupId]);
+      WHERE m.group_id = ?${w.sql}
+      ${w.order}
+      ) sub
+      ORDER BY created_at ASC, id ASC
+    `, [groupId, ...w.params]);
 
-
-      reply.send({ messages });
+      const settings = await loadConvSettings(pool, convKey('group', groupId));
+      reply.send({ messages, has_more: w.hasMore(messages), settings });
     } catch (e) {
       log.err('Failed to get group history', { message: e.message });
       reply.status(500).json({ error: 'Failed to get history' });
@@ -396,14 +401,15 @@ module.exports = async function (fastify, opts) {
       if (!m.length && req.user.role !== 'admin') return reply.status(403).json({ error: 'Not a member' });
 
       const [members] = await pool.query(`
-      SELECT u.id, u.display_name, c.name as char_name 
+      SELECT u.id, u.display_name, c.name as char_name, c.clan,
+             c.camarilla_titles AS titles, c.status AS court_status, c.is_hidden
       FROM chat_group_members cgm
       JOIN users u ON cgm.user_id = u.id
       LEFT JOIN characters c ON c.user_id = u.id
       WHERE cgm.group_id = ?
-      ORDER BY u.display_name ASC
+      ORDER BY COALESCE(c.name, u.display_name) ASC
     `, [groupId]);
-      reply.send({ members });
+      reply.send({ members: members.map(({ titles, court_status, is_hidden, ...m }) => ({ ...m, ...courtStanding({ titles, court_status, is_hidden }) })) });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to get members' });
     }
@@ -564,11 +570,11 @@ module.exports = async function (fastify, opts) {
       const replyTo = await validReplyTo(reply_to_id,
         "SELECT id FROM chat_group_messages WHERE id=? AND group_id=? AND type != 'system'", [groupId]);
 
-      const [r] = await pool.query('INSERT INTO chat_group_messages (group_id, sender_id, body, attachment_id, reply_to_id) VALUES (?,?,?,?,?)',
-        [groupId, req.user.id, body ? body.trim() : '', attachment_id || null, replyTo]);
+      const [r] = await pool.query('INSERT INTO chat_group_messages (group_id, sender_id, body, attachment_id, reply_to_id, emoji_size) VALUES (?,?,?,?,?,?)',
+        [groupId, req.user.id, body ? body.trim() : '', attachment_id || null, replyTo, attachment_id ? null : emojiSize(body, req.body.emoji_size)]);
 
       const [[message]] = await pool.query(`
-      SELECT m.id, m.sender_id, m.body, m.created_at, m.attachment_id, m.type, m.reply_to_id,
+      SELECT m.id, m.sender_id, m.body, m.created_at, m.attachment_id, m.type, m.reply_to_id, m.emoji_size,
              u.display_name, c.name as char_name, c.clan
       FROM chat_group_messages m
       LEFT JOIN users u ON m.sender_id = u.id
@@ -725,8 +731,14 @@ module.exports = async function (fastify, opts) {
         [myId, myId, myId, req.query.include_self ? 1 : 0, myId]
       );
 
+      const [standings] = await pool.query(
+        'SELECT user_id, camarilla_titles AS titles, status AS court_status, is_hidden FROM characters'
+      );
+      const standingByUser = new Map(standings.map(c => [c.user_id, courtStanding(c)]));
+
       const users = rows.map(r => ({
         ...r,
+        ...(standingByUser.get(r.id) || courtStanding(null)),
         is_admin: !!r.is_admin,
         char_id: r.char_id ? Number(r.char_id) : null,
         unread_count: Number(r.unread_count || 0)
@@ -749,6 +761,7 @@ module.exports = async function (fastify, opts) {
       if (isAdmin) {
         // Admins see if ANY player has sent an unread message to the NPC
         query = `SELECT n.id, n.name, n.clan, n.image_url,
+             n.camarilla_titles AS titles, n.status AS court_status, n.is_hidden,
              m.last_message_at,
              COALESCE(m.unread_count, 0) as unread_count
       FROM npcs n
@@ -765,6 +778,7 @@ module.exports = async function (fastify, opts) {
       } else {
         // Players see if the NPC has sent them an unread message
         query = `SELECT n.id, n.name, n.clan, n.image_url,
+             n.camarilla_titles AS titles, n.status AS court_status, n.is_hidden,
              m.last_message_at,
              COALESCE(m.unread_count, 0) as unread_count
       FROM npcs n
@@ -781,7 +795,7 @@ module.exports = async function (fastify, opts) {
         params = [myId];
       }
       const [rows] = await pool.query(query, params);
-      reply.send({ npcs: rows });
+      reply.send({ npcs: rows.map(({ titles, court_status, is_hidden, ...n }) => ({ ...n, ...courtStanding({ titles, court_status, is_hidden }) })) });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to list NPCs' });
     }
@@ -793,11 +807,12 @@ module.exports = async function (fastify, opts) {
     try {
       const otherUserId = Number(req.params.otherUserId);
       const myId = req.user.id;
+      const w = await historyWindow(pool, 'chat_messages', 'cm', req.query);
 
       const [messages] = await pool.query(
         `SELECT * FROM (
          SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at,
-                cm.read_at, cm.delivered_at,
+                cm.read_at, cm.delivered_at, cm.edited, cm.emoji_size,
                 cm.attachment_id, cm.reply_to_id,
                 u_sender.display_name as sender_name,
                 r.id AS reply_found, LEFT(r.body, 300) AS reply_body,
@@ -805,15 +820,15 @@ module.exports = async function (fastify, opts) {
          FROM chat_messages cm
          JOIN users u_sender ON cm.sender_id = u_sender.id
          LEFT JOIN chat_messages r ON r.id = cm.reply_to_id
-         WHERE (cm.sender_id = ? AND cm.recipient_id = ?) OR (cm.sender_id = ? AND cm.recipient_id = ?)
-         ORDER BY cm.created_at DESC
-         LIMIT 500
+         WHERE ((cm.sender_id = ? AND cm.recipient_id = ?) OR (cm.sender_id = ? AND cm.recipient_id = ?))${w.sql}
+         ${w.order}
        ) sub
-       ORDER BY created_at ASC`,
-        [myId, otherUserId, otherUserId, myId]
+       ORDER BY created_at ASC, id ASC`,
+        [myId, otherUserId, otherUserId, myId, ...w.params]
       );
 
-      reply.send({ messages });
+      const settings = await loadConvSettings(pool, convKey('user', Number(myId), otherUserId));
+      reply.send({ messages, has_more: w.hasMore(messages), settings });
     } catch (e) {
       log.err('Failed to get chat history', { message: e.message });
       reply.status(500).json({ error: 'Failed to get history' });
@@ -837,13 +852,13 @@ module.exports = async function (fastify, opts) {
         [req.user.id, recipient_id, recipient_id, req.user.id]);
 
       const [r] = await pool.query(
-        'INSERT INTO chat_messages (sender_id, recipient_id, body, attachment_id, reply_to_id) VALUES (?, ?, ?, ?, ?)',
-        [req.user.id, recipient_id, body ? body.trim() : '', attachment_id || null, replyTo]
+        'INSERT INTO chat_messages (sender_id, recipient_id, body, attachment_id, reply_to_id, emoji_size) VALUES (?, ?, ?, ?, ?, ?)',
+        [req.user.id, recipient_id, body ? body.trim() : '', attachment_id || null, replyTo, attachment_id ? null : emojiSize(body, req.body.emoji_size)]
       );
 
       // Fetch back with attachment info
       const [[message]] = await pool.query(
-        `SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at, cm.attachment_id, cm.reply_to_id,
+        `SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at, cm.attachment_id, cm.reply_to_id, cm.emoji_size,
               u_sender.display_name as sender_name
        FROM chat_messages cm
        JOIN users u_sender ON cm.sender_id = u_sender.id
@@ -873,6 +888,31 @@ module.exports = async function (fastify, opts) {
       reply.status(500).send({ error: 'Failed' });
     }
   });
+
+  // Socket rooms whose clients are showing a given message: both sides of a
+  // DM, the group's room, or the player plus the admin room for NPC chats.
+  async function messageRooms(table, messageId) {
+    if (table === 'chat_messages') {
+      const [[m]] = await pool.query('SELECT sender_id, recipient_id FROM chat_messages WHERE id=?', [messageId]);
+      return m ? [`user_${m.sender_id}`, `user_${m.recipient_id}`] : [];
+    }
+    if (table === 'chat_group_messages') {
+      const [[m]] = await pool.query('SELECT group_id FROM chat_group_messages WHERE id=?', [messageId]);
+      return m ? [`group_${m.group_id}`] : [];
+    }
+    if (table === 'npc_messages') {
+      const [[m]] = await pool.query('SELECT user_id FROM npc_messages WHERE id=?', [messageId]);
+      return m ? [`user_${m.user_id}`, 'admin_chat'] : [];
+    }
+    return [];
+  }
+
+  // Edits and deletes don't create a newer message, so without this the other
+  // side kept showing the old text (or the deleted message) until it reopened the chat.
+  const emitMessageChanged = (rooms, table, messageId, change) => {
+    if (!fastify.io) return;
+    for (const room of rooms) fastify.io.to(room).emit('chat:refresh', { type: change, table, messageId });
+  };
 
   /* --- Chat Reactions --- */
   const ALLOWED_REACTION_TABLES = ['chat_messages', 'npc_messages', 'chat_group_messages'];
@@ -910,10 +950,24 @@ module.exports = async function (fastify, opts) {
 
       // Fetch updated aggregate reactions for this message with user details
       const [rows] = await pool.query(
-        `SELECT r.emoji, r.user_id, COALESCE(c.name, u.display_name, 'Unknown') as user_name, c.clan
+        `SELECT r.emoji, r.user_id,
+                CASE
+                  WHEN r.message_table = 'npc_messages' AND u.role = 'admin' THEN COALESCE(n.name, 'Storyteller')
+                  ELSE COALESCE(c.name, u.display_name, 'Unknown')
+                END as user_name,
+                CASE
+                  WHEN r.message_table = 'npc_messages' AND u.role = 'admin' THEN n.clan
+                  ELSE c.clan
+                END as clan,
+                CASE
+                  WHEN r.message_table = 'npc_messages' AND u.role = 'admin' THEN n.id
+                  ELSE NULL
+                END as npc_id
          FROM chat_message_reactions r
          LEFT JOIN users u ON u.id = r.user_id
          LEFT JOIN characters c ON c.user_id = u.id
+         LEFT JOIN npc_messages nm ON (r.message_table = 'npc_messages' AND nm.id = r.message_id)
+         LEFT JOIN npcs n ON n.id = nm.npc_id
          WHERE r.message_table = ? AND r.message_id = ?
          ORDER BY r.id ASC`,
         [table, messageId]
@@ -934,7 +988,8 @@ module.exports = async function (fastify, opts) {
         emojiMap[r.emoji].reactors.push({
           id: Number(r.user_id),
           name: r.user_name,
-          clan: r.clan || null
+          clan: r.clan || null,
+          npcId: r.npc_id ? Number(r.npc_id) : null
         });
       }
 
@@ -942,18 +997,9 @@ module.exports = async function (fastify, opts) {
 
       if (fastify.io) {
         const payload = { table, messageId };
-        const rooms = [];
+        let rooms = [];
         try {
-          if (table === 'chat_messages') {
-            const [[m]] = await pool.query('SELECT sender_id, recipient_id FROM chat_messages WHERE id=?', [messageId]);
-            if (m) rooms.push(`user_${m.sender_id}`, `user_${m.recipient_id}`);
-          } else if (table === 'chat_group_messages') {
-            const [[m]] = await pool.query('SELECT group_id FROM chat_group_messages WHERE id=?', [messageId]);
-            if (m) rooms.push(`group_${m.group_id}`);
-          } else if (table === 'npc_messages') {
-            const [[m]] = await pool.query('SELECT user_id FROM npc_messages WHERE id=?', [messageId]);
-            if (m) rooms.push(`user_${m.user_id}`, 'admin_chat');
-          }
+          rooms = await messageRooms(table, messageId);
         } catch (e) { /* fall through to a best-effort broadcast below */ }
 
         if (rooms.length) {
@@ -988,10 +1034,24 @@ module.exports = async function (fastify, opts) {
       }
 
       const [rows] = await pool.query(
-        `SELECT r.message_id, r.emoji, r.user_id, COALESCE(c.name, u.display_name, 'Unknown') as user_name, c.clan
+        `SELECT r.message_id, r.emoji, r.user_id,
+                CASE
+                  WHEN r.message_table = 'npc_messages' AND u.role = 'admin' THEN COALESCE(n.name, 'Storyteller')
+                  ELSE COALESCE(c.name, u.display_name, 'Unknown')
+                END as user_name,
+                CASE
+                  WHEN r.message_table = 'npc_messages' AND u.role = 'admin' THEN n.clan
+                  ELSE c.clan
+                END as clan,
+                CASE
+                  WHEN r.message_table = 'npc_messages' AND u.role = 'admin' THEN n.id
+                  ELSE NULL
+                END as npc_id
          FROM chat_message_reactions r
          LEFT JOIN users u ON u.id = r.user_id
          LEFT JOIN characters c ON c.user_id = u.id
+         LEFT JOIN npc_messages nm ON (r.message_table = 'npc_messages' AND nm.id = r.message_id)
+         LEFT JOIN npcs n ON n.id = nm.npc_id
          WHERE r.message_table = ? AND r.message_id IN (?)
          ORDER BY r.id ASC`,
         [table, cleanIds]
@@ -1013,7 +1073,8 @@ module.exports = async function (fastify, opts) {
         map[r.message_id][r.emoji].reactors.push({
           id: Number(r.user_id),
           name: r.user_name,
-          clan: r.clan || null
+          clan: r.clan || null,
+          npcId: r.npc_id ? Number(r.npc_id) : null
         });
       }
 
@@ -1176,6 +1237,7 @@ module.exports = async function (fastify, opts) {
       }
 
       await pool.query(`UPDATE ${table} SET body = ?, edited = 1 WHERE id = ?`, [body.trim(), msg.id]);
+      emitMessageChanged(await messageRooms(table, msg.id).catch(() => []), table, msg.id, 'edit');
       return reply.send({ ok: true, edited: true });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to edit message.' });
@@ -1189,7 +1251,9 @@ module.exports = async function (fastify, opts) {
       const { msg, status, error } = await loadOwnMessage(req, table, 'delete');
       if (error) return reply.status(status).json({ error });
 
+      const rooms = await messageRooms(table, msg.id).catch(() => []);
       await pool.query(`DELETE FROM ${table} WHERE id = ?`, [msg.id]);
+      emitMessageChanged(rooms, table, msg.id, 'delete');
       return reply.send({ ok: true });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to delete message.' });
@@ -1243,11 +1307,149 @@ module.exports = async function (fastify, opts) {
         if (sender_id) {
           fastify.io.to(`user_${sender_id}`).emit('chat:refresh', { type: 'read', reader_id: req.user.id });
         }
+        if (npc_id && is_admin_reading_npc) {
+          fastify.io.to('admin_chat').emit('chat:refresh', { type: 'read', npc_id, sender_id });
+        }
       }
 
       reply.send({ ok: true });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to mark as read' });
+    }
+  });
+
+  /* --- Conversation details (SchreckNet side panel) ---
+   * One resolver for the three chat kinds, so settings, search and media all
+   * apply the same access rules as the history endpoints:
+   *   user:  DM with another user (any signed-in user)
+   *   group: members only
+   *   npc:   a player's own thread; admins pass user_id for the player's side
+   */
+  async function resolveConversation(req, kind, rawId, rawUserId) {
+    const me = Number(req.user.id);
+    const id = Number(rawId);
+    if (!id) return { error: 400 };
+    if (kind === 'user') {
+      return {
+        table: 'chat_messages', where: '((m.sender_id=? AND m.recipient_id=?) OR (m.sender_id=? AND m.recipient_id=?))',
+        params: [me, id, id, me], sender: 'm.sender_id, NULL AS from_side',
+        key: convKey('user', me, id), rooms: [`user_${me}`, `user_${id}`],
+      };
+    }
+    if (kind === 'group') {
+      const [rows] = await pool.query('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?', [id, me]);
+      if (!rows.length) return { error: 403 };
+      return {
+        table: 'chat_group_messages', where: "m.group_id=? AND IFNULL(m.type, 'text') <> 'system'",
+        params: [id], sender: 'm.sender_id, NULL AS from_side',
+        key: convKey('group', id), rooms: [`group_${id}`], groupId: id,
+      };
+    }
+    if (kind === 'npc') {
+      const player = checkIsAdmin(req.user) ? Number(rawUserId) : me;
+      if (!player) return { error: 400 };
+      return {
+        table: 'npc_messages', where: "m.npc_id=? AND m.user_id=? AND m.status <> 'queued'",
+        params: [id, player], sender: 'NULL AS sender_id, m.from_side',
+        key: convKey('npc', id, player), rooms: [`user_${player}`, 'admin_chat'],
+      };
+    }
+    return { error: 400 };
+  }
+
+  const THEME_RE = /^[A-Za-z][A-Za-z _-]{0,31}$/;
+
+  // Shared theme / conversation emoji: anyone in the conversation can change
+  // it and everyone sees it. Groups also get a system line saying who did.
+  fastify.put('/api/chat/settings', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const { kind, id, user_id } = req.body || {};
+      const conv = await resolveConversation(req, kind, id, user_id);
+      if (conv.error) return reply.status(conv.error).json({ error: 'Conversation not found' });
+
+      const current = await loadConvSettings(pool, conv.key);
+      const next = { ...current };
+      if ('theme' in req.body) {
+        const theme = req.body.theme || null;
+        if (theme !== null && !THEME_RE.test(theme)) return reply.status(400).json({ error: 'Invalid theme' });
+        next.theme = theme;
+      }
+      if ('emoji' in req.body) {
+        const emoji = req.body.emoji ? String(req.body.emoji).trim() : null;
+        if (emoji !== null && (!emoji || emoji.length > 32)) return reply.status(400).json({ error: 'Invalid emoji' });
+        next.emoji = emoji;
+      }
+
+      await pool.query(
+        `INSERT INTO chat_conversation_settings (conv_key, theme, emoji, updated_by) VALUES (?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE theme = VALUES(theme), emoji = VALUES(emoji), updated_by = VALUES(updated_by)`,
+        [conv.key, next.theme, next.emoji, req.user.id]
+      );
+
+      if (conv.groupId) {
+        const [[actor]] = await pool.query(
+          'SELECT COALESCE(c.name, u.display_name) AS name FROM users u LEFT JOIN characters c ON c.user_id = u.id WHERE u.id=? LIMIT 1',
+          [req.user.id]
+        );
+        const who = actor?.name || 'Someone';
+        if (next.theme !== current.theme) await postSystemMessage(conv.groupId, req.user.id, next.theme ? `${who} changed the theme to ${next.theme}` : `${who} reset the theme`);
+        if (next.emoji !== current.emoji) await postSystemMessage(conv.groupId, req.user.id, next.emoji ? `${who} set the conversation emoji to ${next.emoji}` : `${who} reset the conversation emoji`);
+      }
+      if (fastify.io) for (const room of conv.rooms) fastify.io.to(room).emit('chat:refresh', { type: 'settings' });
+
+      reply.send({ settings: next });
+    } catch (e) {
+      log.err('Failed to save chat settings', { message: e.message });
+      reply.status(500).json({ error: 'Failed to save settings' });
+    }
+  });
+
+  // Search one conversation's text. Server-side because the client only holds
+  // the pages that have been scrolled into view.
+  fastify.get('/api/chat/search', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const { kind, id, user_id } = req.query;
+      const q = String(req.query.q || '').trim();
+      if (q.length < 2) return reply.send({ results: [] });
+      const conv = await resolveConversation(req, kind, id, user_id);
+      if (conv.error) return reply.status(conv.error).json({ error: 'Conversation not found' });
+
+      const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+      const [results] = await pool.query(
+        `SELECT m.id, m.body, m.created_at, ${conv.sender}
+         FROM ${conv.table} m
+         WHERE ${conv.where} AND m.body LIKE ?
+         ORDER BY m.created_at DESC, m.id DESC
+         LIMIT 50`,
+        [...conv.params, like]
+      );
+      reply.send({ results });
+    } catch (e) {
+      log.err('Chat search failed', { message: e.message });
+      reply.status(500).json({ error: 'Search failed' });
+    }
+  });
+
+  // Attachments shared in one conversation, newest first, 30 per page.
+  fastify.get('/api/chat/media-list', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const { kind, id, user_id, before } = req.query;
+      const conv = await resolveConversation(req, kind, id, user_id);
+      if (conv.error) return reply.status(conv.error).json({ error: 'Conversation not found' });
+
+      const LIMIT = 30;
+      const [media] = await pool.query(
+        `SELECT m.id, m.attachment_id, m.created_at
+         FROM ${conv.table} m
+         WHERE ${conv.where} AND m.attachment_id IS NOT NULL${before ? ' AND m.id < ?' : ''}
+         ORDER BY m.id DESC
+         LIMIT ${LIMIT}`,
+        before ? [...conv.params, Number(before)] : conv.params
+      );
+      reply.send({ media, has_more: media.length === LIMIT });
+    } catch (e) {
+      log.err('Chat media list failed', { message: e.message });
+      reply.status(500).json({ error: 'Failed to load media' });
     }
   });
 
