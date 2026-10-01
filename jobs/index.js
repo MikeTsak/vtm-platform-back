@@ -17,6 +17,7 @@ const { sendPushNotification } = require('../services/push');
 const { flushQueuedMessages } = require('../services/commsQueue');
 const { resolveCommsSchedule } = require('../routes/comms');
 const { purgeOldIdempotencyKeys } = require('../utils/idempotency');
+const { releasePendingAndNotify, advanceActiveCycle } = require('../services/downtimeSchedule');
 
 // ============================================================================
 // AUTOMATED LOGISTICS - DOWNTIME DEADLINE PINGS
@@ -114,11 +115,32 @@ function scheduleMassReleasePings() {
 
           // Mark as notified so we don't spam every minute
           await setSetting('downtime_mass_release_notified', 'true');
-          await pool.query('UPDATE downtimes SET is_released = 1 WHERE is_released = 0').catch(() => {});
+          const notified = await releasePendingAndNotify().catch(e => {
+            log.err('Mass release push failed', { error: e.message });
+            return 0;
+          });
+          log.info(`Mass release: pushed ${notified} player(s).`);
         }
       }
     } catch (error) {
       log.err('Cron Job Mass Release Ping Error', { error: error.message });
+    }
+  });
+}
+
+// ============================================================================
+// DOWNTIME CYCLE AUTO ADVANCE
+// ============================================================================
+// Daily just after midnight: when the next calendar cycle's opening date arrives, it becomes the
+// live cycle (opening, deadline and mass release settings follow it). Forward only, see
+// services/downtimeSchedule.js.
+function scheduleDowntimeCycleAdvance() {
+  return cron.schedule('2 0 * * *', async () => {
+    try {
+      const cycle = await advanceActiveCycle();
+      if (cycle) log.info(`Downtime cycle advanced to ${cycle.title || cycle.id}.`);
+    } catch (error) {
+      log.err('Downtime cycle advance failed', { error: error.message });
     }
   });
 }
@@ -286,6 +308,7 @@ function startJobs(fastify) {
   started = true;
   scheduleDowntimeDeadlinePings();
   scheduleMassReleasePings();
+  scheduleDowntimeCycleAdvance();
   scheduleDailyMailCheck();
   scheduleDailySummary();
   scheduleNightlyBackup();

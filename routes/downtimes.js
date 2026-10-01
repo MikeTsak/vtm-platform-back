@@ -6,6 +6,29 @@ const { getSetting, setSetting } = require('../utils/settings');
 const { startOfMonth, endOfMonth, feedingFromPredator } = require('../services/format');
 const { getCycleInfo, resolveCurrentFeedingCycle } = require('../utils/feedingCycle');
 const { parseSheet } = require('../utils/sheet');
+const { sendPushNotification } = require('../services/push');
+const {
+  deadlineEnd, submissionState, syncSettingsToActiveCycle, applyActiveCycle, readCycles, findActiveIndex, withReleaseDates,
+  releasePendingAndNotify,
+} = require('../services/downtimeSchedule');
+
+const SUBMIT_CLOSED_MESSAGES = {
+  closed: () => 'Downtime submissions are currently closed.',
+  phase: (isProject) => isProject
+    ? 'Long Term Project submissions are currently closed. Only Monthly Actions are being accepted.'
+    : 'Monthly Action submissions are currently closed. Only Long Term Projects are being accepted.',
+  not_open: () => 'Downtime submissions have not opened yet.',
+  deadline: (isProject) => `The deadline for ${isProject ? 'project' : 'downtime'} submissions has passed.`,
+};
+
+const FINAL_STATUSES = ['resolved', 'resolved in scene'];
+const actionName = (title) => String(title || 'your action').replace(/^\[PROJECT\]\s*/, '');
+
+// Push to the player who owns a downtime ("system" category, which players switch on in their sheet).
+async function notifyOwner(pool, downtime, title, body) {
+  const [[row]] = await pool.query('SELECT user_id FROM characters WHERE id = ?', [downtime.character_id]);
+  if (row) sendPushNotification(row.user_id, title, body, { url: '/downtimes' }, 'system');
+}
 
 // Scene ids are `scene_<ms timestamp>_<rand>`: order by the timestamp. Must match the sort of
 // allSceneIds in front/src/features/admin/AdminDowntimesTab.jsx so "Scene N" agrees on both sides.
@@ -63,12 +86,26 @@ module.exports = async function (fastify, opts) {
       }
     } catch (err) { }
 
+    // Actions written after the deadline (replacements for rejected ones) still belong to this cycle
+    // until the next one opens, so the window must not stop at the deadline.
+    if (to < new Date()) to = new Date();
+
     const [rows] = await pool.query(
       "SELECT COUNT(*) AS c FROM downtimes WHERE character_id=? AND created_at >= ? AND created_at <= ? AND status <> 'rejected'",
       [ch.id, from, to]
     );
+    const [standardState, projectState] = await Promise.all([
+      submissionState({ isProject: false, characterId: ch.id, from, to }),
+      submissionState({ isProject: true, characterId: ch.id, from, to }),
+    ]);
     log.dt('Quota check', { user_id: req.user.id, used: rows[0].c, limit: 3 });
-    reply.send({ used: rows[0].c, limit: 3 });
+    reply.send({
+      used: rows[0].c,
+      limit: 3,
+      // null = open; otherwise why the form is closed ('closed' | 'phase' | 'not_open' | 'deadline')
+      closed_reason: { standard: standardState.reason, project: projectState.reason },
+      late_slots: { standard: standardState.lateSlots, project: projectState.lateSlots },
+    });
   });
 
   // PUT /api/downtimes/:id — Edit a project/downtime submission
@@ -104,8 +141,10 @@ module.exports = async function (fastify, opts) {
 
       const deadlineStr = await getSetting(deadlineKey, null);
 
-      // Check if the specific deadline for this type of action has passed
-      if (deadlineStr && new Date(deadlineStr) < new Date()) {
+      // Check if the specific deadline for this type of action has passed (runs through the end of that day).
+      // Actions the ST sent back to "submitted" stay editable after the deadline.
+      const dlEnd = deadlineEnd(deadlineStr);
+      if (dlEnd && dlEnd < new Date() && !submission.reopened_at) {
         return reply.status(400).json({
           error: `The deadline for ${isProject ? 'project' : 'action'} submissions has passed.`
         });
@@ -329,39 +368,6 @@ module.exports = async function (fastify, opts) {
     }
 
     const isProjectSubmission = title.startsWith('[PROJECT]');
-    const activePhase = await getSetting('downtime_active_phase', 'standard');
-
-    if (activePhase === 'closed') {
-      return reply.status(400).json({ error: 'Downtime submissions are currently closed.' });
-    }
-
-    if (activePhase === 'project' && !isProjectSubmission) {
-      return reply.status(400).json({ error: 'Monthly Action submissions are currently closed. Only Long Term Projects are being accepted.' });
-    } else if (activePhase === 'standard' && isProjectSubmission) {
-      return reply.status(400).json({ error: 'Long Term Project submissions are currently closed. Only Monthly Actions are being accepted.' });
-    }
-
-    // Check opening date
-    const openingStr = await getSetting('downtime_opening', null);
-    if (openingStr) {
-      const op = new Date(openingStr);
-      if (!isNaN(op.getTime()) && Date.now() < op.getTime()) {
-        return reply.status(400).json({ error: 'Downtime submissions have not opened yet.' });
-      }
-    }
-
-    // Check deadline
-    const deadlineKey = isProjectSubmission ? 'project_deadline' : 'downtime_deadline';
-    const deadlineStr = await getSetting(deadlineKey, null);
-    if (deadlineStr) {
-      const dl = new Date(deadlineStr);
-      if (!isNaN(dl.getTime()) && Date.now() > dl.getTime()) {
-        return reply.status(400).json({
-          error: `The deadline for ${isProjectSubmission ? 'project' : 'downtime'} submissions has passed.`
-        });
-      }
-    }
-
     const [chars] = await pool.query('SELECT * FROM characters WHERE user_id=?', [req.user.id]);
     const ch = chars[0];
     if (!ch) {
@@ -421,10 +427,20 @@ module.exports = async function (fastify, opts) {
       }
     } catch (e) { }
 
+    // Actions written after the deadline (replacements for rejected ones) still belong to this cycle
+    // until the next one opens, so the window must not stop at the deadline.
+    if (to < new Date()) to = new Date();
+
     const [cnt] = await pool.query(
       "SELECT COUNT(*) AS c FROM downtimes WHERE character_id=? AND created_at >= ? AND created_at <= ? AND status <> 'rejected'",
       [ch.id, from, to]
     );
+    // Phase, opening and deadline (with replacement slots for rejected actions after the deadline).
+    const subState = await submissionState({ isProject: isProjectSubmission, characterId: ch.id, from, to });
+    if (subState.reason) {
+      return reply.status(400).json({ error: SUBMIT_CLOSED_MESSAGES[subState.reason](isProjectSubmission) });
+    }
+
     if (cnt[0].c >= 3) {
       log.warn('Downtime limit reached', { user_id: req.user.id, count: cnt[0].c });
       return reply.status(400).json({ error: 'Downtime limit reached for this cycle (3).' });
@@ -492,10 +508,18 @@ module.exports = async function (fastify, opts) {
       normalizedStatus = match;
     }
 
+    const [[before]] = await pool.query('SELECT * FROM downtimes WHERE id=?', [req.params.id]);
+    if (!before) return reply.status(404).json({ error: 'Downtime not found' });
+
     const fields = [];
     const vals = [];
 
     if (normalizedStatus) { fields.push('status=?'); vals.push(normalizedStatus); }
+    // Sent back to the player for editing: remembered so the edit is allowed past the deadline.
+    if (normalizedStatus && normalizedStatus !== before.status) {
+      fields.push('reopened_at=?');
+      vals.push(normalizedStatus === 'submitted' ? new Date() : null);
+    }
     if (typeof gm_notes === 'string') { fields.push('gm_notes=?'); vals.push(gm_notes); }
     if (typeof gm_resolution === 'string') { fields.push('gm_resolution=?'); vals.push(gm_resolution); }
     if (scene_id !== undefined) { fields.push('scene_id=?'); vals.push(scene_id || null); }
@@ -529,6 +553,29 @@ module.exports = async function (fastify, opts) {
     const [rows] = await pool.query('SELECT * FROM downtimes WHERE id=?', [req.params.id]);
     log.adm('Downtime updated', { id: req.params.id, fields });
     reply.send({ downtime: rows[0] });
+
+    // Player notifications (fire and forget, after the response).
+    const after = rows[0];
+    const name = actionName(after.title);
+    const oldStatus = String(before.status || '').toLowerCase();
+    const newStatus = String(after.status || '').toLowerCase();
+    try {
+      if (newStatus !== oldStatus && newStatus === 'rejected') {
+        await notifyOwner(pool, after, 'Downtime action rejected', `"${name}" was rejected. The slot is yours again, so you can write a new action.`);
+      } else if (newStatus !== oldStatus && newStatus === 'submitted') {
+        await notifyOwner(pool, after, 'Downtime action reopened', `"${name}" was sent back to you. You can edit it now.`);
+      } else if (!isMassReleaseActive && (
+        (newStatus !== oldStatus && FINAL_STATUSES.includes(newStatus)) ||
+        (!before.gm_resolution && after.gm_resolution && newStatus !== 'needs a scene' && newStatus !== 'submitted')
+      )) {
+        await notifyOwner(pool, after, 'Downtime resolved', `The resolution for "${name}" is ready.`);
+      }
+      if (after.scene_id && after.scene_id !== before.scene_id) {
+        await notifyOwner(pool, after, 'You have a scene', `"${name}" will be played as a scene at the next event. Open Downtimes to see who is in it.`);
+      }
+    } catch (e) {
+      log.warn('Downtime notification failed', { id: req.params.id, message: e.message });
+    }
   });
 
   // Batch scene update endpoint
@@ -556,16 +603,27 @@ module.exports = async function (fastify, opts) {
       }
       fields.push('status=?');
       vals.push(status);
+      fields.push('reopened_at=NULL');
     }
 
     if (!fields.length) return reply.status(400).json({ error: 'Nothing to update' });
 
+    const [beforeRows] = await pool.query('SELECT id, scene_id FROM downtimes WHERE id IN (?)', [downtime_ids]);
+    const sceneBefore = new Map(beforeRows.map(r => [r.id, r.scene_id]));
     vals.push(downtime_ids);
     await pool.query(`UPDATE downtimes SET ${fields.join(', ')} WHERE id IN (?)`, vals);
 
     const [rows] = await pool.query('SELECT * FROM downtimes WHERE id IN (?)', [downtime_ids]);
     log.adm('Downtime scenes batch updated', { count: rows.length, scene_id, scene_title });
     reply.send({ downtimes: rows });
+
+    if (scene_id) {
+      for (const r of rows) {
+        if (sceneBefore.get(r.id) === r.scene_id) continue;
+        notifyOwner(pool, r, 'You have a scene', `"${actionName(r.title)}" will be played as a scene at the next event. Open Downtimes to see who is in it.`)
+          .catch(e => log.warn('Scene notification failed', { id: r.id, message: e.message }));
+      }
+    }
   });
 
   // GET: public to logged-in users (players need to see dates)
@@ -580,6 +638,15 @@ module.exports = async function (fastify, opts) {
       const massReleaseMode = await getSetting('downtime_mass_release_mode', 'false');
       const massReleaseDate = await getSetting('downtime_mass_release_date', null);
 
+      // "Next Modern Event" comes straight from the admin Calendar's events table, so it can't drift.
+      // Event kind lives in the title ("Modern Day Event", "Past Time Event", "Grand Event"); only
+      // Past Time events are skipped.
+      const [[nextModernEvent]] = await pool.query(
+        `SELECT id, title, date FROM events
+         WHERE date >= NOW() AND LOWER(title) NOT LIKE '%past time%'
+         ORDER BY date ASC LIMIT 1`
+      );
+
       reply.send({
         downtime_deadline: deadline || null,
         downtime_opening: opening || null,
@@ -587,6 +654,7 @@ module.exports = async function (fastify, opts) {
         downtime_active_phase: activePhase, // <-- NEW
         downtime_mass_release_mode: massReleaseMode,
         downtime_mass_release_date: massReleaseDate || null,
+        next_modern_event: nextModernEvent || null,
       });
     } catch (e) {
       log.err('Fetch downtime config failed', { message: e.message });
@@ -621,7 +689,7 @@ module.exports = async function (fastify, opts) {
         await setSetting('downtime_mass_release_mode', downtime_mass_release_mode ? 'true' : 'false');
 
         if (oldMassReleaseMode === 'true' && !downtime_mass_release_mode) {
-          await pool.query('UPDATE downtimes SET is_released = 1 WHERE is_released = 0').catch(() => {});
+          await releasePendingAndNotify().catch(e => log.warn('Manual release notify failed', { message: e.message }));
           const hasNotified = await getSetting('downtime_mass_release_notified', 'false');
           if (hasNotified === 'false') {
             broadcastNtfyAlert('Downtime Resolutions have been released manually to all players!', {
@@ -653,6 +721,9 @@ module.exports = async function (fastify, opts) {
         await setSetting('downtime_mass_release_date', downtime_mass_release_date || '');
         await setSetting('downtime_mass_release_notified', 'false');
       }
+
+      // The Calendar is the source of truth: mirror changed live dates onto the active cycle.
+      await syncSettingsToActiveCycle({ downtime_opening, downtime_deadline, downtime_mass_release_date });
 
       const deadline = await getSetting('downtime_deadline', null);
       const opening = await getSetting('downtime_opening', null);
@@ -691,10 +762,8 @@ module.exports = async function (fastify, opts) {
   // GET /api/admin/downtimes/cycles: Retrieve multiple downtime operation cycles
   fastify.get('/api/admin/downtimes/cycles', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const raw = await getSetting('downtime_cycles_schedule', '[]');
-      let cycles = [];
-      try { cycles = JSON.parse(raw); } catch (_) {}
-      reply.send({ cycles: Array.isArray(cycles) ? cycles : [] });
+      const cycles = await readCycles();
+      reply.send({ cycles });
     } catch (e) {
       log.err('Fetch downtime cycles failed', { message: e.message });
       reply.status(500).json({ error: 'Failed to fetch downtime cycles' });
@@ -733,16 +802,17 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/admin/downtimes/cycles', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const { cycles, activeCycleId } = req.body || {};
-      const validCycles = Array.isArray(cycles) ? cycles : [];
+      // New or generated cycles arrive without a release date: give each a concrete one to adjust.
+      let validCycles = withReleaseDates(Array.isArray(cycles) ? cycles : []);
+      // Which cycle is live is decided from the stored list before this edit (its dates may be what changed).
+      const previous = await readCycles();
+      const liveIdx = await findActiveIndex(previous);
+      const liveId = liveIdx >= 0 ? previous[liveIdx].id : null;
       await setSetting('downtime_cycles_schedule', JSON.stringify(validCycles));
 
-      if (activeCycleId) {
-        const found = validCycles.find(c => String(c.id) === String(activeCycleId));
-        if (found) {
-          if (found.opening_date) await setSetting('downtime_opening', found.opening_date);
-          if (found.closing_date) await setSetting('downtime_deadline', found.closing_date);
-        }
-      }
+      const targetId = activeCycleId || (validCycles.some(c => String(c.id) === String(liveId)) ? liveId : null);
+      // The live cycle's (possibly edited) dates flow into the settings the rest of the app reads.
+      if (targetId) validCycles = await applyActiveCycle(validCycles, targetId);
       reply.send({ ok: true, cycles: validCycles });
     } catch (e) {
       log.err('Save downtime cycles failed', { message: e.message });

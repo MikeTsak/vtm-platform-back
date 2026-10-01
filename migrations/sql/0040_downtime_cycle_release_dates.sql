@@ -1,0 +1,6 @@
+-- Migration 0040: data only, no schema change.
+-- Writes an explicit `release_date` into every cycle of the JSON in
+-- app_settings.downtime_cycles_schedule (live cycle: the current downtime_mass_release_date;
+-- others: 10:00 the day after closing). JSON array rewriting is done by the JS migration
+-- (migrations/list/0040_downtime_cycle_release_dates.js), which runs automatically on boot.
+-- Nothing to run by hand.
