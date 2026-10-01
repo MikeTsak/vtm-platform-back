@@ -93,74 +93,50 @@ module.exports = async function (fastify, opts) {
         return (a.name || '').localeCompare(b.name || '');
       });
 
-      reply.send({ roster: combined });
+      const isHarpy = await isHarpyOrAdmin(req.user);
+
+      reply.send({ roster: combined, is_harpy: isHarpy, can_manage_status: isHarpy });
     } catch (e) {
       log.err('Public roster fetch failed', { message: e.message });
       reply.status(500).json({ error: "Failed to load the Court hierarchy." });
     }
   });
 
-  // GET: Publicly accessible roster
-  // DUP: fastify.get('/api/camarilla/roster', { preHandler: [authRequired] }, async (req, reply) => {
-  // DUP:   try {
-  // DUP:     const [players] = await pool.query(
-  // DUP:       "SELECT id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, 'player' as type FROM characters"
-  // DUP:     );
-  // DUP:     const [npcs] = await pool.query(
-  // DUP:       "SELECT id, name, clan, camarilla_titles as titles, status, image_url, is_ex, is_deceased, 'npc' as type FROM npcs"
-  // DUP:     );
-  // DUP: 
-  // DUP:     const format = (list) => list.map(item => ({
-  // DUP:       ...item,
-  // DUP:       titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || []),
-  // DUP:       is_ex: !!item.is_ex,
-  // DUP:       is_deceased: !!item.is_deceased
-  // DUP:     }));
-  // DUP: 
-  // DUP:     const combined = [...format(players), ...format(npcs)];
-  // DUP:     combined.sort((a, b) => (b.status || 0) - (a.status || 0));
-  // DUP: 
-  // DUP:     reply.send({ roster: combined });
-  // DUP:   } catch (e) {
-  // DUP:     log.err('Public roster fetch failed', { message: e.message });
-  // DUP:     reply.status(500).json({ error: "Failed to load the Court hierarchy." });
-  // DUP:   }
-  // DUP: });
-
-  /* --- Public Camarilla Hierarchy API --- */
-
-  // GET: Publicly accessible roster for all logged-in users
-  // DUP: fastify.get('/api/camarilla/roster', { preHandler: [authRequired] }, async (req, reply) => {
-  // DUP:   try {
-  // DUP:     // Selects basic info from players and NPCs, including image_url
-  // DUP:     const [players] = await pool.query(
-  // DUP:       "SELECT id, name, clan, camarilla_titles as titles, status, image_url, 'player' as type FROM characters"
-  // DUP:     );
-  // DUP:     const [npcs] = await pool.query(
-  // DUP:       "SELECT id, name, clan, camarilla_titles as titles, status, image_url, 'npc' as type FROM npcs"
-  // DUP:     );
-  // DUP: 
-  // DUP:     // Format helper to handle JSON strings for titles
-  // DUP:     const format = (list) => list.map(item => ({
-  // DUP:       ...item,
-  // DUP:       titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || [])
-  // DUP:     }));
-  // DUP: 
-  // DUP:     const combined = [...format(players), ...format(npcs)];
-  // DUP: 
-  // DUP:     // Sort NUMERICALLY by status (highest number first, nulls become 0)
-  // DUP:     combined.sort((a, b) => (b.status || 0) - (a.status || 0));
-  // DUP: 
-  // DUP:     reply.send({ roster: combined });
-  // DUP:   } catch (e) {
-  // DUP:     log.err('Public roster fetch failed', { message: e.message });
-  // DUP:     reply.status(500).json({ error: "Failed to load the Court hierarchy." });
-  // DUP:   }
-  // DUP: });
+  async function isHarpyOrAdmin(user) {
+    if (!user) return false;
+    if (user.role === 'admin' || user.role === 'courtuser') return true;
+    try {
+      const [chars] = await pool.query('SELECT camarilla_titles FROM characters WHERE user_id = ?', [user.id]);
+      if (!chars.length) return false;
+      const raw = chars[0].camarilla_titles;
+      let titles = [];
+      if (Array.isArray(raw)) {
+        titles = raw;
+      } else if (typeof raw === 'string' && raw.trim()) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) titles = parsed;
+          else if (typeof parsed === 'string') titles = [parsed];
+        } catch {
+          titles = raw.split(',').map(s => s.trim()).filter(Boolean);
+        }
+      }
+      return titles.some(t => typeof t === 'string' && t.toLowerCase().includes('harpy'));
+    } catch {
+      return false;
+    }
+  }
 
   // 2. Update status, titles, image_url, or modifiers
-  fastify.patch('/api/admin/camarilla/update', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
-  const { id, type, field, value } = req.body;
+  fastify.patch('/api/admin/camarilla/update', { preHandler: [authRequired] }, async (req, reply) => {
+    const { id, type, field, value } = req.body || {};
+    const isAdminUser = req.user && req.user.role === 'admin';
+    const isHarpy = await isHarpyOrAdmin(req.user);
+
+    if (!isAdminUser && !(isHarpy && field === 'status')) {
+      return reply.status(403).json({ error: 'Insufficient clearance' });
+    }
+
     const table = type === 'player' ? 'characters' : 'npcs';
 
     let dbField, dbValue;
@@ -178,16 +154,68 @@ module.exports = async function (fastify, opts) {
     } else {
       // If it's not any of the above, it's the status slider
       dbField = 'status';
-      dbValue = value;
+      dbValue = Math.max(0, Math.min(5, parseInt(value, 10) || 0));
     }
 
     try {
       await pool.query(`UPDATE ${table} SET ${dbField} = ? WHERE id = ?`, [dbValue, id]);
-      log.adm(`Updated Camarilla ${field}`, { type, id, value });
+      log.adm(`Updated Camarilla ${field}`, { type, id, value: dbValue, by_user: req.user.id });
       reply.send({ ok: true });
     } catch (e) {
       log.err('Camarilla update failed', { message: e.message });
       reply.status(500).json({ error: "Database update failed" });
+    }
+  });
+
+  // 3. Dedicated Harpy Status Updater Endpoint
+  fastify.patch('/api/camarilla/status', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const allowed = await isHarpyOrAdmin(req.user);
+      if (!allowed) {
+        log.warn('Status update denied: user is not a Harpy', { user_id: req.user?.id, role: req.user?.role });
+        return reply.status(403).json({ error: 'Harpy clearance required' });
+      }
+
+      const { id, type, status, delta, value } = req.body || {};
+      const numId = parseInt(id, 10);
+      if (!numId || (type !== 'player' && type !== 'npc')) {
+        return reply.status(400).json({ error: 'Invalid kindred identifier or type' });
+      }
+
+      const table = type === 'player' ? 'characters' : 'npcs';
+
+      let targetStatus;
+      if (status !== undefined || value !== undefined) {
+        const raw = status !== undefined ? status : value;
+        targetStatus = parseInt(raw, 10);
+        if (Number.isNaN(targetStatus)) {
+          return reply.status(400).json({ error: 'Status must be a number' });
+        }
+      } else if (delta !== undefined) {
+        const numDelta = parseInt(delta, 10);
+        if (Number.isNaN(numDelta)) {
+          return reply.status(400).json({ error: 'Delta must be a number' });
+        }
+        const [rows] = await pool.query(`SELECT status FROM ${table} WHERE id = ?`, [numId]);
+        if (!rows.length) {
+          return reply.status(404).json({ error: 'Kindred record not found' });
+        }
+        const current = rows[0].status ?? 1;
+        targetStatus = current + numDelta;
+      } else {
+        return reply.status(400).json({ error: 'Status or delta required' });
+      }
+
+      // Clamp status between 0 and 5
+      const clampedStatus = Math.max(0, Math.min(5, targetStatus));
+
+      await pool.query(`UPDATE ${table} SET status = ? WHERE id = ?`, [clampedStatus, numId]);
+      log.adm('Camarilla status updated by Harpy', { user_id: req.user.id, target_id: numId, type, status: clampedStatus });
+
+      reply.send({ ok: true, id: numId, type, status: clampedStatus });
+    } catch (e) {
+      log.err('Status update failed', { message: e.message });
+      reply.status(500).json({ error: 'Database update failed' });
     }
   });
 };
