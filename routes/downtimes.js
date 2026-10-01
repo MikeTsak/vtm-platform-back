@@ -7,6 +7,13 @@ const { startOfMonth, endOfMonth, feedingFromPredator } = require('../services/f
 const { getCycleInfo, resolveCurrentFeedingCycle } = require('../utils/feedingCycle');
 const { parseSheet } = require('../utils/sheet');
 
+// Scene ids are `scene_<ms timestamp>_<rand>`: order by the timestamp. Must match the sort of
+// allSceneIds in front/src/features/admin/AdminDowntimesTab.jsx so "Scene N" agrees on both sides.
+function compareSceneIds(a, b) {
+  const key = (id) => Number((/^scene_(\d+)/.exec(String(id)) || [])[1]) || 0;
+  return (key(a) - key(b)) || String(a).localeCompare(String(b));
+}
+
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, broadcastNtfyAlert } = opts;
 
@@ -214,6 +221,39 @@ module.exports = async function (fastify, opts) {
       }
     }
 
+    const sceneIds = [...new Set(rows.map(r => r.scene_id).filter(Boolean))];
+    let participantsByScene = {};
+    const sceneNumberById = {};
+    if (sceneIds.length > 0) {
+      // Only actions still in a scene status count: switching one to Approved keeps its scene_id
+      // (so it can be moved back), but that character must stop showing up as a scene partner.
+      const [participantRows] = await pool.query(
+        `SELECT d.id AS downtime_id, d.scene_id, d.character_id, c.name AS char_name, c.clan, u.display_name AS player_name
+         FROM downtimes d
+         JOIN characters c ON c.id = d.character_id
+         JOIN users u ON u.id = c.user_id
+         WHERE d.scene_id IN (?) AND LOWER(d.status) IN ('needs a scene', 'resolved in scene')`,
+        [sceneIds]
+      );
+      for (const p of participantRows) {
+        if (!participantsByScene[p.scene_id]) {
+          participantsByScene[p.scene_id] = [];
+        }
+        participantsByScene[p.scene_id].push(p);
+      }
+
+      // Same "Scene N" numbering as the admin Live Event Scenes board (AdminDowntimesTab allSceneIds):
+      // every scene that still holds a scene action, oldest first by the timestamp inside its id.
+      const [allScenes] = await pool.query(
+        `SELECT DISTINCT d.scene_id
+         FROM downtimes d
+         JOIN characters c ON c.id = d.character_id
+         JOIN users u ON u.id = c.user_id
+         WHERE d.scene_id IS NOT NULL AND LOWER(d.status) IN ('needs a scene', 'resolved in scene')`
+      );
+      allScenes.map(s => s.scene_id).sort(compareSceneIds).forEach((id, i) => { sceneNumberById[id] = i + 1; });
+    }
+
     rows.forEach(r => {
       let pendingRelease = false;
 
@@ -242,6 +282,26 @@ module.exports = async function (fastify, opts) {
       if (r.status && r.status.toLowerCase().startsWith('approved')) {
         r.status = 'approved';
       }
+
+      if (r.scene_id && participantsByScene[r.scene_id]) {
+        const others = [];
+        const seenCharIds = new Set();
+        for (const p of participantsByScene[r.scene_id]) {
+          if (p.character_id !== char[0].id && !seenCharIds.has(p.character_id)) {
+            seenCharIds.add(p.character_id);
+            others.push({
+              character_id: p.character_id,
+              char_name: p.char_name,
+              player_name: p.player_name,
+              clan: p.clan,
+            });
+          }
+        }
+        r.scene_participants = others;
+      } else {
+        r.scene_participants = [];
+      }
+      r.scene_number = (r.scene_id && sceneNumberById[r.scene_id]) || null;
     });
 
     log.dt('List mine', { user_id: req.user.id, count: rows.length });
@@ -402,7 +462,7 @@ module.exports = async function (fastify, opts) {
   });
 
   fastify.patch('/api/admin/downtimes/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
-  const { status, gm_notes, gm_resolution } = req.body;
+    const { status, gm_notes, gm_resolution, scene_id, scene_title } = req.body;
     const allowed = [
       'submitted',
       'approved',
@@ -426,6 +486,8 @@ module.exports = async function (fastify, opts) {
     if (normalizedStatus) { fields.push('status=?'); vals.push(normalizedStatus); }
     if (typeof gm_notes === 'string') { fields.push('gm_notes=?'); vals.push(gm_notes); }
     if (typeof gm_resolution === 'string') { fields.push('gm_resolution=?'); vals.push(gm_resolution); }
+    if (scene_id !== undefined) { fields.push('scene_id=?'); vals.push(scene_id || null); }
+    if (scene_title !== undefined) { fields.push('scene_title=?'); vals.push(scene_title || null); }
 
     // auto-set resolved_at when marking resolved
     if (status === 'resolved') {
@@ -455,6 +517,43 @@ module.exports = async function (fastify, opts) {
     const [rows] = await pool.query('SELECT * FROM downtimes WHERE id=?', [req.params.id]);
     log.adm('Downtime updated', { id: req.params.id, fields });
     reply.send({ downtime: rows[0] });
+  });
+
+  // Batch scene update endpoint
+  fastify.post('/api/admin/downtimes/scenes/batch', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    const { downtime_ids, scene_id, scene_title, status } = req.body || {};
+    if (!Array.isArray(downtime_ids) || downtime_ids.length === 0) {
+      return reply.status(400).json({ error: 'downtime_ids array required' });
+    }
+
+    const fields = [];
+    const vals = [];
+
+    if (scene_id !== undefined) {
+      fields.push('scene_id=?');
+      vals.push(scene_id || null);
+    }
+    if (scene_title !== undefined) {
+      fields.push('scene_title=?');
+      vals.push(scene_title || null);
+    }
+    if (status !== undefined) {
+      // Scene batches only move actions between the two scene statuses; anything else goes through PATCH.
+      if (!['Needs a Scene', 'Resolved in scene'].includes(status)) {
+        return reply.status(400).json({ error: 'Bad status' });
+      }
+      fields.push('status=?');
+      vals.push(status);
+    }
+
+    if (!fields.length) return reply.status(400).json({ error: 'Nothing to update' });
+
+    vals.push(downtime_ids);
+    await pool.query(`UPDATE downtimes SET ${fields.join(', ')} WHERE id IN (?)`, vals);
+
+    const [rows] = await pool.query('SELECT * FROM downtimes WHERE id IN (?)', [downtime_ids]);
+    log.adm('Downtime scenes batch updated', { count: rows.length, scene_id, scene_title });
+    reply.send({ downtimes: rows });
   });
 
   // GET: public to logged-in users (players need to see dates)
