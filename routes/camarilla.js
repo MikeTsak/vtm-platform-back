@@ -127,14 +127,13 @@ module.exports = async function (fastify, opts) {
     }
   }
 
-  // 2. Update status, titles, image_url, or modifiers
-  fastify.patch('/api/admin/camarilla/update', { preHandler: [authRequired] }, async (req, reply) => {
+  // 2. Update status, titles, image_url, or modifiers (Admin only)
+  fastify.patch('/api/admin/camarilla/update', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const { id, type, field, value } = req.body || {};
     const isAdminUser = req.user && req.user.role === 'admin';
-    const isHarpy = await isHarpyOrAdmin(req.user);
 
-    if (!isAdminUser && !(isHarpy && field === 'status')) {
-      return reply.status(403).json({ error: 'Insufficient clearance' });
+    if (!isAdminUser) {
+      return reply.status(403).json({ error: 'Admin clearance required' });
     }
 
     const table = type === 'player' ? 'characters' : 'npcs';
