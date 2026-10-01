@@ -64,7 +64,7 @@ module.exports = async function (fastify, opts) {
     } catch (err) { }
 
     const [rows] = await pool.query(
-      'SELECT COUNT(*) AS c FROM downtimes WHERE character_id=? AND created_at >= ? AND created_at <= ?',
+      "SELECT COUNT(*) AS c FROM downtimes WHERE character_id=? AND created_at >= ? AND created_at <= ? AND status <> 'rejected'",
       [ch.id, from, to]
     );
     log.dt('Quota check', { user_id: req.user.id, used: rows[0].c, limit: 3 });
@@ -91,8 +91,9 @@ module.exports = async function (fastify, opts) {
 
       const submission = rows[0];
 
-      // 2. Only allow edits if status is 'submitted' or 'needs a scene'
-      if (submission.status !== 'submitted' && submission.status !== 'needs a scene') {
+      // 2. Only allow edits if status is 'submitted' or 'needs a scene' (stored as 'Needs a Scene', hence lowercase)
+      const editStatus = String(submission.status || '').toLowerCase();
+      if (editStatus !== 'submitted' && editStatus !== 'needs a scene') {
         return reply.status(400).json({ error: 'You can only edit actions that are not yet approved or resolved.' });
       }
 
@@ -228,7 +229,8 @@ module.exports = async function (fastify, opts) {
       // Only actions still in a scene status count: switching one to Approved keeps its scene_id
       // (so it can be moved back), but that character must stop showing up as a scene partner.
       const [participantRows] = await pool.query(
-        `SELECT d.id AS downtime_id, d.scene_id, d.character_id, c.name AS char_name, c.clan, u.display_name AS player_name
+        `SELECT d.id AS downtime_id, d.scene_id, d.character_id, c.user_id, c.name AS char_name, c.clan, u.display_name AS player_name,
+                (u.avatar_url IS NOT NULL OR u.avatar_url_thumb IS NOT NULL) AS has_avatar
          FROM downtimes d
          JOIN characters c ON c.id = d.character_id
          JOIN users u ON u.id = c.user_id
@@ -285,21 +287,31 @@ module.exports = async function (fastify, opts) {
 
       if (r.scene_id && participantsByScene[r.scene_id]) {
         const others = [];
+        const all = [];
         const seenCharIds = new Set();
         for (const p of participantsByScene[r.scene_id]) {
-          if (p.character_id !== char[0].id && !seenCharIds.has(p.character_id)) {
+          if (!seenCharIds.has(p.character_id)) {
             seenCharIds.add(p.character_id);
-            others.push({
+            const item = {
               character_id: p.character_id,
+              user_id: p.user_id,
+              has_avatar: Boolean(p.has_avatar),
               char_name: p.char_name,
               player_name: p.player_name,
               clan: p.clan,
-            });
+              is_me: p.character_id === char[0].id,
+            };
+            all.push(item);
+            if (p.character_id !== char[0].id) {
+              others.push(item);
+            }
           }
         }
         r.scene_participants = others;
+        r.scene_all_participants = all;
       } else {
         r.scene_participants = [];
+        r.scene_all_participants = [];
       }
       r.scene_number = (r.scene_id && sceneNumberById[r.scene_id]) || null;
     });
@@ -410,7 +422,7 @@ module.exports = async function (fastify, opts) {
     } catch (e) { }
 
     const [cnt] = await pool.query(
-      'SELECT COUNT(*) AS c FROM downtimes WHERE character_id=? AND created_at >= ? AND created_at <= ?',
+      "SELECT COUNT(*) AS c FROM downtimes WHERE character_id=? AND created_at >= ? AND created_at <= ? AND status <> 'rejected'",
       [ch.id, from, to]
     );
     if (cnt[0].c >= 3) {
