@@ -97,8 +97,23 @@ module.exports = async function (fastify, opts) {
       log.xp('Discipline power assignment (free)', { user_id: req.user.id, target, level: newLevel });
     }
 
-    // Apply optional sheet patch for both paid and free actions
-    if (patchSheet !== undefined) {
+    // A free power assignment may only change that discipline's power list:
+    // one entry per dot, no repeats. Saving the whole client sheet here let a
+    // buggy picker grant duplicate or surplus powers (Compel x3) for 0 XP.
+    const freeAssign = type === 'discipline' && cost === 0;
+    if (freeAssign && patchSheet !== undefined) {
+      const stored = parseSheet(ch.sheet) || {};
+      const dotsHave = Number(stored.disciplines?.[target] || 0);
+      const list = patchSheet?.disciplinePowers?.[target];
+      const keys = (Array.isArray(list) ? list : []).map(p => String(p?.id || p?.name || p || '').toLowerCase());
+      if (!Array.isArray(list) || keys.some(k => !k) || new Set(keys).size !== keys.length || list.length > dotsHave) {
+        log.warn('Power assignment rejected', { user_id: req.user.id, target, dots: dotsHave, powers: keys });
+        return reply.status(400).send({ error: `${target} has ${dotsHave} dot(s): pick one distinct power per dot.` });
+      }
+      stored.disciplinePowers = { ...(stored.disciplinePowers || {}), [target]: list };
+      await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(stored), ch.id]);
+      log.xp('Power assignment saved', { user_id: req.user.id, character_id: ch.id, target });
+    } else if (!freeAssign && patchSheet !== undefined) {
       await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(patchSheet), ch.id]);
       log.xp('Sheet patched after action', { user_id: req.user.id, character_id: ch.id });
     }

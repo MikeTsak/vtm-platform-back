@@ -620,9 +620,10 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/admin/retainers', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const [rows] = await pool.query(`
-        SELECT r.id, r.character_id, r.name, r.tier, r.sheet, r.created_at, c.name as domitor_name 
+        SELECT r.id, r.character_id, r.name, r.tier, r.sheet, r.created_at, COALESCE(c.name, CONCAT('Coterie: ', co.name)) as domitor_name
         FROM retainers r
-        JOIN characters c ON r.character_id = c.id
+        LEFT JOIN characters c ON r.character_id = c.id
+        LEFT JOIN coteries co ON r.coterie_id = co.id
       `);
       for (const row of rows) {
         row.sheet = parseSheet(row.sheet);

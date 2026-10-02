@@ -16,8 +16,9 @@
 // pool arithmetic is treated as a display convenience, never as truth.
 
 const rules = require('../utils/coterieRules');
-const { isAdmin } = require('../services/guards');
+const { isAdmin, userOwnsCharacter } = require('../services/guards');
 const { parseSheet } = require('../utils/sheet');
+const { validateRetainerSheet } = require('../utils/retainerValidation');
 
 const safeParse = (val, fallback) => {
   if (val == null) return fallback;
@@ -935,6 +936,228 @@ module.exports = async function (fastify, opts) {
       await conn.rollback();
       log.err('Coterie contribute failed', { message: e.message, stack: e.stack });
       reply.status(500).json({ error: 'Failed to contribute the background' });
+    } finally {
+      conn.release();
+    }
+  });
+
+  /* ================================================================ *
+   * Coterie Retainers — sheets for the shared Retainers Background
+   * ================================================================ */
+
+  // The coterie's Retainers dots are the budget and each retainer's tier
+  // spends from it (split freely: ••••• can be a T3 + a T2). The dots were
+  // already paid for — coterie XP, a contribution, or bought before sheets
+  // existed — so building or upgrading a sheet here never costs XP. Same
+  // edit rights as the rest of the coterie: any member, logged.
+
+  // Locks the coterie row so concurrent builds can't both spend the last dots.
+  async function retainerBudget(conn, coterieId, excludeRetainerId = 0) {
+    const [[row]] = await conn.query('SELECT backgrounds_json FROM coteries WHERE id=? FOR UPDATE', [coterieId]);
+    if (!row) return null;
+    const bg = safeParse(row.backgrounds_json, []).find((b) => b && b.key === 'retainers');
+    const dots = bg ? Number(bg.dots) || 0 : 0;
+    const [[{ used }]] = await conn.query(
+      'SELECT COALESCE(SUM(tier),0) AS used FROM retainers WHERE coterie_id=? AND id<>?',
+      [coterieId, excludeRetainerId]
+    );
+    return { dots, free: dots - Number(used) };
+  }
+
+  // Returns an error string, or null when the retainer fits the coterie.
+  async function checkCoterieRetainer(conn, coterieId, { tier, sheet, domitorId }, budget) {
+    if (![1, 2, 3].includes(tier)) return 'Tier must be 1, 2 or 3.';
+    if (tier > budget.free) {
+      return `The coterie has ${Math.max(0, budget.free)} unassigned Retainers dot(s); a Tier ${tier} retainer needs ${tier}.`;
+    }
+    const err = validateRetainerSheet(tier, sheet, sheet?.isGhoul === true);
+    if (err) return err;
+    if (sheet?.isGhoul === true) {
+      const members = await loadMembers(conn, coterieId);
+      if (!members.some((m) => m.character_id != null && Number(m.character_id) === domitorId)) {
+        return 'A ghoul needs a domitor from among the coterie members.';
+      }
+    }
+    return null;
+  }
+
+  const retainerInput = (body) => {
+    const sheet = body && typeof body.sheet === 'object' && body.sheet ? body.sheet : null;
+    return {
+      name: String((body && body.name) || '').trim().slice(0, 255),
+      tier: Number(body && body.tier),
+      sheet,
+      domitorId: sheet?.isGhoul === true ? Number(body.domitor_character_id) || null : null,
+    };
+  };
+
+  // Every coterie the character's player belongs to, with its Retainers
+  // budget and sheets. Coteries holding dots but no sheets (bought before
+  // this existed) come back with unassigned dots for the client to build.
+  fastify.get('/api/characters/:id/coterie-retainers', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const charId = Number(req.params.id);
+      if (!isAdmin(req.user) && !(await userOwnsCharacter(pool, req.user.id, charId))) {
+        return reply.status(403).json({ error: 'Unauthorized' });
+      }
+      const [coteries] = await pool.query(
+        `SELECT c.id, c.name, c.backgrounds_json
+           FROM coteries c
+           JOIN coterie_members m ON m.coterie_id = c.id
+           JOIN characters ch ON ch.user_id = m.user_id
+          WHERE ch.id=?
+          ORDER BY c.name`,
+        [charId]
+      );
+      const out = [];
+      for (const c of coteries) {
+        const bg = safeParse(c.backgrounds_json, []).find((b) => b && b.key === 'retainers');
+        const [retainers] = await pool.query(
+          `SELECT id, coterie_id, domitor_character_id, name, tier, sheet, xp, created_at
+             FROM retainers WHERE coterie_id=? ORDER BY tier DESC, name`,
+          [c.id]
+        );
+        for (const r of retainers) r.sheet = parseSheet(r.sheet);
+        out.push({
+          id: c.id,
+          name: c.name,
+          dots: bg ? Number(bg.dots) || 0 : 0,
+          note: bg ? bg.note || null : null,
+          members: await loadMembers(null, c.id),
+          retainers,
+        });
+      }
+      reply.send(out);
+    } catch (e) {
+      log.err('Failed to get coterie retainers', { message: e.message, character_id: req.params.id });
+      reply.status(500).json({ error: 'Failed to fetch coterie retainers' });
+    }
+  });
+
+  fastify.post('/api/coteries/:id/retainers', { preHandler: [authRequired] }, async (req, reply) => {
+    const id = Number(req.params.id);
+    if (!(await access(req, id)).allowed) return reply.status(403).json({ error: 'Not a member of this coterie' });
+    const input = retainerInput(req.body);
+    if (!input.name) return reply.status(400).json({ error: 'The retainer needs a name.' });
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const budget = await retainerBudget(conn, id);
+      if (!budget) { await conn.rollback(); return reply.status(404).json({ error: 'Not found' }); }
+      const err = await checkCoterieRetainer(conn, id, input, budget);
+      if (err) { await conn.rollback(); return reply.status(400).json({ error: err }); }
+
+      const [r] = await conn.query(
+        'INSERT INTO retainers (coterie_id, domitor_character_id, name, tier, sheet, xp) VALUES (?,?,?,?,?,0)',
+        [id, input.domitorId, input.name, input.tier, JSON.stringify(input.sheet)]
+      );
+      await conn.commit();
+      log.adm('Coterie retainer created', { coterie_id: id, retainer_id: r.insertId, tier: input.tier, by_user_id: req.user.id });
+      const [[row]] = await pool.query('SELECT * FROM retainers WHERE id=?', [r.insertId]);
+      row.sheet = parseSheet(row.sheet);
+      reply.send(row);
+    } catch (e) {
+      await conn.rollback();
+      log.err('Create coterie retainer failed', { message: e.message, coterie_id: id });
+      reply.status(500).json({ error: 'Failed to create retainer' });
+    } finally {
+      conn.release();
+    }
+  });
+
+  // Rebuild/upgrade/downgrade. Tier changes are checked against the budget
+  // with this retainer's own current tier given back first.
+  fastify.put('/api/coteries/:id/retainers/:rid', { preHandler: [authRequired] }, async (req, reply) => {
+    const id = Number(req.params.id);
+    const rid = Number(req.params.rid);
+    if (!(await access(req, id)).allowed) return reply.status(403).json({ error: 'Not a member of this coterie' });
+    const input = retainerInput(req.body);
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const budget = await retainerBudget(conn, id, rid);
+      const [[old]] = await conn.query('SELECT * FROM retainers WHERE id=? AND coterie_id=? FOR UPDATE', [rid, id]);
+      if (!budget || !old) { await conn.rollback(); return reply.status(404).json({ error: 'Retainer not found' }); }
+      input.name = input.name || old.name;
+      const err = await checkCoterieRetainer(conn, id, input, budget);
+      if (err) { await conn.rollback(); return reply.status(400).json({ error: err }); }
+
+      await conn.query(
+        'UPDATE retainers SET name=?, tier=?, sheet=?, domitor_character_id=? WHERE id=?',
+        [input.name, input.tier, JSON.stringify(input.sheet), input.domitorId, rid]
+      );
+      await conn.commit();
+      log.adm('Coterie retainer updated', { coterie_id: id, retainer_id: rid, from_tier: old.tier, to_tier: input.tier, by_user_id: req.user.id });
+      const [[row]] = await pool.query('SELECT * FROM retainers WHERE id=?', [rid]);
+      row.sheet = parseSheet(row.sheet);
+      reply.send(row);
+    } catch (e) {
+      await conn.rollback();
+      log.err('Update coterie retainer failed', { message: e.message, retainer_id: rid });
+      reply.status(500).json({ error: 'Failed to update retainer' });
+    } finally {
+      conn.release();
+    }
+  });
+
+  fastify.delete('/api/coteries/:id/retainers/:rid', { preHandler: [authRequired] }, async (req, reply) => {
+    const id = Number(req.params.id);
+    const rid = Number(req.params.rid);
+    if (!(await access(req, id)).allowed) return reply.status(403).json({ error: 'Not a member of this coterie' });
+    try {
+      const [[old]] = await pool.query('SELECT name, tier FROM retainers WHERE id=? AND coterie_id=?', [rid, id]);
+      if (!old) return reply.status(404).json({ error: 'Retainer not found' });
+      await pool.query('DELETE FROM retainers WHERE id=?', [rid]);
+      log.adm('Coterie retainer released', { coterie_id: id, retainer_id: rid, name: old.name, tier: old.tier, by_user_id: req.user.id });
+      reply.send({ ok: true });
+    } catch (e) {
+      log.err('Delete coterie retainer failed', { message: e.message, retainer_id: rid });
+      reply.status(500).json({ error: 'Failed to release retainer' });
+    }
+  });
+
+  // Moves one of the caller's personal retainers (sheet, avatar and all) into
+  // the coterie — the follow-up to contributing a Retainers Background.
+  // A ghoul keeps its original domitor.
+  fastify.post('/api/coteries/:id/retainers/transfer', { preHandler: [authRequired] }, async (req, reply) => {
+    const id = Number(req.params.id);
+    const rid = Number(req.body && req.body.retainer_id);
+    const acc = await access(req, id);
+    if (!acc.allowed) return reply.status(403).json({ error: 'Not a member of this coterie' });
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const budget = await retainerBudget(conn, id);
+      const [[ret]] = await conn.query(
+        `SELECT r.*, c.user_id FROM retainers r JOIN characters c ON c.id = r.character_id
+          WHERE r.id=? FOR UPDATE`,
+        [rid]
+      );
+      if (!budget || !ret || (!acc.admin && Number(ret.user_id) !== Number(req.user.id))) {
+        await conn.rollback();
+        return reply.status(404).json({ error: 'Retainer not found' });
+      }
+      if (ret.tier > budget.free) {
+        await conn.rollback();
+        return reply.status(400).json({
+          error: `The coterie has ${Math.max(0, budget.free)} unassigned Retainers dot(s); ${ret.name} is Tier ${ret.tier}.`,
+        });
+      }
+      const isGhoul = parseSheet(ret.sheet)?.isGhoul === true;
+      await conn.query(
+        'UPDATE retainers SET coterie_id=?, character_id=NULL, domitor_character_id=?, is_favorite=0 WHERE id=?',
+        [id, isGhoul ? ret.character_id : null, rid]
+      );
+      await conn.commit();
+      log.adm('Retainer transferred to coterie', { coterie_id: id, retainer_id: rid, from_character_id: ret.character_id, by_user_id: req.user.id });
+      reply.send({ ok: true });
+    } catch (e) {
+      await conn.rollback();
+      log.err('Transfer retainer to coterie failed', { message: e.message, retainer_id: rid });
+      reply.status(500).json({ error: 'Failed to transfer retainer' });
     } finally {
       conn.release();
     }

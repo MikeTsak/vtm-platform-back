@@ -142,12 +142,15 @@ module.exports = async function (fastify, opts) {
   // PUT retainer avatar
   fastify.put('/api/retainers/:id/avatar', { preHandler: [authRequired] }, async (req, reply) => {
     try {
+      // Personal retainer: the character's player. Coterie retainer: any member.
       const [[owner]] = await pool.query(
-        'SELECT c.user_id FROM retainers r JOIN characters c ON c.id = r.character_id WHERE r.id = ?',
-        [req.params.id]
+        `SELECT c.user_id, r.coterie_id,
+                EXISTS(SELECT 1 FROM coterie_members m WHERE m.coterie_id = r.coterie_id AND m.user_id = ?) AS is_member
+           FROM retainers r LEFT JOIN characters c ON c.id = r.character_id WHERE r.id = ?`,
+        [req.user.id, req.params.id]
       );
       if (!owner) return reply.status(404).send({ error: 'Retainer not found' });
-      if (!isOwnerOrAdmin(req.user, owner.user_id)) {
+      if (!(owner.coterie_id ? isOwnerOrAdmin(req.user, owner.is_member ? req.user.id : null) : isOwnerOrAdmin(req.user, owner.user_id))) {
         return reply.status(403).send({ error: 'Not your retainer' });
       }
 

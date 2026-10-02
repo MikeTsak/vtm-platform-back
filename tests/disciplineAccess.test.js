@@ -241,3 +241,34 @@ describe('discipline access & requests', () => {
     expect(list.statusCode).toBe(403);
   });
 });
+
+describe('free discipline power assignment', () => {
+  it('saves only the target power list; refuses duplicates, surplus powers and smuggled dots', async () => {
+    const player = await registerUser(app);
+    const id = await createCharacter(player.user.id, 0, 'Ventrue');
+    await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify({
+      disciplines: { Presence: 3, Dominate: 2 },
+      disciplinePowers: { Presence: [{ id: 'awe', level: 1 }, { id: 'daunt', level: 1 }], Dominate: [] },
+    }), id]);
+    const assign = (powers, extra = {}) => app.inject({
+      method: 'POST',
+      url: '/api/characters/xp/spend',
+      headers: { cookie: player.cookie },
+      payload: {
+        type: 'discipline', disciplineKind: 'select', target: 'Presence', currentLevel: 3, newLevel: 3,
+        patchSheet: { disciplines: { Presence: 5, Dominate: 5, ...extra }, disciplinePowers: { Presence: powers } },
+      },
+    });
+    const owned = [{ id: 'awe', level: 1 }, { id: 'daunt', level: 1 }];
+
+    expect((await assign([...owned, { id: 'awe', level: 1 }])).statusCode).toBe(400);
+    expect((await assign([...owned, { id: 'entrancement', level: 3 }, { id: 'dread_gaze', level: 2 }])).statusCode).toBe(400);
+    expect((await assign([...owned, { id: 'entrancement', level: 3 }])).statusCode).toBe(200);
+
+    const [[row]] = await pool.query('SELECT sheet FROM characters WHERE id=?', [id]);
+    const sheet = typeof row.sheet === 'string' ? JSON.parse(row.sheet) : row.sheet;
+    expect(sheet.disciplinePowers.Presence.map(p => p.id)).toEqual(['awe', 'daunt', 'entrancement']);
+    expect(sheet.disciplines).toEqual({ Presence: 3, Dominate: 2 }); // dots in the patch were ignored
+    expect(sheet.disciplinePowers.Dominate).toEqual([]);
+  });
+});

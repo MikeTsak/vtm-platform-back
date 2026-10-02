@@ -38,7 +38,8 @@ module.exports = async function (fastify, opts) {
         c.id as domitor_id, c.name as domitor_name, c.clan as domitor_clan, c.xp as domitor_xp, c.image_url as domitor_image_url,
         u.display_name as player_name, u.id as user_id
       FROM retainers r
-      JOIN characters c ON r.character_id = c.id
+      -- coterie ghouls list under the member whose blood they drink
+      JOIN characters c ON c.id = COALESCE(r.character_id, r.domitor_character_id)
       JOIN users u ON c.user_id = u.id
       WHERE JSON_EXTRACT(r.sheet, '$.isGhoul') = true
       ORDER BY r.created_at DESC
