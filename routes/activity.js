@@ -47,17 +47,10 @@ async function activityRoutes(fastify, options) {
 
       const data = Array.from(dayMap.values()).map(entry => {
         const minutes = Math.floor(entry.totalSeconds / 60);
-        let level = 0;
-        if (minutes > 0 && minutes < 15) level = 1;
-        else if (minutes >= 15 && minutes < 45) level = 2;
-        else if (minutes >= 45 && minutes < 90) level = 3;
-        else if (minutes >= 90 && minutes < 180) level = 4;
-        else if (minutes >= 180) level = 5;
 
         return {
           date: entry.date,
           count: minutes,
-          level,
           activeUsers: entry.activeUsers.size,
           sessionCount: entry.sessionCount,
         };
