@@ -138,4 +138,33 @@ describe('POST /api/characters/xp/spend — idempotency', () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers['x-idempotent-replay']).toBeUndefined();
   });
+
+  it('recovers and parses legacy Buffer payload stored in idempotency_keys on replay', async () => {
+    const { cookie, user } = await registerUser(app);
+    await createCharacter(user.id, 100);
+
+    const key = 'test-buffer-replay-' + user.id;
+    const testJson = JSON.stringify({ character: { id: 999, name: 'Buffer Test' }, spent: 0 });
+    const zlib = require('zlib');
+    const compressed = zlib.brotliCompressSync(Buffer.from(testJson, 'utf8'));
+
+    // Insert legacy serialized Buffer structure directly into DB
+    await pool.query(
+      'INSERT INTO idempotency_keys (idempotency_key, user_id, request_path, request_method, response_code, response_body) VALUES (?, ?, ?, ?, ?, ?)',
+      [key, user.id, '/api/characters/xp/spend', 'POST', 200, JSON.stringify(compressed.toJSON())]
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/characters/xp/spend',
+      headers: { cookie, 'idempotency-key': key },
+      payload: { type: 'attribute', newLevel: 2 },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['x-idempotent-replay']).toBe('true');
+    const parsed = JSON.parse(res.body);
+    expect(parsed.character.name).toBe('Buffer Test');
+    expect(parsed.character.id).toBe(999);
+  });
 });

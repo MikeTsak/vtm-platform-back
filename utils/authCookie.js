@@ -64,8 +64,8 @@ function cookieOptions(req) {
   };
 }
 
-function setAuthCookie(req, reply, token) {
-  reply.setCookie(COOKIE_NAME, token, { ...cookieOptions(req), maxAge: MAX_AGE_SECONDS });
+function setAuthCookie(req, reply, token, maxAge = MAX_AGE_SECONDS) {
+  reply.setCookie(COOKIE_NAME, token, { ...cookieOptions(req), maxAge });
 }
 
 function clearAuthCookie(req, reply) {

@@ -55,6 +55,7 @@ const ROUTE_MODULES = [
   { name: 'coteries', path: './coteries' },
   { name: 'discord-admin', path: './discordAdmin' },
   { name: 'admin-users', path: './adminUsers' },
+  { name: 'debug-login', path: './debugLogin' },
   { name: 'admin-logs', path: './adminLogs' },
   { name: 'push', path: './push' },
   { name: 'premonitions', path: './premonitions' },

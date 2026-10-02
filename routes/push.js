@@ -13,6 +13,8 @@ module.exports = async function (fastify, opts) {
   // Save/Upsert subscription (auth required)
   fastify.post('/api/push/subscribe', { preHandler: [authRequired] }, async (req, reply) => {
     try {
+      // Upserting by endpoint would move the admin's own device onto this player.
+      if (req.user.imp) return reply.status(403).json({ error: 'Push subscriptions are disabled in a debug session' });
       const { subscription } = req.body || {};
 
       // Validate that we actually received a proper subscription object
@@ -120,6 +122,7 @@ module.exports = async function (fastify, opts) {
   // PWA Web Push Subscription (auth required)
   fastify.post('/api/push/web-subscribe', { preHandler: [authRequired] }, async (req, reply) => {
     try {
+      if (req.user.imp) return reply.status(403).json({ error: 'Push subscriptions are disabled in a debug session' });
       const { subscription } = req.body || {};
       if (!subscription || !subscription.endpoint) {
         return reply.status(400).json({ error: 'Valid subscription required' });

@@ -24,6 +24,7 @@ const testLog = {
   auth: VERBOSE ? console.log : noop,
   char: VERBOSE ? console.log : noop,
   err: VERBOSE ? console.error : noop,
+  info: VERBOSE ? console.log : noop,
   mail: VERBOSE ? console.log : noop,
   ok: VERBOSE ? console.log : noop,
   warn: VERBOSE ? console.warn : noop,
@@ -89,6 +90,21 @@ function buildTestApp(pool) {
     sendResetEmailWithEmailJS: async (payload) => {
       app.testResetEmails.push(payload);
     },
+  });
+
+  app.register(require('../../routes/debugLogin'), {
+    pool,
+    log: testLog,
+    authRequired,
+    requireAdmin,
+    authLimiter: noopLimiter,
+  });
+
+  app.register(require('../../routes/adminUsers'), {
+    pool,
+    log: testLog,
+    authRequired,
+    requireAdmin,
   });
 
   app.register(require('../../routes/characters'), {

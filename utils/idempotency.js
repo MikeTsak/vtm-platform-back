@@ -24,6 +24,7 @@
 // closes that.
 
 const pool = require('../db');
+const zlib = require('zlib');
 const { log } = require('../logger');
 
 const RETENTION_HOURS = 48; // long enough to cover any realistic client retry; not "forever"
@@ -70,7 +71,18 @@ async function idempotencyCheck(req, reply) {
       if (!row) continue; // the other request failed and released its claim: take it
       if (row.response_code !== null) {
         let body = row.response_body;
-        try { body = JSON.parse(body); } catch { /* stored as-is */ }
+        try {
+          body = JSON.parse(body);
+          if (body && body.type === 'Buffer' && Array.isArray(body.data)) {
+            let buf = Buffer.from(body.data);
+            try {
+              buf = zlib.brotliDecompressSync(buf);
+            } catch {
+              try { buf = zlib.gunzipSync(buf); } catch {}
+            }
+            body = JSON.parse(buf.toString('utf8'));
+          }
+        } catch { /* stored as-is */ }
         reply.header('X-Idempotent-Replay', 'true');
         return reply.status(row.response_code).send(body);
       }
@@ -84,7 +96,7 @@ async function idempotencyCheck(req, reply) {
       await sleep(250);
     }
   } catch (e) {
-    log.err('Idempotency check failed — proceeding without it', { error: e.message });
+    log.err('Idempotency check failed : proceeding without it', { error: e.message });
   }
 }
 
@@ -98,13 +110,34 @@ async function idempotencySave(req, reply, payload) {
   // open and waits for it. Awaiting here would also hold the hook past the
   // handler's return, and Fastify then sends a second, empty reply for
   // handlers that call reply.send() without `return reply`.
+  let bodyToStore = payload;
+  if (Buffer.isBuffer(payload)) {
+    const enc = reply.getHeader('content-encoding');
+    try {
+      if (enc === 'br') {
+        bodyToStore = zlib.brotliDecompressSync(payload).toString('utf8');
+      } else if (enc === 'gzip') {
+        bodyToStore = zlib.gunzipSync(payload).toString('utf8');
+      } else if (enc === 'deflate') {
+        bodyToStore = zlib.inflateSync(payload).toString('utf8');
+      } else {
+        bodyToStore = payload.toString('utf8');
+      }
+    } catch (e) {
+      log.err('Failed to decompress payload for idempotency save', { error: e.message });
+      bodyToStore = payload.toString('utf8');
+    }
+  } else if (typeof payload !== 'string') {
+    bodyToStore = JSON.stringify(payload);
+  }
+
   const write = reply.statusCode >= 500
     // Release the claim: a server error should be safe (and expected) to
     // retry, not permanently pinned as "the" response for this key.
     ? pool.query(`DELETE FROM idempotency_keys WHERE ${SCOPE}`, scope)
     : pool.query(
       `UPDATE idempotency_keys SET response_code = ?, response_body = ? WHERE ${SCOPE}`,
-      [reply.statusCode, typeof payload === 'string' ? payload : JSON.stringify(payload), ...scope]
+      [reply.statusCode, bodyToStore, ...scope]
     );
   write.catch((e) => log.err('Failed to save idempotency response', { error: e.message }));
   return payload;

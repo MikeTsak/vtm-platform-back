@@ -70,21 +70,24 @@ function attachRealtime(fastify) {
         socket.join('admin_chat');
       }
 
-      // Admins are who answer as NPCs, so clients use them for NPC presence.
-      const entry = presence.get(uid) || { count: 0, admin: socket.user.role === 'admin' };
-      entry.count += 1;
-      presence.set(uid, entry);
-      if (entry.count === 1) io.emit('presence:update', { userId: uid, online: true, admin: entry.admin });
+      // A debug session (routes/debugLogin.js) must not show the player online.
+      if (!socket.user.imp) {
+        // Admins are who answer as NPCs, so clients use them for NPC presence.
+        const entry = presence.get(uid) || { count: 0, admin: socket.user.role === 'admin' };
+        entry.count += 1;
+        presence.set(uid, entry);
+        if (entry.count === 1) io.emit('presence:update', { userId: uid, online: true, admin: entry.admin });
 
-      socket.on('disconnect', () => {
-        const e = presence.get(uid);
-        if (!e) return;
-        e.count -= 1;
-        if (e.count <= 0) {
-          presence.delete(uid);
-          io.emit('presence:update', { userId: uid, online: false, admin: e.admin });
-        }
-      });
+        socket.on('disconnect', () => {
+          const e = presence.get(uid);
+          if (!e) return;
+          e.count -= 1;
+          if (e.count <= 0) {
+            presence.delete(uid);
+            io.emit('presence:update', { userId: uid, online: false, admin: e.admin });
+          }
+        });
+      }
     }
 
     socket.on('presence:get', (ack) => {

@@ -140,6 +140,9 @@ module.exports = async function (fastify, opts) {
         [req.user.id]
       );
       if (!u) return reply.status(404).json({ error: 'User not found' });
+      // A debug session (routes/debugLogin.js) keeps its own short-lived token:
+      // re-minting here would drop `imp` and turn it into a normal 7d login.
+      if (req.user.imp) return reply.send({ user: u });
       const token = issueToken(u);
       setAuthCookie(req, reply, token);
       reply.send({ user: u });

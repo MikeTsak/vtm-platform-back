@@ -179,6 +179,8 @@ async function activityRoutes(fastify, options) {
   });
   fastify.post('/heartbeat', { preHandler: [authRequired] }, async (request, reply) => {
     try {
+      // A debug session (routes/debugLogin.js) is not the player being active.
+      if (request.user.imp) return reply.send({ success: true });
       const userId = request.user.id;
       // We consider a session active if the last ping was within the last 5 minutes.
       // 5 minutes = 300 seconds. Let's use 5 minutes for buffer since interval is 60 seconds.

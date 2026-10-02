@@ -233,7 +233,9 @@ module.exports = async function (fastify, opts) {
   // (all devices/browsers, including this one). Requires a currently-valid
   // session since it needs to know whose sessions to revoke.
   fastify.post('/logout-all', { preHandler: [authRequired] }, async (req, reply) => {
-    await bumpTokenVersion(req.user.id);
+    // From a debug session (routes/debugLogin.js) this ends only that session,
+    // never the real player's own logins.
+    if (!req.user.imp) await bumpTokenVersion(req.user.id);
     clearAuthCookie(req, reply);
     log.auth('User logged out of all sessions', { user_id: req.user.id });
     reply.send({ ok: true });
