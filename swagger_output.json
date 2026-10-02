@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Erebus Portal API",
-    "version": "1.0.105",
+    "version": "1.0.107",
     "description": "API documentation for the Vampire: The Masquerade RPG portal."
   },
   "servers": [
@@ -323,26 +323,6 @@
           "404": {
             "description": "Not Found"
           }
-        },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "name": {
-                    "example": "any"
-                  },
-                  "clan": {
-                    "example": "any"
-                  },
-                  "sheet": {
-                    "example": "any"
-                  }
-                }
-              }
-            }
-          }
         }
       }
     },
@@ -395,26 +375,6 @@
           },
           "404": {
             "description": "Not Found"
-          }
-        },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "name": {
-                    "example": "any"
-                  },
-                  "clan": {
-                    "example": "any"
-                  },
-                  "sheet": {
-                    "example": "any"
-                  }
-                }
-              }
-            }
           }
         }
       }
@@ -732,16 +692,16 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "name": {
-                    "example": "any"
-                  },
                   "tier": {
                     "example": "any"
                   },
-                  "sheet": {
+                  "xp": {
                     "example": "any"
                   },
-                  "xp": {
+                  "name": {
+                    "example": "any"
+                  },
+                  "sheet": {
                     "example": "any"
                   }
                 }
@@ -824,16 +784,13 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "name": {
-                    "example": "any"
-                  },
                   "tier": {
                     "example": "any"
                   },
-                  "sheet": {
+                  "name": {
                     "example": "any"
                   },
-                  "xp": {
+                  "sheet": {
                     "example": "any"
                   }
                 }
@@ -956,6 +913,9 @@
           "400": {
             "description": "Bad Request"
           },
+          "403": {
+            "description": "Forbidden"
+          },
           "404": {
             "description": "Not Found"
           },
@@ -994,47 +954,6 @@
           },
           "400": {
             "description": "Bad Request"
-          },
-          "403": {
-            "description": "Forbidden"
-          }
-        },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "type": {
-                    "example": "any"
-                  },
-                  "target": {
-                    "example": "any"
-                  },
-                  "currentLevel": {
-                    "example": "any"
-                  },
-                  "newLevel": {
-                    "example": "any"
-                  },
-                  "ritualLevel": {
-                    "example": "any"
-                  },
-                  "formulaLevel": {
-                    "example": "any"
-                  },
-                  "dots": {
-                    "example": "any"
-                  },
-                  "disciplineKind": {
-                    "example": "any"
-                  },
-                  "patchSheet": {
-                    "example": "any"
-                  }
-                }
-              }
-            }
           }
         }
       }
@@ -2447,50 +2366,6 @@
         "responses": {
           "200": {
             "description": "OK"
-          },
-          "400": {
-            "description": "Bad Request"
-          },
-          "404": {
-            "description": "Not Found"
-          }
-        },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "type": {
-                    "example": "any"
-                  },
-                  "target": {
-                    "example": "any"
-                  },
-                  "currentLevel": {
-                    "example": "any"
-                  },
-                  "newLevel": {
-                    "example": "any"
-                  },
-                  "ritualLevel": {
-                    "example": "any"
-                  },
-                  "formulaLevel": {
-                    "example": "any"
-                  },
-                  "dots": {
-                    "example": "any"
-                  },
-                  "disciplineKind": {
-                    "example": "any"
-                  },
-                  "patchSheet": {
-                    "example": "any"
-                  }
-                }
-              }
-            }
           }
         }
       }
@@ -2872,50 +2747,6 @@
         "responses": {
           "200": {
             "description": "OK"
-          },
-          "400": {
-            "description": "Bad Request"
-          },
-          "404": {
-            "description": "Not Found"
-          }
-        },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "type": {
-                    "example": "any"
-                  },
-                  "target": {
-                    "example": "any"
-                  },
-                  "currentLevel": {
-                    "example": "any"
-                  },
-                  "newLevel": {
-                    "example": "any"
-                  },
-                  "ritualLevel": {
-                    "example": "any"
-                  },
-                  "formulaLevel": {
-                    "example": "any"
-                  },
-                  "dots": {
-                    "example": "any"
-                  },
-                  "disciplineKind": {
-                    "example": "any"
-                  },
-                  "patchSheet": {
-                    "example": "any"
-                  }
-                }
-              }
-            }
           }
         }
       }
@@ -8321,6 +8152,9 @@
           "200": {
             "description": "OK"
           },
+          "400": {
+            "description": "Bad Request"
+          },
           "404": {
             "description": "Not Found"
           },
@@ -8334,31 +8168,19 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "characterId": {
-                    "example": "any"
-                  },
-                  "character_name": {
-                    "example": "any"
-                  },
                   "roll_type": {
-                    "example": "any"
-                  },
-                  "pool": {
-                    "example": "any"
-                  },
-                  "hunger": {
-                    "example": "any"
-                  },
-                  "results": {
-                    "example": "any"
-                  },
-                  "successes": {
                     "example": "any"
                   },
                   "note": {
                     "example": "any"
                   },
                   "is_hidden": {
+                    "example": "any"
+                  },
+                  "disc": {
+                    "example": "any"
+                  },
+                  "power_name": {
                     "example": "any"
                   }
                 }
@@ -8610,15 +8432,12 @@
         }
       }
     },
-    "/api/dice/rolls": {
+    "/api/dice/roll": {
       "post": {
         "description": "",
         "responses": {
-          "201": {
-            "description": "Created"
-          },
-          "400": {
-            "description": "Bad Request"
+          "200": {
+            "description": "OK"
           },
           "500": {
             "description": "Internal Server Error"
@@ -8630,22 +8449,101 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "mode": {
+                    "example": "any"
+                  },
+                  "sessionId": {
+                    "example": "any"
+                  },
                   "pool": {
                     "example": "any"
                   },
                   "hunger": {
                     "example": "any"
                   },
-                  "sides": {
+                  "characterId": {
                     "example": "any"
                   },
-                  "results": {
+                  "characterName": {
+                    "example": "any"
+                  },
+                  "rollType": {
                     "example": "any"
                   },
                   "difficulty": {
                     "example": "any"
                   },
                   "note": {
+                    "example": "any"
+                  },
+                  "isHidden": {
+                    "example": "any"
+                  },
+                  "traits": {
+                    "example": "any"
+                  },
+                  "specialty": {
+                    "example": "any"
+                  },
+                  "requestId": {
+                    "example": "any"
+                  },
+                  "req": {
+                    "example": "any"
+                  },
+                  "effectIds": {
+                    "example": "any"
+                  },
+                  "powerIds": {
+                    "example": "any"
+                  },
+                  "situational": {
+                    "example": "any"
+                  },
+                  "ignoreImpairment": {
+                    "example": "any"
+                  },
+                  "discipline": {
+                    "example": "any"
+                  },
+                  "powerId": {
+                    "example": "any"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dice/rolls/{id}/reroll": {
+      "post": {
+        "description": "",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "indices": {
                     "example": "any"
                   }
                 }
@@ -10241,6 +10139,9 @@
           "200": {
             "description": "OK"
           },
+          "400": {
+            "description": "Bad Request"
+          },
           "403": {
             "description": "Forbidden"
           },
@@ -10257,7 +10158,7 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "advantage": {
+                  "sessionId": {
                     "example": "any"
                   }
                 }
@@ -10296,10 +10197,24 @@
           "500": {
             "description": "Internal Server Error"
           }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionId": {
+                    "example": "any"
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
-    "/api/characters/{id}/apply-damage": {
+    "/api/characters/{id}/mend": {
       "post": {
         "description": "",
         "parameters": [
@@ -10315,6 +10230,9 @@
         "responses": {
           "200": {
             "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
           },
           "403": {
             "description": "Forbidden"
@@ -10332,10 +10250,7 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "amount": {
-                    "example": "any"
-                  },
-                  "type": {
+                  "sessionId": {
                     "example": "any"
                   }
                 }

@@ -1,7 +1,7 @@
 // routes/npcs.js
 //
 // NPC CRUD and NPC XP spending — Storyteller only.
-const { xpCost } = require('../utils/xpCost');
+const { runPurchase, PurchaseError } = require('../utils/xpPurchase');
 const { parseSheet } = require('../utils/sheet');
 
 module.exports = async function (fastify, opts) {
@@ -84,42 +84,14 @@ module.exports = async function (fastify, opts) {
     reply.send({ ok: true });
   });
 
-  // Spend XP (NPC)
+  // Spend XP (NPC): same server-side rules as player purchases (utils/xpPurchase.js).
   fastify.post('/api/admin/npcs/:id/xp/spend', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
-  const { type, target, currentLevel, newLevel, ritualLevel, formulaLevel, dots, disciplineKind, patchSheet } = req.body;
-
-    const [rows] = await pool.query('SELECT id, name, clan, sheet, xp, created_at, updated_at, camarilla_titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, is_disabled FROM npcs WHERE id=?', [req.params.id]);
-    const ch = rows[0];
-    if (!ch) return reply.status(404).json({ error: 'NPC not found' });
-
-    // cost calc same as before
-    let cost = 0;
     try {
-      if (type === 'discipline' && (disciplineKind === 'select' || Number(newLevel) === Number(currentLevel))) {
-        cost = 0;
-      } else {
-        cost = xpCost({ type, newLevel, ritualLevel, formulaLevel, dots, disciplineKind });
-      }
+      const { row, cost } = await runPurchase({ pool, table: 'npcs', id: req.params.id, body: req.body || {}, isAdmin: true });
+      return reply.send({ character: row, spent: cost });
     } catch (e) {
-      return reply.status(400).json({ error: e.message });
+      if (!(e instanceof PurchaseError)) throw e;
+      return reply.status(e.status).send({ error: e.message });
     }
-
-    if ((ch.xp || 0) < cost) {
-      return reply.status(400).json({ error: `Not enough XP (need ${cost}, have ${ch.xp})` });
-    }
-
-    if (cost > 0) {
-      await pool.query('UPDATE npcs SET xp = xp - ? WHERE id=?', [cost, ch.id]);
-    }
-    if (patchSheet !== undefined) {
-      await pool.query('UPDATE npcs SET sheet=? WHERE id=?', [JSON.stringify(patchSheet), ch.id]);
-    }
-
-    // optional: log to xp_log if you want, but use character_id=null or a separate npc_id column if your schema supports it
-
-    const [out] = await pool.query('SELECT id, name, clan, sheet, xp, created_at, updated_at, camarilla_titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, is_disabled FROM npcs WHERE id=?', [ch.id]);
-    const outCh = out[0];
-    if (outCh) outCh.sheet = parseSheet(outCh.sheet);
-    reply.send({ character: outCh, spent: cost });
   });
 };

@@ -2,7 +2,8 @@
 //
 // Live tabletop sessions: lifecycle, participants, dice rolls, and the
 // Storyteller broadcast channel. Realtime nudges go through fastify.io.
-const { computeV5Outcome } = require('../services/dice');
+const { insertRoll, formatRoll } = require('../services/rolls');
+const { rollD10 } = require('../services/dice');
 const { getSessionInternalId } = require('../services/liveSession');
 
 module.exports = async function (fastify, opts) {
@@ -106,100 +107,51 @@ module.exports = async function (fastify, opts) {
     reply.send({ ok: true });
   });
 
+  // The session feed: every roll made in this session, from dice_rolls (the
+  // one table all dice go to; see routes/dice.js), plus dice-less events.
   fastify.get('/api/live-session/:id/rolls', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const internalId = await getSessionInternalId(req.params.id);
       const [rows] = await pool.query(
-        `SELECT lsr.*, COALESCE(lsr.character_name, c.name) as character_name 
-       FROM live_session_rolls lsr 
-       LEFT JOIN characters c ON lsr.character_id = c.id 
-       LEFT JOIN live_sessions ls ON lsr.session_id = ls.id
-       WHERE lsr.session_id=? 
-         AND (
-           lsr.is_hidden = FALSE 
-           OR c.user_id = ? 
-           OR ls.admin_id = ? 
-           OR ? = 'admin'
-         )
-       ORDER BY lsr.created_at DESC LIMIT 50`,
+        `SELECT r.*, COALESCE(r.character_name, c.name) AS character_name
+         FROM dice_rolls r
+         LEFT JOIN characters c ON r.character_id = c.id
+         LEFT JOIN live_sessions ls ON r.session_id = ls.id
+         WHERE r.session_id=?
+           AND (r.is_hidden = FALSE OR c.user_id = ? OR ls.admin_id = ? OR ? = 'admin')
+         ORDER BY r.created_at DESC, r.id DESC LIMIT 50`,
         [internalId, req.user.id, req.user.id, req.user.role]
       );
-      reply.send({ rolls: rows });
+      reply.send({ rolls: rows.map(formatRoll) });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to fetch rolls' });
     }
   });
 
-  // Log a roll: Double-Insert into BOTH live_session_rolls AND dice_rolls
+  // Dice-less feed events (a discipline switched on or off). Dice are only
+  // ever thrown by the server (POST /api/dice/roll), so this refuses results.
+  const FEED_EVENTS = new Set(['discipline_activation', 'discipline_deactivation']);
   fastify.post('/api/live-session/:id/rolls', { preHandler: [authRequired] }, async (req, reply) => {
     const internalId = await getSessionInternalId(req.params.id);
     if (!internalId) return reply.status(404).json({ error: 'Session not found' });
-
-  const { characterId, character_name, roll_type, pool: poolCount, hunger, results, successes, note, is_hidden } = req.body;
+    const { roll_type, note, is_hidden, disc, power_name } = req.body || {};
+    if (!FEED_EVENTS.has(roll_type)) return reply.status(400).json({ error: 'Dice are rolled by the server: use POST /api/dice/roll.' });
 
     try {
-      // 1. Log to the localized session table
-      await pool.query(
-        'INSERT INTO live_session_rolls (session_id, character_id, character_name, roll_type, pool, hunger, results, successes, note, is_hidden) VALUES (?,?,?,?,?,?,?,?,?,?)',
-        [internalId, characterId || null, character_name || null, roll_type || 'custom', poolCount || null, hunger !== undefined ? hunger : null, results ? JSON.stringify(results) : null, successes || 0, note || null, is_hidden ? 1 : 0]
-      );
-
-      // 2. Mirror into the Global/Permanent Dice Roller Table
-      const outcome = computeV5Outcome({
-        normal: (results?.normal || []).map(Number),
-        hunger: (results?.hunger || []).map(Number),
+      const [[ch]] = await pool.query('SELECT id, name FROM characters WHERE user_id=? LIMIT 1', [req.user.id]);
+      await insertRoll(pool, {
+        userId: req.user.id, characterId: ch?.id ?? null, characterName: ch?.name, sessionId: internalId,
+        rollType: roll_type, note, isHidden: !!is_hidden,
+        extra: { ...(disc ? { disc: String(disc).slice(0, 60) } : {}), ...(power_name ? { power_name: String(power_name).slice(0, 120) } : {}) },
       });
-
-      const payload = {
-        normal: results?.normal || [],
-        hunger: results?.hunger || [],
-        difficulty: null
-      };
-
-      const safeNote = note ? `[Session: ${req.params.id}] ${note}`.slice(0, 255) : `[Session: ${req.params.id}]`;
-
-      await pool.query(
-        `INSERT INTO dice_rolls 
-       (user_id, character_id, pool, hunger, sides, results_json, successes, crit_pairs, messy_crit, bestial_failure, note, is_hidden)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [
-          req.user.id, characterId || null,
-          Number(poolCount) || (payload.normal.length + payload.hunger.length),
-          Number(hunger) || payload.hunger.length,
-          10,
-          JSON.stringify(payload),
-          outcome.successes || 0,
-          outcome.crit_pairs || 0,
-          outcome.messy_crit ? 1 : 0,
-          outcome.bestial_failure ? 1 : 0,
-          safeNote || null,
-          is_hidden ? 1 : 0
-        ]
-      );
-
-      if (outcome.messy_crit && characterId) {
-        try {
-          const [doms] = await pool.query('SELECT division FROM domain_claims WHERE owner_character_id=?', [characterId]);
-          if (doms.length > 0) {
-            const domId = doms[0].division;
-            await pool.query('UPDATE domain_claims SET safety_rating = GREATEST(safety_rating - 1, 0) WHERE division=?', [domId]);
-            await pool.query('INSERT INTO admin_audit_logs (admin_id, action, details) VALUES (?, ?, ?)', [0, 'SYSTEM_MESSY_CRIT', `Character ${characterId} rolled a Messy Critical. Domain ${domId} safety reduced.`]);
-          }
-        } catch (e) { log.err('Messy crit safety reduction failed', { error: e.message }); }
-      }
-
-      if (req.server.io) {
-        req.server.io.to(`session_${req.params.id}`).emit('refresh_session');
-      }
-
+      if (req.server.io) req.server.io.to(`session_${req.params.id}`).emit('refresh_session');
       reply.send({ ok: true });
     } catch (e) {
-      console.error("Failed to log live session roll:", e);
-      reply.status(500).json({ error: 'Failed to log roll' });
+      log.err('Failed to log live session event', { message: e.message });
+      reply.status(500).json({ error: 'Failed to log event' });
     }
   });
 
-  // Get session players
   fastify.get('/api/live-session/:id/players', { preHandler: [authRequired] }, async (req, reply) => {
     const internalId = await getSessionInternalId(req.params.id);
     const [players] = await pool.query(`
@@ -398,15 +350,17 @@ module.exports = async function (fastify, opts) {
       }
 
       if (forceRouseCheck) {
-        const rouseDie = Math.floor(Math.random() * 10) + 1;
+        const rouseDie = rollD10();
         if (rouseDie < 6) {
           sheet.hunger = Math.max(0, Math.min(5, (sheet.hunger || 0) + 1));
         }
         const internalId = await getSessionInternalId(req.params.id);
-        if (internalId) {
-          await pool.query('INSERT INTO live_session_broadcasts (session_id, message) VALUES (?, ?)',
-            [internalId, `ST forced a Rouse Check. Result: ${rouseDie} ${rouseDie < 6 ? '(Failed)' : '(Safe)'}`]);
-        }
+        const [[target]] = await pool.query('SELECT user_id, name FROM characters WHERE id=?', [charId]);
+        await insertRoll(pool, {
+          userId: target?.user_id ?? req.user.id, characterId: charId, characterName: target?.name, sessionId: internalId ?? null,
+          rollType: 'rouse_check', rouse: [rouseDie], hungerLevel: sheet.hunger,
+          note: `Storyteller forced a Rouse Check: ${rouseDie < 6 ? 'Hunger +1' : 'no Hunger gained'}`,
+        });
       }
 
       await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), charId]);

@@ -72,7 +72,7 @@ describe('POST /api/characters/xp/spend — idempotency', () => {
       method: 'POST',
       url: '/api/characters/xp/spend',
       headers: { cookie, 'idempotency-key': 'key-a' },
-      payload: { type: 'attribute', newLevel: 2 }, // cost 10
+      payload: { type: 'attribute', target: 'Strength', newLevel: 2 }, // cost 10
     });
     expect(res1.statusCode).toBe(200);
 
@@ -80,13 +80,13 @@ describe('POST /api/characters/xp/spend — idempotency', () => {
       method: 'POST',
       url: '/api/characters/xp/spend',
       headers: { cookie, 'idempotency-key': 'key-b' },
-      payload: { type: 'skill', newLevel: 2 }, // cost 6, a different purchase
+      payload: { type: 'skill', target: 'Brawl', newLevel: 1 }, // cost 3, a different purchase
     });
     expect(res2.statusCode).toBe(200);
     expect(res2.headers['x-idempotent-replay']).toBeUndefined();
 
     const [[row]] = await pool.query('SELECT xp FROM characters WHERE user_id=?', [user.id]);
-    expect(row.xp).toBe(84); // 100 - 10 - 6, both charged
+    expect(row.xp).toBe(87); // 100 - 10 - 3, both charged
   });
 
   it('never replays a different user\'s cached response for the same literal key string', async () => {
@@ -101,7 +101,7 @@ describe('POST /api/characters/xp/spend — idempotency', () => {
       method: 'POST',
       url: '/api/characters/xp/spend',
       headers: { cookie: a.cookie, 'idempotency-key': sharedKey },
-      payload: { type: 'attribute', newLevel: 2 }, // cost 10
+      payload: { type: 'attribute', target: 'Strength', newLevel: 2 }, // cost 10
     });
     expect(resA.statusCode).toBe(200);
 
@@ -113,7 +113,7 @@ describe('POST /api/characters/xp/spend — idempotency', () => {
       method: 'POST',
       url: '/api/characters/xp/spend',
       headers: { cookie: b.cookie, 'idempotency-key': sharedKey },
-      payload: { type: 'attribute', newLevel: 2 },
+      payload: { type: 'attribute', target: 'Strength', newLevel: 2 },
     });
     expect(resB.statusCode).toBe(200);
     expect(resB.headers['x-idempotent-replay']).toBeUndefined();
@@ -133,7 +133,7 @@ describe('POST /api/characters/xp/spend — idempotency', () => {
       method: 'POST',
       url: '/api/characters/xp/spend',
       headers: { cookie }, // no Idempotency-Key header
-      payload: { type: 'attribute', newLevel: 2 },
+      payload: { type: 'attribute', target: 'Strength', newLevel: 2 },
     });
     expect(res.statusCode).toBe(200);
     expect(res.headers['x-idempotent-replay']).toBeUndefined();
@@ -158,7 +158,7 @@ describe('POST /api/characters/xp/spend — idempotency', () => {
       method: 'POST',
       url: '/api/characters/xp/spend',
       headers: { cookie, 'idempotency-key': key },
-      payload: { type: 'attribute', newLevel: 2 },
+      payload: { type: 'attribute', target: 'Strength', newLevel: 2 },
     });
 
     expect(res.statusCode).toBe(200);

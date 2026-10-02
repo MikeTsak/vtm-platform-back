@@ -44,7 +44,7 @@ describe('discipline access & requests', () => {
       method: 'POST',
       url: '/api/characters/xp/spend',
       headers: { cookie: player.cookie },
-      payload: { type: 'discipline', disciplineKind: 'other', target: 'Protean', currentLevel: 0, newLevel: 1 },
+      payload: { type: 'discipline', disciplineKind: 'other', target: 'Protean', currentLevel: 0, newLevel: 1, powerId: 'eyes_of_the_beast' },
     });
 
     expect(res.statusCode).toBe(403);
@@ -60,7 +60,7 @@ describe('discipline access & requests', () => {
       method: 'POST',
       url: '/api/characters/xp/spend',
       headers: { cookie: player.cookie },
-      payload: { type: 'discipline', disciplineKind: 'other', target, currentLevel, newLevel },
+      payload: { type: 'discipline', disciplineKind: 'other', target, currentLevel, newLevel, powerId: 'reveal_temperament' },
     });
 
     expect((await spend('Auspex', 1, 2)).statusCode).toBe(200);
@@ -78,7 +78,7 @@ describe('discipline access & requests', () => {
       headers: { cookie: player.cookie },
       payload: {
         type: 'discipline', disciplineKind: 'clan', target, currentLevel, newLevel,
-        patchSheet: { disciplines: { Oblivion: 6, Auspex: 5 } },
+        powerId: target === 'Oblivion' ? 'ashes_to_ashes' : 'heightened_senses',
       },
     });
 
@@ -131,7 +131,7 @@ describe('discipline access & requests', () => {
       method: 'POST',
       url: '/api/characters/xp/spend',
       headers: { cookie: player.cookie },
-      payload: { type: 'discipline', disciplineKind: 'other', target: 'Protean', currentLevel: 0, newLevel: 1 },
+      payload: { type: 'discipline', disciplineKind: 'other', target: 'Protean', currentLevel: 0, newLevel: 1, powerId: 'eyes_of_the_beast' },
     });
     expect(buy1.statusCode).toBe(200);
 
@@ -139,7 +139,7 @@ describe('discipline access & requests', () => {
       method: 'POST',
       url: '/api/characters/xp/spend',
       headers: { cookie: player.cookie },
-      payload: { type: 'discipline', disciplineKind: 'other', target: 'Protean', currentLevel: 1, newLevel: 2 },
+      payload: { type: 'discipline', disciplineKind: 'other', target: 'Protean', currentLevel: 1, newLevel: 2, powerId: 'feral_weapons' },
     });
     expect(buy2.statusCode).toBe(200);
 
@@ -191,7 +191,8 @@ describe('discipline access & requests', () => {
   it('admin can grant access directly, and revoke it', async () => {
     const player = await registerUser(app);
     const admin = await makeAdmin(await registerUser(app));
-    const characterId = await createCharacter(player.user.id, 50);
+    // Brujah: Oblivion is out of clan (for the Hecata default it is in-clan and needs no grant).
+    const characterId = await createCharacter(player.user.id, 50, 'Brujah');
 
     const grantRes = await app.inject({
       method: 'POST',
@@ -205,7 +206,7 @@ describe('discipline access & requests', () => {
       method: 'POST',
       url: '/api/characters/xp/spend',
       headers: { cookie: player.cookie },
-      payload: { type: 'discipline', disciplineKind: 'other', target: 'Oblivion', currentLevel: 0, newLevel: 1 },
+      payload: { type: 'discipline', disciplineKind: 'other', target: 'Oblivion', currentLevel: 0, newLevel: 1, powerId: 'ashes_to_ashes' },
     });
     expect(spend.statusCode).toBe(200);
 
@@ -220,7 +221,7 @@ describe('discipline access & requests', () => {
       method: 'POST',
       url: '/api/characters/xp/spend',
       headers: { cookie: player.cookie },
-      payload: { type: 'discipline', disciplineKind: 'other', target: 'Oblivion', currentLevel: 1, newLevel: 2 },
+      payload: { type: 'discipline', disciplineKind: 'other', target: 'Oblivion', currentLevel: 1, newLevel: 2, powerId: 'shadow_cast' },
     });
     expect(blocked.statusCode).toBe(403);
   });
@@ -243,32 +244,32 @@ describe('discipline access & requests', () => {
 });
 
 describe('free discipline power assignment', () => {
-  it('saves only the target power list; refuses duplicates, surplus powers and smuggled dots', async () => {
+  it('fills an unassigned dot only; refuses owned powers, full disciplines and smuggled dots', async () => {
     const player = await registerUser(app);
     const id = await createCharacter(player.user.id, 0, 'Ventrue');
     await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify({
       disciplines: { Presence: 3, Dominate: 2 },
-      disciplinePowers: { Presence: [{ id: 'awe', level: 1 }, { id: 'daunt', level: 1 }], Dominate: [] },
+      disciplinePowers: { Presence: [{ id: 'awe', level: 1 }, { id: 'daunt', level: 3 }], Dominate: [] },
     }), id]);
-    const assign = (powers, extra = {}) => app.inject({
+    const assign = (powerId) => app.inject({
       method: 'POST',
       url: '/api/characters/xp/spend',
       headers: { cookie: player.cookie },
       payload: {
-        type: 'discipline', disciplineKind: 'select', target: 'Presence', currentLevel: 3, newLevel: 3,
-        patchSheet: { disciplines: { Presence: 5, Dominate: 5, ...extra }, disciplinePowers: { Presence: powers } },
+        type: 'discipline', disciplineKind: 'select', target: 'Presence', powerId,
+        patchSheet: { disciplines: { Presence: 5, Dominate: 5 } },
       },
     });
-    const owned = [{ id: 'awe', level: 1 }, { id: 'daunt', level: 1 }];
 
-    expect((await assign([...owned, { id: 'awe', level: 1 }])).statusCode).toBe(400);
-    expect((await assign([...owned, { id: 'entrancement', level: 3 }, { id: 'dread_gaze', level: 2 }])).statusCode).toBe(400);
-    expect((await assign([...owned, { id: 'entrancement', level: 3 }])).statusCode).toBe(200);
+    expect((await assign('awe')).statusCode).toBe(400);           // already owned
+    expect((await assign('majesty')).statusCode).toBe(400);       // level 5 power on a 3-dot discipline
+    expect((await assign('entrancement')).statusCode).toBe(200);
+    expect((await assign('dread_gaze')).statusCode).toBe(400);    // every dot now has a power
 
-    const [[row]] = await pool.query('SELECT sheet FROM characters WHERE id=?', [id]);
+    const [[row]] = await pool.query('SELECT xp, sheet FROM characters WHERE id=?', [id]);
     const sheet = typeof row.sheet === 'string' ? JSON.parse(row.sheet) : row.sheet;
-    expect(sheet.disciplinePowers.Presence.map(p => p.id)).toEqual(['awe', 'daunt', 'entrancement']);
+    expect(row.xp).toBe(0);
+    expect(sheet.disciplinePowers.Presence.map(p => [p.id, p.level])).toEqual([['awe', 1], ['daunt', 1], ['entrancement', 3]]);
     expect(sheet.disciplines).toEqual({ Presence: 3, Dominate: 2 }); // dots in the patch were ignored
-    expect(sheet.disciplinePowers.Dominate).toEqual([]);
   });
 });

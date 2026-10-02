@@ -2,6 +2,7 @@ const { getSetting } = require('../utils/settings');
 const { DEFAULT_DISABLED_CLANS } = require('../utils/clans');
 const { isAdmin, userOwnsCharacter } = require('../services/guards');
 const { parseSheet } = require('../utils/sheet');
+const { mergePlayerSheetEdit } = require('../utils/playerSheetEdit');
 
 async function isClanDisabled(clan) {
   const raw = await getSetting('disabled_clans', JSON.stringify(DEFAULT_DISABLED_CLANS));
@@ -12,6 +13,42 @@ async function isClanDisabled(clan) {
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, moderateLimiter, requireAdmin, validateRetainerSheet, getMimeType, sharp, imageClient, broadcastNtfyAlert } = opts;
+
+  // A player saving their own sheet: only the narrative and live-session
+  // fields are taken from the request (utils/playerSheetEdit.js). Dots,
+  // powers and merits change through XP purchases; name and clan through a
+  // Storyteller. Storytellers edit freely via /api/characters/user/:id.
+  async function updateOwnCharacter(req, reply) {
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [[row]] = await conn.query('SELECT id, clan, sheet FROM characters WHERE user_id=? FOR UPDATE', [req.user.id]);
+      if (!row) {
+        await conn.rollback();
+        log.warn('Update character not found', { user_id: req.user.id });
+        return reply.status(404).send({ error: 'No character' });
+      }
+      const incoming = req.body?.sheet;
+      if (!incoming || typeof incoming !== 'object') {
+        await conn.rollback();
+        return reply.status(400).send({ error: 'Nothing to update' });
+      }
+      // Storytellers are trusted with their own sheet as with everyone else's.
+      const next = isAdmin(req.user) ? incoming : mergePlayerSheetEdit(row.sheet, incoming, row.clan);
+      await conn.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(next), row.id]);
+      await conn.commit();
+
+      const [[ch]] = await pool.query('SELECT * FROM characters WHERE id=?', [row.id]);
+      if (ch) ch.sheet = parseSheet(ch.sheet);
+      log.char('Character updated', { id: row.id, user_id: req.user.id });
+      return reply.send({ character: ch });
+    } catch (e) {
+      await conn.rollback().catch(() => {});
+      throw e;
+    } finally {
+      conn.release();
+    }
+  }
   /* -------------------- Characters -------------------- */
   // Get my character (parse sheet if string)
   fastify.get('/api/characters/me', { preHandler: [authRequired] }, async (req, reply) => {
@@ -36,30 +73,7 @@ module.exports = async function (fastify, opts) {
 
   // Update my character (optional)
   fastify.put('/api/characters/me', { preHandler: [authRequired] }, async (req, reply) => {
-    const { name, clan, sheet } = req.body;
-    const [rows] = await pool.query('SELECT id FROM characters WHERE user_id=?', [req.user.id]);
-    if (!rows.length) {
-      log.warn('Update character not found', { user_id: req.user.id });
-      return reply.status(404).json({ error: 'No character' });
-    }
-
-    const fields = [], vals = [];
-    if (name) { fields.push('name=?'); vals.push(name); }
-    if (clan) { fields.push('clan=?'); vals.push(clan); }
-    if (sheet !== undefined) { fields.push('sheet=?'); vals.push(sheet ? JSON.stringify(sheet) : null); }
-    if (!fields.length) {
-      log.warn('Update character no fields', { user_id: req.user.id });
-      return reply.status(400).json({ error: 'Nothing to update' });
-    }
-
-    vals.push(rows[0].id);
-    await pool.query(`UPDATE characters SET ${fields.join(', ')} WHERE id=?`, vals);
-
-    const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [rows[0].id]);
-    const ch = out[0];
-    if (ch) ch.sheet = parseSheet(ch.sheet);
-    log.char('Character updated', { id: rows[0].id, user_id: req.user.id, updates: fields });
-    reply.send({ character: ch });
+    return updateOwnCharacter(req, reply);
   });
 
   /**
@@ -150,6 +164,7 @@ module.exports = async function (fastify, opts) {
 
       let sheetObj = parseSheet(sheet);
       sheetObj.is_active = false;
+      delete sheetObj.allow_reset; // only a Storyteller grants re-rolls
 
       const [r] = await pool.query(
         'INSERT INTO characters (user_id, name, clan, sheet, xp) VALUES (?,?,?,?,?)',
@@ -233,30 +248,7 @@ module.exports = async function (fastify, opts) {
    */
   // Update my character (optional)
   fastify.put('/api/characters', { preHandler: [authRequired] }, async (req, reply) => {
-    const { name, clan, sheet } = req.body;
-    const [rows] = await pool.query('SELECT id FROM characters WHERE user_id=?', [req.user.id]);
-    if (!rows.length) {
-      log.warn('Update character not found', { user_id: req.user.id });
-      return reply.status(404).json({ error: 'No character' });
-    }
-
-    const fields = [], vals = [];
-    if (name) { fields.push('name=?'); vals.push(name); }
-    if (clan) { fields.push('clan=?'); vals.push(clan); }
-    if (sheet !== undefined) { fields.push('sheet=?'); vals.push(sheet ? JSON.stringify(sheet) : null); }
-    if (!fields.length) {
-      log.warn('Update character no fields', { user_id: req.user.id });
-      return reply.status(400).json({ error: 'Nothing to update' });
-    }
-
-    vals.push(rows[0].id);
-    await pool.query(`UPDATE characters SET ${fields.join(', ')} WHERE id=?`, vals);
-
-    const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [rows[0].id]);
-    const ch = out[0];
-    if (ch) ch.sheet = parseSheet(ch.sheet);
-    log.char('Character updated', { id: rows[0].id, user_id: req.user.id, updates: fields });
-    reply.send({ character: ch });
+    return updateOwnCharacter(req, reply);
   });
 
   // GET a specific character by ID (Admin only — mirrors the PUT below; a
@@ -487,6 +479,43 @@ module.exports = async function (fastify, opts) {
     }
   });
   
+  // Retainers are bought with the owner's XP at the Retainers background
+  // rate, charged here in the same transaction as the retainer row so the two
+  // can't drift apart (the client used to pay through a separate spend call
+  // it could simply skip).
+  const RETAINER_XP_PER_TIER = 3;
+  // `cost` may be a function of the open connection, so it is worked out
+  // after the lock is taken (an upgrade must price against the tier as it is
+  // now, not as a racing request saw it).
+  async function withRetainerCharge(charId, costOrFn, label, write) {
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      // Locking the owner first serializes every retainer change for this
+      // character, so a burst of identical clicks runs one at a time.
+      const [[ch]] = await conn.query('SELECT xp FROM characters WHERE id=? FOR UPDATE', [charId]);
+      const cost = typeof costOrFn === 'function' ? await costOrFn(conn) : costOrFn;
+      if (cost > 0) {
+        if (!ch || Number(ch.xp) < cost) {
+          throw Object.assign(new Error(`Not enough XP (need ${cost}, have ${Number(ch?.xp) || 0})`), { status: 400 });
+        }
+        await conn.query('UPDATE characters SET xp = xp - ? WHERE id=?', [cost, charId]);
+        await conn.query(
+          'INSERT INTO xp_log (character_id, action, target, cost, payload) VALUES (?,?,?,?,?)',
+          [charId, 'advantage', label.slice(0, 120), cost, JSON.stringify({ retainer: true })]
+        );
+      }
+      const result = await write(conn);
+      await conn.commit();
+      return result;
+    } catch (e) {
+      await conn.rollback().catch(() => {});
+      throw e;
+    } finally {
+      conn.release();
+    }
+  }
+
   // Create a retainer on a character (owner or admin)
   fastify.post('/api/characters/:id/retainers', { preHandler: [authRequired] }, async (req, reply) => {
     try {
@@ -495,20 +524,32 @@ module.exports = async function (fastify, opts) {
         return reply.status(403).json({ error: 'Unauthorized' });
       }
 
-      const { name, tier, sheet, xp } = req.body;
+      const { name, sheet } = req.body;
+      const admin = isAdmin(req.user);
+      const tier = Number(req.body.tier || 1);
+      if (!Number.isInteger(tier) || tier < 1 || tier > 4) return reply.status(400).json({ error: 'Tier must be 1 to 4.' });
+      // A retainer's own XP is the Storyteller's to set.
+      const xp = admin ? Number(req.body.xp) || 0 : 0;
 
       const isGhoul = sheet?.isGhoul === true;
-      const validationError = validateRetainerSheet(Number(tier || 1), sheet, isGhoul);
+      const validationError = validateRetainerSheet(tier, sheet, isGhoul);
       if (validationError) {
         return reply.status(400).json({ error: validationError });
       }
 
-      const [result] = await pool.query(
-        'INSERT INTO retainers (character_id, name, tier, sheet, xp) VALUES (?, ?, ?, ?, ?)',
-        [charId, name, tier || 1, JSON.stringify(sheet || {}), xp || 0]
-      );
-      reply.send({ id: result.insertId, character_id: charId, name, tier, sheet, xp });
+      const id = await withRetainerCharge(charId, admin ? 0 : tier * RETAINER_XP_PER_TIER, `Recruit Tier ${tier} Retainer: ${name}`, async (conn) => {
+        // One retainer per name: a double-clicked "Confirm & Pay" recruits once.
+        const [[dupe]] = await conn.query('SELECT id FROM retainers WHERE character_id=? AND name=?', [charId, name]);
+        if (dupe) throw Object.assign(new Error(`You already have a retainer named ${name}.`), { status: 409 });
+        const [result] = await conn.query(
+          'INSERT INTO retainers (character_id, name, tier, sheet, xp) VALUES (?, ?, ?, ?, ?)',
+          [charId, name, tier, JSON.stringify(sheet || {}), xp]
+        );
+        return result.insertId;
+      });
+      reply.send({ id, character_id: charId, name, tier, sheet, xp });
     } catch (e) {
+      if (e.status) return reply.status(e.status).json({ error: e.message });
       log.err('Failed to create retainer', { message: e.message, character_id: req.params.id });
       reply.status(500).json({ error: 'Failed to create retainer' });
     }
@@ -535,7 +576,9 @@ module.exports = async function (fastify, opts) {
 
   fastify.put('/api/retainers/:retainerId/upgrade', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      const { name, tier, sheet, xp } = req.body;
+      const { name, sheet } = req.body;
+      const tier = Number(req.body.tier);
+      if (!Number.isInteger(tier) || tier < 1 || tier > 4) return reply.status(400).json({ error: 'Tier must be 1 to 4.' });
 
       // Check ownership
       const [rows] = await pool.query(
@@ -557,10 +600,15 @@ module.exports = async function (fastify, opts) {
         return reply.status(400).json({ error: validationError });
       }
 
-      await pool.query(
+      const priceNow = async (conn) => {
+        const [[current]] = await conn.query('SELECT tier FROM retainers WHERE id=? FOR UPDATE', [req.params.retainerId]);
+        if (tier < Number(current.tier)) throw Object.assign(new Error('Cannot downgrade tier via upgrade route.'), { status: 400 });
+        return (tier - Number(current.tier)) * RETAINER_XP_PER_TIER;
+      };
+      await withRetainerCharge(oldRetainer.character_id, priceNow, `Upgrade Retainer ${oldRetainer.name} to Tier ${tier}`, (conn) => conn.query(
         'UPDATE retainers SET name=?, tier=?, sheet=? WHERE id=?',
         [name || oldRetainer.name, tier, JSON.stringify(sheet), req.params.retainerId]
-      );
+      ));
       
       const [updatedRows] = await pool.query('SELECT * FROM retainers WHERE id=?', [req.params.retainerId]);
       if (updatedRows.length > 0) {
@@ -571,6 +619,7 @@ module.exports = async function (fastify, opts) {
          reply.send({ success: true });
       }
     } catch (e) {
+      if (e.status) return reply.status(e.status).json({ error: e.message });
       log.err('Failed to upgrade retainer', { message: e.message, retainer_id: req.params.retainerId });
       reply.status(500).json({ error: 'Failed to upgrade retainer' });
     }
@@ -673,9 +722,15 @@ module.exports = async function (fastify, opts) {
 
     try {
       // Find the user's existing character
-      const [rows] = await pool.query('SELECT id FROM characters WHERE user_id=?', [req.user.id]);
+      const [rows] = await pool.query('SELECT id, sheet FROM characters WHERE user_id=?', [req.user.id]);
       if (!rows.length) {
         return reply.status(404).json({ error: 'No character found to rebuild' });
+      }
+      // A rebuild wipes XP history and starts over, so only when a
+      // Storyteller has granted a re-roll (Admin > Characters > Allow Re-Roll).
+      if (parseSheet(rows[0].sheet)?.allow_reset !== true) {
+        log.warn('Rebuild refused: no re-roll granted', { user_id: req.user.id });
+        return reply.status(403).json({ error: 'Your Storyteller has not allowed a re-roll for this character.' });
       }
 
       const charId = rows[0].id;
@@ -687,6 +742,7 @@ module.exports = async function (fastify, opts) {
 
       let sheetObj = parseSheet(sheet);
       sheetObj.is_active = false;
+      delete sheetObj.allow_reset; // one re-roll per grant
 
       // Overwrite the character data and reset XP to 50
       await pool.query(

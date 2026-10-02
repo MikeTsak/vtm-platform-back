@@ -1,13 +1,14 @@
-const { xpCost } = require('../utils/xpCost');
 const { idempotencyCheck, idempotencySave } = require('../utils/idempotency');
-const { parseSheet } = require('../utils/sheet');
-const { isPredatorDiscipline } = require('../data/predatorDisciplines');
+const { runPurchase, PurchaseError } = require('../utils/xpPurchase');
 
 // Self-serve XP spend: always operates on the caller's OWN character
 // (`WHERE user_id = req.user.id`), so there's no :id param and no IDOR
 // surface here — unlike /api/characters/user/:id, /inventory, /retainers.
 // Extracted out of server.fastify.js so it can be mounted in isolation for
 // integration tests (see tests/setup/testApp.js).
+//
+// The server decides the level, price and sheet change (utils/xpPurchase.js);
+// the request only names what to buy.
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired } = opts;
 
@@ -15,129 +16,30 @@ module.exports = async function (fastify, opts) {
     preHandler: [authRequired, idempotencyCheck],
     onSend: [idempotencySave],
   }, async (req, reply) => {
-    const {
-      type, target, currentLevel, newLevel,
-      ritualLevel, formulaLevel, dots,
-      disciplineKind, patchSheet
-    } = req.body;
-
-    const [rows] = await pool.query('SELECT * FROM characters WHERE user_id=?', [req.user.id]);
-    const ch = rows[0];
+    const [[ch]] = await pool.query('SELECT id FROM characters WHERE user_id=?', [req.user.id]);
     if (!ch) {
       log.warn('XP spend without character', { user_id: req.user.id });
-      return reply.status(400).json({ error: 'Create a character first' });
+      return reply.status(400).send({ error: 'Create a character first' });
     }
 
-    // Discipline cap: 5 dots, except the house rule that ONE in-clan
-    // discipline per character may reach 6. The 6th dot buys an extra power
-    // picked from levels 1-5 (there is no level-6 power data).
-    if (type === 'discipline' && Number(newLevel) > 5) {
-      const dots = parseSheet(ch.sheet).disciplines || {};
-      const otherAtSix = Object.entries(dots).some(([d, v]) => d !== target && Number(v) > 5);
-      const allowed = Number(newLevel) === 6
-        && (disciplineKind === 'clan' || disciplineKind === 'select')
-        && !otherAtSix;
-      if (!allowed) {
-        log.warn('XP spend blocked: discipline level above cap', { user_id: req.user.id, target, newLevel, disciplineKind, otherAtSix });
-        return reply.status(400).json({
-          error: Number(newLevel) === 6 && disciplineKind === 'clan' && otherAtSix
-            ? 'Only one discipline can be raised to 6 dots.'
-            : `${target || 'Disciplines'} can only exceed 5 dots as your one in-clan discipline at 6.`,
-        });
-      }
-    }
-
-    // Out-of-clan disciplines are only purchasable once an ST has unlocked
-    // them for this character (see routes/disciplineAccess.js) — everything
-    // else (in-clan, Caitiff's "any discipline", power selection, and the
-    // character's predator-type discipline) is unrestricted.
-    if (type === 'discipline' && disciplineKind === 'other' && !isPredatorDiscipline(parseSheet(ch.sheet), ch.clan, target)) {
+    // Out-of-clan disciplines are only purchasable up to the level an ST has
+    // unlocked for this character (see routes/disciplineAccess.js).
+    const unlockedTo = async (discipline) => {
       const [[access]] = await pool.query(
         'SELECT max_level FROM discipline_access WHERE character_id=? AND discipline=?',
-        [ch.id, target]
+        [ch.id, discipline]
       );
-      if (!access || Number(access.max_level) < Number(newLevel)) {
-        log.warn('XP spend blocked: discipline not unlocked', { user_id: req.user.id, target, newLevel, cap: access?.max_level ?? null });
-        return reply.status(403).json({
-          error: access
-            ? `Your Storyteller has only unlocked ${target} up to level ${access.max_level}.`
-            : `${target} isn't unlocked for your character. Ask your Storyteller, or send a request from the Disciplines tab.`,
-        });
-      }
-    }
+      return access ? Number(access.max_level) : null;
+    };
 
-    // Determine cost (special-case free power assignment)
-    let cost = 0;
     try {
-      if (
-        type === 'discipline' &&
-        (
-          disciplineKind === 'select' ||                           // explicit "assignment only"
-          Number(newLevel) === Number(currentLevel)                // or no level change
-        )
-      ) {
-        cost = 0; // assigning a specific power for an existing dot is free
-      } else {
-        cost = xpCost({ type, newLevel, ritualLevel, formulaLevel, dots, disciplineKind });
-      }
+      const { row, cost } = await runPurchase({ pool, table: 'characters', id: ch.id, body: req.body || {}, isAdmin: false, unlockedTo });
+      log.xp('XP spend complete', { user_id: req.user.id, type: req.body?.type, target: req.body?.target, cost, remaining_xp: row?.xp });
+      return reply.send({ character: row, spent: cost });
     } catch (e) {
-      log.warn('XP spend bad type', { type });
-      return reply.status(400).json({ error: e.message });
+      if (!(e instanceof PurchaseError)) throw e;
+      log.warn('XP spend refused', { user_id: req.user.id, type: req.body?.type, target: req.body?.target, error: e.message });
+      return reply.status(e.status).send({ error: e.message });
     }
-
-    // If this is a paid action, verify balance and deduct XP
-    if (cost > 0) {
-      if ((ch.xp || 0) < cost) {
-        log.warn('XP spend insufficient', { user_id: req.user.id, have: ch.xp, need: cost });
-        return reply.status(400).json({ error: `Not enough XP (need ${cost}, have ${ch.xp})` });
-      }
-      log.xp('XP spend request', { user_id: req.user.id, type, target, currentLevel, newLevel, cost });
-      await pool.query('UPDATE characters SET xp = xp - ? WHERE id=?', [cost, ch.id]);
-    } else {
-      log.xp('Discipline power assignment (free)', { user_id: req.user.id, target, level: newLevel });
-    }
-
-    // A free power assignment may only change that discipline's power list:
-    // one entry per dot, no repeats. Saving the whole client sheet here let a
-    // buggy picker grant duplicate or surplus powers (Compel x3) for 0 XP.
-    const freeAssign = type === 'discipline' && cost === 0;
-    if (freeAssign && patchSheet !== undefined) {
-      const stored = parseSheet(ch.sheet) || {};
-      const dotsHave = Number(stored.disciplines?.[target] || 0);
-      const list = patchSheet?.disciplinePowers?.[target];
-      const keys = (Array.isArray(list) ? list : []).map(p => String(p?.id || p?.name || p || '').toLowerCase());
-      if (!Array.isArray(list) || keys.some(k => !k) || new Set(keys).size !== keys.length || list.length > dotsHave) {
-        log.warn('Power assignment rejected', { user_id: req.user.id, target, dots: dotsHave, powers: keys });
-        return reply.status(400).send({ error: `${target} has ${dotsHave} dot(s): pick one distinct power per dot.` });
-      }
-      stored.disciplinePowers = { ...(stored.disciplinePowers || {}), [target]: list };
-      await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(stored), ch.id]);
-      log.xp('Power assignment saved', { user_id: req.user.id, character_id: ch.id, target });
-    } else if (!freeAssign && patchSheet !== undefined) {
-      await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(patchSheet), ch.id]);
-      log.xp('Sheet patched after action', { user_id: req.user.id, character_id: ch.id });
-    }
-
-    // XP log (store 0-cost entries too)
-    try {
-      await pool.query(
-        'INSERT INTO xp_log (character_id, action, target, from_level, to_level, cost, payload) VALUES (?,?,?,?,?,?,?)',
-        [ch.id, type, target || null, currentLevel || null, newLevel || null, cost,
-        JSON.stringify({ disciplineKind, ritualLevel, formulaLevel, dots })]
-      );
-      log.xp('XP logged', { character_id: ch.id, cost });
-    } catch (_) { /* ignore if xp_log missing */ }
-
-    const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [ch.id]);
-    const outCh = out[0];
-    if (outCh) outCh.sheet = parseSheet(outCh.sheet);
-
-    if (cost > 0) {
-      log.ok('XP spend complete', { user_id: req.user.id, remaining_xp: outCh?.xp });
-    } else {
-      log.ok('Power assignment saved (no XP charged)', { user_id: req.user.id });
-    }
-
-    reply.send({ character: outCh, spent: cost });
   });
 };

@@ -19,10 +19,10 @@ afterAll(async () => {
   await teardownTestDatabase();
 });
 
-async function createCharacter(userId, xp = 50) {
+async function createCharacter(userId, xp = 50, sheet = null) {
   const [r] = await getTestPool().query(
-    'INSERT INTO characters (user_id, name, clan, xp) VALUES (?, ?, ?, ?)',
-    [userId, 'Test Character', 'Brujah', xp]
+    'INSERT INTO characters (user_id, name, clan, xp, sheet) VALUES (?, ?, ?, ?, ?)',
+    [userId, 'Test Character', 'Brujah', xp, sheet && JSON.stringify(sheet)]
   );
   return r.insertId;
 }
@@ -53,7 +53,7 @@ describe('POST /api/characters/xp/spend', () => {
 
   it('deducts the correct cost and persists it against the caller\'s own character', async () => {
     const { cookie, user } = await registerUser(app);
-    await createCharacter(user.id, 50);
+    await createCharacter(user.id, 50, { attributes: { Strength: 2 } });
 
     // attribute newLevel=3 -> cost 15 (see tests/xpCost.test.js for the pricing table itself)
     const res = await app.inject({
@@ -80,7 +80,7 @@ describe('POST /api/characters/xp/spend', () => {
       method: 'POST',
       url: '/api/characters/xp/spend',
       headers: { cookie },
-      payload: { type: 'attribute', newLevel: 3 }, // costs 15, only has 5
+      payload: { type: 'attribute', target: 'Strength', newLevel: 2 }, // costs 10, only has 5
     });
 
     expect(res.statusCode).toBe(400);
@@ -92,13 +92,13 @@ describe('POST /api/characters/xp/spend', () => {
 
   it('assigning a discipline power at an already-owned dot is free', async () => {
     const { cookie, user } = await registerUser(app);
-    await createCharacter(user.id, 20);
+    await createCharacter(user.id, 20, { disciplines: { Celerity: 1 }, disciplinePowers: { Celerity: [] } });
 
     const res = await app.inject({
       method: 'POST',
       url: '/api/characters/xp/spend',
       headers: { cookie },
-      payload: { type: 'discipline', disciplineKind: 'select', currentLevel: 1, newLevel: 1 },
+      payload: { type: 'discipline', disciplineKind: 'select', target: 'Celerity', powerId: 'cats_grace' },
     });
 
     expect(res.statusCode).toBe(200);
@@ -121,7 +121,7 @@ describe('POST /api/characters/xp/spend', () => {
       method: 'POST',
       url: '/api/characters/xp/spend',
       headers: { cookie: a.cookie },
-      payload: { type: 'attribute', newLevel: 2, character_id: 999999 }, // ignored — no such param exists
+      payload: { type: 'attribute', target: 'Strength', newLevel: 2, character_id: 999999 }, // ignored — no such param exists
     });
 
     expect(res.statusCode).toBe(200);
