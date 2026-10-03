@@ -17,7 +17,7 @@ const { pluginLoaded } = require('../utils/bootBanner');
 const { compressionHook } = require('../utils/compression');
 
 module.exports = fp(async function security(fastify) {
-  fastify.register(multipart, { limits: { fileSize: 50 * 1024 * 1024 } });
+  fastify.register(multipart, { limits: { fileSize: 500 * 1024 * 1024 } });
   fastify.after(() => pluginLoaded('multipart'));
 
   // This API only serves two HTML surfaces itself: the "/" status page and Swagger UI

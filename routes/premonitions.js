@@ -122,16 +122,27 @@ module.exports = async function (fastify, opts) {
       const buffer = await fileData.toBuffer();
       const size = buffer.length;
 
+      // Per-type size limits: 50MB for images, 500MB for video/audio
+      const isImage = mimetype.startsWith('image/');
+      const maxSize = isImage ? 50 * 1024 * 1024 : 500 * 1024 * 1024;
+      const maxLabel = isImage ? '50MB' : '500MB';
+      if (size > maxSize) {
+        const sizeMB = (size / 1024 / 1024).toFixed(1);
+        return reply.status(400).send({ error: `File too large (${sizeMB}MB). Max for ${isImage ? 'images' : 'video/audio'} is ${maxLabel}.` });
+      }
+
       const ext = originalname ? originalname.split('.').pop() : 'bin';
       const filenameToUpload = 'premonitions_media_' + Date.now() + '.' + ext;
       const result = await imageClient.uploadImage(buffer, filenameToUpload);
       if (!result || !result.success) throw new Error((result && result.error) || 'CDN upload failed');
       const resultUrl = result.url;
 
-      // CDN-only — no BLOB fallback.
+      // CDN-only: store an empty blob for `data` (column is NOT NULL) and
+      // return the CDN url directly. The media_stream_url in the response
+      // points consumers at the CDN rather than the blob endpoint.
       const [ins] = await pool.query(
-        'INSERT INTO premonition_media (filename, mime, size, data_url, data) VALUES (?,?,?,?,NULL)',
-        [originalname, mimetype, size, resultUrl]
+        'INSERT INTO premonition_media (filename, mime, size, data) VALUES (?,?,?,?)',
+        [originalname, mimetype, size, Buffer.alloc(0)]
       );
       const media_id = ins.insertId;
 
@@ -141,8 +152,8 @@ module.exports = async function (fastify, opts) {
         media_stream_url: resultUrl || `/api/premonitions/media/${media_id}`
       });
     } catch (e) {
-      log.err('Premonition media upload failed', { message: e.message });
-      reply.status(500).send({ error: 'Failed to upload media' });
+      log.err('Premonition media upload failed', { message: e.message, stack: e.stack });
+      reply.status(500).send({ error: 'Failed to upload media: ' + e.message });
     }
   });
 

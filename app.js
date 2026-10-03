@@ -28,7 +28,7 @@ const INFRA_PLUGINS = ['multipart', 'helmet', 'cors', 'cookie', 'static', 'compr
 function buildApp(overrides = {}) {
   const fastify = require('fastify')({
     logger: false,
-    bodyLimit: 73400320,
+    bodyLimit: 576716800,
   });
 
   startBootProgress([...INFRA_PLUGINS, ...ROUTE_MODULES.map((m) => m.name)]);

@@ -19,6 +19,7 @@ function getMimeType(buffer) {
 const imageClient = new VampireImageClient({
   baseUrl: 'https://img.miketsak.gr',
   apiKey: process.env.IMAGE_API_KEY,
+  timeoutMs: 300000,
 });
 
 module.exports = { getMimeType, imageClient };
