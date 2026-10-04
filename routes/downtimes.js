@@ -9,7 +9,7 @@ const { parseSheet } = require('../utils/sheet');
 const { sendPushNotification } = require('../services/push');
 const {
   deadlineEnd, submissionState, syncSettingsToActiveCycle, applyActiveCycle, readCycles, findActiveIndex, withReleaseDates,
-  releasePendingAndNotify,
+  releasePendingAndNotify, dateOnly,
 } = require('../services/downtimeSchedule');
 
 const SUBMIT_CLOSED_MESSAGES = {
@@ -826,7 +826,7 @@ module.exports = async function (fastify, opts) {
     try {
       const { cycle_id } = req.query || {};
       const cycles = await readCycles();
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = dateOnly(new Date());
 
       // Available cycles for the admin to choose from
       const availableCycles = (Array.isArray(cycles) ? cycles : [])
@@ -966,7 +966,7 @@ module.exports = async function (fastify, opts) {
       }
 
       const cycles = await readCycles();
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = dateOnly(new Date());
 
       let targetCycle = null;
       if (cycle_id) {
