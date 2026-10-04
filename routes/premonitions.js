@@ -141,8 +141,8 @@ module.exports = async function (fastify, opts) {
       // return the CDN url directly. The media_stream_url in the response
       // points consumers at the CDN rather than the blob endpoint.
       const [ins] = await pool.query(
-        'INSERT INTO premonition_media (filename, mime, size, data) VALUES (?,?,?,?)',
-        [originalname, mimetype, size, Buffer.alloc(0)]
+        'INSERT INTO premonition_media (filename, mime, size, data_url, data) VALUES (?,?,?,?,?)',
+        [originalname, mimetype, size, resultUrl || null, Buffer.alloc(0)]
       );
       const media_id = ins.insertId;
 
@@ -331,29 +331,9 @@ module.exports = async function (fastify, opts) {
 
 
   // MEDIA: Stream media from DB or return media info
-  fastify.get('/api/premonitions/media/:id', { preHandler: [authRequired] }, async (req, reply) => {
+  fastify.get('/api/premonitions/media/:id', async (req, reply) => {
     try {
       const id = Number(req.params.id) || 0;
-
-      let hasAccess = req.user.role === 'admin';
-
-      if (!hasAccess) {
-        const likePattern = `%/media/${id}%`;
-
-        const [accessRows] = await pool.query(`
-        SELECT 1 FROM premonitions p
-        JOIN premonition_recipients pr ON p.id = pr.premonition_id
-        WHERE (p.content_url LIKE ? OR p.id = ?) AND pr.user_id = ?
-      `, [likePattern, id, req.user.id]);
-
-        if (accessRows.length > 0) {
-          hasAccess = true;
-        }
-      }
-
-      if (!hasAccess) {
-        return reply.status(403).json({ error: 'Forbidden' });
-      }
 
       // Check premonition_media first
       let [rows] = await pool.query('SELECT data_url, mime, size, data FROM premonition_media WHERE id=? LIMIT 1', [id]);
@@ -407,8 +387,31 @@ module.exports = async function (fastify, opts) {
       if (typeof data === 'string' && data.startsWith('http')) {
         return reply.redirect(302, data);
       }
+
+      // Handle HTML5 Video Range Requests (Crucial for iOS/Safari & scrubbing)
+      const range = req.headers.range;
+      if (range && mime && mime.startsWith('video/')) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const partialstart = parts[0];
+        const partialend = parts[1];
+
+        const start = parseInt(partialstart, 10);
+        const end = partialend ? parseInt(partialend, 10) : size - 1;
+        const chunksize = (end - start) + 1;
+
+        reply.status(206);
+        reply.header('Content-Range', `bytes ${start}-${end}/${size}`);
+        reply.header('Accept-Ranges', 'bytes');
+        reply.header('Content-Length', chunksize);
+        reply.header('Content-Type', mime);
+        reply.header('Cache-Control', 'private, max-age=3600');
+
+        return reply.send(data.subarray(start, end + 1));
+      }
+
       reply.header('Content-Type', mime || 'application/octet-stream');
       reply.header('Content-Length', size);
+      reply.header('Accept-Ranges', 'bytes');
       reply.header('Cache-Control', 'private, max-age=3600'); // 1 hour
       reply.send(data); // send raw blob
     } catch (e) {

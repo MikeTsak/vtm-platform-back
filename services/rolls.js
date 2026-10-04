@@ -16,7 +16,7 @@ const MENTAL_SOCIAL = new Set([...ATTRIBUTES, ...SKILLS].filter(t => !PHYSICAL.h
 const BP = {
   surge: [1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6],
   disciplineBonus: [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5],
-  bane: [0, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6],
+  bane: [1, 2, 2, 3, 3, 4, 4, 4, 5, 6, 6],
 };
 
 // Roll kinds V5 forbids a Willpower reroll on.

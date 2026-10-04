@@ -819,5 +819,235 @@ module.exports = async function (fastify, opts) {
       reply.status(500).json({ error: 'Failed to save downtime cycles' });
     }
   });
+
+  // GET /api/admin/downtimes/owing-players: characters that have submitted fewer than 3
+  // non-rejected downtimes in the specified or current/latest cycle.
+  fastify.get('/api/admin/downtimes/owing-players', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const { cycle_id } = req.query || {};
+      const cycles = await readCycles();
+      const todayStr = new Date().toISOString().split('T')[0];
+
+      // Available cycles for the admin to choose from
+      const availableCycles = (Array.isArray(cycles) ? cycles : [])
+        .filter(c => c && c.id && c.opening_date && c.closing_date)
+        .map(c => ({
+          id: c.id,
+          title: c.title || null,
+          opening_date: c.opening_date,
+          closing_date: c.closing_date,
+          status: c.status || (c.closing_date < todayStr ? 'closed' : 'active'),
+          is_closed: c.closing_date < todayStr
+        }));
+
+      // Pick target cycle: either requested cycle_id, or latest cycle whose opening_date <= todayStr
+      let targetCycle = null;
+      if (cycle_id) {
+        targetCycle = availableCycles.find(c => String(c.id) === String(cycle_id)) || null;
+      }
+      if (!targetCycle) {
+        const opened = availableCycles
+          .filter(c => c.opening_date <= todayStr)
+          .sort((a, b) => (b.closing_date || '').localeCompare(a.closing_date || ''));
+        targetCycle = opened[0] || availableCycles[0] || null;
+      }
+
+      let from = null;
+      let to = null;
+      let isClosed = false;
+
+      if (targetCycle) {
+        from = new Date(targetCycle.opening_date + 'T00:00:00');
+        to = new Date(targetCycle.closing_date + 'T23:59:59');
+        isClosed = Boolean(targetCycle.closing_date < todayStr);
+      } else {
+        const openingStr = await getSetting('downtime_opening', null);
+        const deadlineStr = await getSetting('downtime_deadline', null);
+        if (openingStr) from = new Date(openingStr);
+        if (deadlineStr) {
+          to = new Date(deadlineStr + 'T23:59:59');
+          isClosed = deadlineStr < todayStr;
+        }
+        if (!from) from = startOfMonth();
+        if (!to) to = endOfMonth();
+      }
+
+      const [rows] = await pool.query(
+        `SELECT 
+           c.id AS character_id, 
+           c.name AS character_name, 
+           c.clan, 
+           c.sheet, 
+           c.user_id,
+           u.display_name AS player_name, 
+           u.email,
+           COALESCE(dt.submitted_count, 0) AS submitted_count
+         FROM characters c
+         JOIN users u ON c.user_id = u.id
+         LEFT JOIN (
+           SELECT character_id, COUNT(*) AS submitted_count
+           FROM downtimes
+           WHERE status <> 'rejected'
+             AND created_at >= ? AND created_at <= ?
+           GROUP BY character_id
+         ) dt ON dt.character_id = c.id
+         WHERE COALESCE(c.is_ex, 0) = 0 
+           AND COALESCE(c.is_deceased, 0) = 0
+           AND COALESCE(c.is_hidden, 0) = 0
+           AND COALESCE(c.is_left, 0) = 0
+           AND COALESCE(dt.submitted_count, 0) < 3
+         ORDER BY c.name ASC`,
+        [from, to]
+      );
+
+      const owingCharacters = rows.map(r => {
+        let predatorType = null;
+        if (r.sheet) {
+          try {
+            const parsed = parseSheet(r.sheet);
+            predatorType = parsed?.predator_type || parsed?.predatorType || null;
+          } catch (_) { }
+        }
+        const defaultFeeding = feedingFromPredator(predatorType);
+        const submitted = Number(r.submitted_count) || 0;
+        return {
+          character_id: r.character_id,
+          character_name: r.character_name,
+          clan: r.clan,
+          player_name: r.player_name || null,
+          email: r.email,
+          user_id: r.user_id,
+          predator_type: predatorType,
+          default_feeding_type: defaultFeeding,
+          submitted_count: submitted,
+          owed_count: Math.max(0, 3 - submitted)
+        };
+      });
+
+      reply.send({
+        cycle: targetCycle,
+        is_closed: isClosed,
+        available_cycles: availableCycles,
+        owing_characters: owingCharacters
+      });
+    } catch (e) {
+      log.err('Fetch owing downtime characters failed', { message: e.message });
+      reply.status(500).json({ error: 'Failed to fetch characters owing downtimes' });
+    }
+  });
+
+  // POST /api/admin/downtimes/force-submit: Admin-entered late downtime for a player who forgot.
+  // When target cycle is closed, backdates created_at to the closing date so it attaches to that cycle.
+  fastify.post('/api/admin/downtimes/force-submit', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const {
+        character_id,
+        title,
+        body,
+        feeding_type,
+        status,
+        cycle_id,
+        is_project
+      } = req.body || {};
+
+      if (!character_id) {
+        return reply.status(400).json({ error: 'Character is required' });
+      }
+      if (!title || !String(title).trim()) {
+        return reply.status(400).json({ error: 'Title is required' });
+      }
+      if (!body || !String(body).trim()) {
+        return reply.status(400).json({ error: 'Body is required' });
+      }
+
+      const [[ch]] = await pool.query('SELECT * FROM characters WHERE id = ?', [character_id]);
+      if (!ch) {
+        return reply.status(404).json({ error: 'Character not found' });
+      }
+
+      const cycles = await readCycles();
+      const todayStr = new Date().toISOString().split('T')[0];
+
+      let targetCycle = null;
+      if (cycle_id) {
+        targetCycle = (Array.isArray(cycles) ? cycles : []).find(c => String(c.id) === String(cycle_id)) || null;
+      }
+      if (!targetCycle) {
+        const opened = (Array.isArray(cycles) ? cycles : [])
+          .filter(c => c && c.opening_date && c.opening_date <= todayStr)
+          .sort((a, b) => (b.closing_date || '').localeCompare(a.closing_date || ''));
+        targetCycle = opened[0] || null;
+      }
+
+      let createdAt = new Date();
+      let wasBackdated = false;
+
+      if (targetCycle && targetCycle.closing_date) {
+        if (targetCycle.closing_date < todayStr) {
+          // Cycle is closed: backdate to the closing date evening so it falls inside the cycle window
+          createdAt = new Date(targetCycle.closing_date + 'T20:00:00');
+          wasBackdated = true;
+        }
+      }
+
+      let defaultFeed = feeding_type ? String(feeding_type).trim() : null;
+      if (!defaultFeed) {
+        let pred = null;
+        if (ch.sheet) {
+          const parsed = parseSheet(ch.sheet);
+          pred = parsed?.predator_type || parsed?.predatorType || null;
+        }
+        defaultFeed = feedingFromPredator(pred);
+      }
+
+      let finalTitle = String(title).trim();
+      if (is_project && !finalTitle.startsWith('[PROJECT]')) {
+        finalTitle = `[PROJECT] ${finalTitle}`;
+      }
+
+      const allowedStatuses = [
+        'submitted',
+        'approved',
+        'Approved: Kikos',
+        'Approved: Mike',
+        'rejected',
+        'resolved',
+        'Needs a Scene',
+        'Resolved in scene'
+      ];
+      let finalStatus = 'submitted';
+      if (status) {
+        const match = allowedStatuses.find(a => a.toLowerCase() === String(status).trim().toLowerCase());
+        if (match) finalStatus = match;
+      }
+
+      const [insertRes] = await pool.query(
+        'INSERT INTO downtimes (character_id, title, feeding_type, body, status, is_read, is_released, created_at) VALUES (?, ?, ?, ?, ?, 0, 1, ?)',
+        [ch.id, finalTitle, defaultFeed || null, String(body).trim(), finalStatus, createdAt]
+      );
+
+      const [[createdDt]] = await pool.query('SELECT * FROM downtimes WHERE id = ?', [insertRes.insertId]);
+
+      log.adm('Admin recorded late downtime', {
+        admin_id: req.user.id,
+        downtime_id: insertRes.insertId,
+        character_id: ch.id,
+        character_name: ch.name,
+        target_cycle: targetCycle?.id || null,
+        backdated: wasBackdated,
+        created_at: createdAt
+      });
+
+      reply.send({
+        success: true,
+        downtime: createdDt,
+        backdated: wasBackdated,
+        target_cycle: targetCycle || null
+      });
+    } catch (e) {
+      log.err('Force submit downtime failed', { message: e.message });
+      reply.status(500).json({ error: 'Failed to record late downtime' });
+    }
+  });
 };
 
