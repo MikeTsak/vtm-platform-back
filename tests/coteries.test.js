@@ -151,6 +151,38 @@ describe('POST /api/coteries', () => {
     expect(res.statusCode).toBe(201);
     expect(JSON.parse(res.body).coterie.coterie_xp).toBe(0);
   });
+
+  it('deducts personal XP from creator when bonus_points are contributed at creation', async () => {
+    await pool.query('UPDATE characters SET xp = 25 WHERE user_id = ?', [members[0].user.id]);
+    const res = await post('/api/coteries', members[0].cookie, legalPayload({
+      name: `Bonus Points Test ${Date.now()}`,
+      bonus_points: 2,
+      backgrounds: [{ key: 'allies', dots: 2 }],
+    }));
+    expect(res.statusCode).toBe(201);
+    const { coterie } = JSON.parse(res.body);
+    expect(coterie.bonus_points).toBe(2);
+
+    const [[ch]] = await pool.query('SELECT xp FROM characters WHERE user_id = ?', [members[0].user.id]);
+    expect(ch.xp).toBe(19); // 25 - (2 * 3) = 19
+
+    const [logs] = await pool.query(
+      'SELECT * FROM coterie_xp_log WHERE coterie_id = ? AND kind = "spend" AND personal_delta = -6',
+      [coterie.id]
+    );
+    expect(logs.length).toBe(1);
+  });
+
+  it('rejects coterie creation with bonus_points if creator has insufficient personal XP', async () => {
+    await pool.query('UPDATE characters SET xp = 5 WHERE user_id = ?', [members[0].user.id]);
+    const res = await post('/api/coteries', members[0].cookie, legalPayload({
+      name: `Insufficient XP Test ${Date.now()}`,
+      bonus_points: 2, // Needs 6 XP
+      backgrounds: [{ key: 'allies', dots: 2 }],
+    }));
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/not enough personal xp/i);
+  });
 });
 
 /* ================================================================== */
@@ -485,5 +517,44 @@ describe('membership', () => {
       expect(m.character_id).toBeTruthy();
       expect(m.character_name).toBeTruthy();
     }
+  });
+});
+
+/* ================================================================== */
+
+describe('PUT /api/coteries/:id', () => {
+  it('deducts personal XP when increasing bonus_points on an existing coterie', async () => {
+    const created = await post('/api/coteries', members[0].cookie, legalPayload({
+      name: `Update Bonus Test ${Date.now()}`,
+      bonus_points: 0,
+    }));
+    const id = JSON.parse(created.body).coterie.id;
+
+    await pool.query('UPDATE characters SET xp = 20 WHERE user_id = ?', [members[0].user.id]);
+
+    const res = await put(`/api/coteries/${id}`, members[0].cookie, {
+      bonus_points: 2,
+      backgrounds: [{ key: 'allies', dots: 2 }],
+    });
+    expect(res.statusCode).toBe(200);
+
+    const [[ch]] = await pool.query('SELECT xp FROM characters WHERE user_id = ?', [members[0].user.id]);
+    expect(ch.xp).toBe(14); // 20 - (2 * 3) = 14
+  });
+
+  it('rejects reducing bonus_points without Storyteller override', async () => {
+    await pool.query('UPDATE characters SET xp = 20 WHERE user_id = ?', [members[0].user.id]);
+    const created = await post('/api/coteries', members[0].cookie, legalPayload({
+      name: `Refund Test ${Date.now()}`,
+      bonus_points: 2,
+      backgrounds: [{ key: 'allies', dots: 2 }],
+    }));
+    const id = JSON.parse(created.body).coterie.id;
+
+    const res = await put(`/api/coteries/${id}`, members[0].cookie, {
+      bonus_points: 1,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/cannot be reduced/i);
   });
 });

@@ -216,6 +216,29 @@ module.exports = async function (fastify, opts) {
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
+
+      const bonusPoints = Math.max(0, Math.trunc(Number(body.bonus_points) || 0));
+      const bonusCost = bonusPoints * (rules.XP_PER_DOT || 3);
+      let creatorChar = null;
+
+      if (bonusCost > 0 && !rulesOverride) {
+        const [[ch]] = await conn.query(
+          'SELECT id, name, xp FROM characters WHERE user_id=? ORDER BY id ASC LIMIT 1 FOR UPDATE',
+          [req.user.id]
+        );
+        if (!ch) {
+          await conn.rollback();
+          return reply.status(400).json({ error: 'You need a character sheet to contribute advantage dots to a coterie.' });
+        }
+        if ((Number(ch.xp) || 0) < bonusCost) {
+          await conn.rollback();
+          return reply.status(400).json({
+            error: `Not enough personal XP to contribute ${bonusPoints} dots (need ${bonusCost}, have ${ch.xp || 0}).`,
+          });
+        }
+        creatorChar = ch;
+      }
+
       const [ins] = await conn.query(
         `INSERT INTO coteries
           (name, type, concept, domain_id, chasse, lien, portillon,
@@ -247,6 +270,32 @@ module.exports = async function (fastify, opts) {
         'INSERT INTO coterie_members (coterie_id, user_id, character_id, display_name) VALUES ?',
         [memberRows.map((r) => [coterieId, r[0], r[1], r[2]])]
       );
+
+      if (creatorChar && bonusCost > 0) {
+        await conn.query('UPDATE characters SET xp = xp - ? WHERE id=?', [bonusCost, creatorChar.id]);
+        await conn.query(
+          `INSERT INTO xp_log (character_id, action, target, from_level, to_level, cost, payload, actor_id)
+           VALUES (?,?,?,?,?,?,?,?)`,
+          [
+            creatorChar.id, 'coterie_bonus_points',
+            `Coterie creation: ${String(body.name).trim()}`,
+            null, null, bonusCost,
+            JSON.stringify({ coterie_id: coterieId, bonus_points: bonusPoints }),
+            req.user.id,
+          ]
+        ).catch(() => {});
+        await conn.query(
+          `INSERT INTO coterie_xp_log
+            (coterie_id, user_id, kind, bank_delta, personal_delta, character_id,
+             target_type, target_key, target_name, from_dots, to_dots, note)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [
+            coterieId, req.user.id, 'spend', 0, -bonusCost, creatorChar.id,
+            'bonus_points', 'creation_bonus', 'Contributed Advantage dots', 0, bonusPoints,
+            `Contributed ${bonusPoints} dot(s) (${bonusCost} XP) at creation by ${creatorChar.name || 'creator'}`.slice(0, 500),
+          ]
+        );
+      }
 
       const startingXp = isAdmin(req.user) ? Math.max(0, Number(body.coterie_xp) || 0) : 0;
       if (startingXp > 0) {
@@ -401,29 +450,65 @@ module.exports = async function (fastify, opts) {
    * ================================================================ */
 
   fastify.put('/api/coteries/:id', { preHandler: [authRequired] }, async (req, reply) => {
-    try {
-      const id = Number(req.params.id);
-      const { allowed, admin } = await access(req, id);
-      if (!allowed) return reply.status(403).json({ error: 'Not allowed' });
+    const id = Number(req.params.id);
+    const { allowed, admin } = await access(req, id);
+    if (!allowed) return reply.status(403).json({ error: 'Not allowed' });
 
-      const [[existing]] = await pool.query('SELECT * FROM coteries WHERE id=?', [id]);
-      if (!existing) return reply.status(404).json({ error: 'Not found' });
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const [[existing]] = await conn.query('SELECT * FROM coteries WHERE id=? FOR UPDATE', [id]);
+      if (!existing) {
+        await conn.rollback();
+        return reply.status(404).json({ error: 'Not found' });
+      }
 
       const body = req.body || {};
-      const members = await loadMembers(null, id);
+      const members = await loadMembers(conn, id);
 
       // Only an ST may flip the override; members inherit whatever is set.
       const rulesOverride = admin && body.rules_override !== undefined
         ? !!body.rules_override
         : !!existing.rules_override;
 
+      const existingBonus = Math.max(0, Math.trunc(Number(existing.bonus_points) || 0));
+      const requestedBonus = body.bonus_points !== undefined
+        ? Math.max(0, Math.trunc(Number(body.bonus_points) || 0))
+        : existingBonus;
+      const deltaBonus = requestedBonus - existingBonus;
+      const deltaCost = deltaBonus * (rules.XP_PER_DOT || 3);
+
+      if (deltaBonus < 0 && !rulesOverride) {
+        await conn.rollback();
+        return reply.status(400).json({ error: 'Contributed advantage dots cannot be reduced without Storyteller override.' });
+      }
+
+      let editorChar = null;
+      if (deltaBonus > 0 && !rulesOverride) {
+        const [[ch]] = await conn.query(
+          'SELECT id, name, xp FROM characters WHERE user_id=? ORDER BY id ASC LIMIT 1 FOR UPDATE',
+          [req.user.id]
+        );
+        if (!ch) {
+          await conn.rollback();
+          return reply.status(400).json({ error: 'You need a character sheet to contribute advantage dots to a coterie.' });
+        }
+        if ((Number(ch.xp) || 0) < deltaCost) {
+          await conn.rollback();
+          return reply.status(400).json({
+            error: `Not enough personal XP to contribute ${deltaBonus} more dots (need ${deltaCost}, have ${ch.xp || 0}).`,
+          });
+        }
+        editorChar = ch;
+      }
+
       const merged = {
         name: body.name !== undefined ? body.name : existing.name,
         memberCount: members.length,
         pointsPerMember: body.points_per_member !== undefined
           ? body.points_per_member : existing.points_per_member,
-        bonusPoints: body.bonus_points !== undefined
-          ? body.bonus_points : existing.bonus_points,
+        bonusPoints: requestedBonus,
         // Server-owned: only /purchase and /contribute move it.
         advancementDots: existing.advancement_dots,
         domainId: body.domain_id !== undefined ? body.domain_id : existing.domain_id,
@@ -441,6 +526,7 @@ module.exports = async function (fastify, opts) {
 
       const check = rules.validateCoterie(merged);
       if (check.errors.length) {
+        await conn.rollback();
         return reply.status(400).json({ error: check.errors[0], errors: check.errors });
       }
 
@@ -486,14 +572,42 @@ module.exports = async function (fastify, opts) {
         const delta = target - Number(existing.coterie_xp || 0);
         fields.push('coterie_xp=?');
         params.push(target);
-        await pool.query(
+        await conn.query(
           `INSERT INTO coterie_xp_log (coterie_id, user_id, kind, bank_delta, note)
            VALUES (?,?,?,?,?)`,
           [id, req.user.id, 'adjust', delta, 'Set directly by Storyteller']
         );
       }
 
-      await pool.query(`UPDATE coteries SET ${fields.join(', ')} WHERE id=?`, [...params, id]);
+      await conn.query(`UPDATE coteries SET ${fields.join(', ')} WHERE id=?`, [...params, id]);
+
+      if (editorChar && deltaCost > 0) {
+        await conn.query('UPDATE characters SET xp = xp - ? WHERE id=?', [deltaCost, editorChar.id]);
+        await conn.query(
+          `INSERT INTO xp_log (character_id, action, target, from_level, to_level, cost, payload, actor_id)
+           VALUES (?,?,?,?,?,?,?,?)`,
+          [
+            editorChar.id, 'coterie_bonus_points',
+            `Coterie update: ${merged.name}`,
+            null, null, deltaCost,
+            JSON.stringify({ coterie_id: id, bonus_points: requestedBonus, delta: deltaBonus }),
+            req.user.id,
+          ]
+        ).catch(() => {});
+        await conn.query(
+          `INSERT INTO coterie_xp_log
+            (coterie_id, user_id, kind, bank_delta, personal_delta, character_id,
+             target_type, target_key, target_name, from_dots, to_dots, note)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [
+            id, req.user.id, 'spend', 0, -deltaCost, editorChar.id,
+            'bonus_points', 'update_bonus', 'Contributed Advantage dots', existingBonus, requestedBonus,
+            `Contributed ${deltaBonus} dot(s) (${deltaCost} XP) by ${editorChar.name || 'member'}`.slice(0, 500),
+          ]
+        );
+      }
+
+      await conn.commit();
 
       const [[row]] = await pool.query('SELECT * FROM coteries WHERE id=?', [id]);
       reply.send({
@@ -502,8 +616,11 @@ module.exports = async function (fastify, opts) {
         warnings: check.warnings,
       });
     } catch (e) {
+      await conn.rollback().catch(() => {});
       log.err('Update coterie failed', { message: e.message, stack: e.stack });
       reply.status(500).json({ error: 'Failed to update coterie' });
+    } finally {
+      conn.release();
     }
   });
 
@@ -810,6 +927,7 @@ module.exports = async function (fastify, opts) {
         coterie: presentCoterie(updated, members),
         members,
         spent: { cost, from_bank: fromBank, from_personal: fromPersonal },
+        remaining_personal_xp: character ? (Number(character.xp) - fromPersonal) : null,
         warnings: check.warnings,
       });
     } catch (e) {
