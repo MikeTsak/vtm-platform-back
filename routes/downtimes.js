@@ -872,6 +872,9 @@ module.exports = async function (fastify, opts) {
         if (!to) to = endOfMonth();
       }
 
+      const cycleNum = parseInt(String(targetCycle?.id || '').replace(/\D/g, ''), 10);
+      const targetCycleIndex = !isNaN(cycleNum) && cycleNum > 0 ? cycleNum : 0;
+
       const [rows] = await pool.query(
         `SELECT 
            c.id AS character_id, 
@@ -881,7 +884,8 @@ module.exports = async function (fastify, opts) {
            c.user_id,
            u.display_name AS player_name, 
            u.email,
-           COALESCE(dt.submitted_count, 0) AS submitted_count
+           COALESCE(dt.submitted_count, 0) AS submitted_count,
+           COALESCE(f.has_fed, 0) AS has_fed
          FROM characters c
          JOIN users u ON c.user_id = u.id
          LEFT JOIN (
@@ -891,13 +895,19 @@ module.exports = async function (fastify, opts) {
              AND created_at >= ? AND created_at <= ?
            GROUP BY character_id
          ) dt ON dt.character_id = c.id
+         LEFT JOIN (
+           SELECT character_id, 1 AS has_fed
+           FROM feedings
+           WHERE cycle_index = ? AND status = 'resolved'
+           GROUP BY character_id
+         ) f ON f.character_id = c.id
          WHERE COALESCE(c.is_ex, 0) = 0 
            AND COALESCE(c.is_deceased, 0) = 0
            AND COALESCE(c.is_hidden, 0) = 0
            AND COALESCE(c.is_left, 0) = 0
            AND COALESCE(dt.submitted_count, 0) < 3
          ORDER BY c.name ASC`,
-        [from, to]
+        [from, to, targetCycleIndex]
       );
 
       const owingCharacters = rows.map(r => {
@@ -920,7 +930,8 @@ module.exports = async function (fastify, opts) {
           predator_type: predatorType,
           default_feeding_type: defaultFeeding,
           submitted_count: submitted,
-          owed_count: Math.max(0, 3 - submitted)
+          owed_count: Math.max(0, 3 - submitted),
+          has_fed: Boolean(r.has_fed)
         };
       });
 
