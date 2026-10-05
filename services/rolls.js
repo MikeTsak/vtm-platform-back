@@ -82,13 +82,28 @@ function mechAmount(token, sheet) {
 }
 
 function ownsPower(sheet, powerId) {
+  const target = String(powerId || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!target) return false;
   return Object.values(sheet?.disciplinePowers || {}).some(list =>
-    (Array.isArray(list) ? list : []).some(p => String(p?.id ?? p) === String(powerId)));
+    (Array.isArray(list) ? list : []).some(p => {
+      const pid = String(p?.id || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const pname = String(p?.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const pstr = (typeof p === 'string' ? p : '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      return pid === target || pname === target || pstr === target;
+    }));
 }
 
 function findPowerAnywhere(powerId) {
+  const norm = String(powerId || '').toLowerCase().replace(/[^a-z0-9]/g, '_');
+  const target = norm.replace(/[^a-z0-9]/g, '');
   for (const [discipline, d] of Object.entries(CATALOG.disciplines)) {
     if (d.powers[powerId]) return { discipline, ...d.powers[powerId] };
+    if (d.powers[norm]) return { discipline, ...d.powers[norm] };
+    for (const [pid, p] of Object.entries(d.powers)) {
+      if (pid.toLowerCase().replace(/[^a-z0-9]/g, '') === target) {
+        return { discipline, ...p };
+      }
+    }
   }
   return null;
 }
@@ -99,21 +114,20 @@ function findPowerAnywhere(powerId) {
  * parts is the human-readable breakdown that goes into the roll's note.
  */
 function traitPool({ sheet, clan, traits, specialty, ownSpecialtyOnly = true, effects = [], effectIds = [], powerIds = [], situational, ignoreImpairment, surge }) {
-  const [t1, t2] = traits;
-  if (!isTrait(t1) || (t2 && !isTrait(t2))) throw Object.assign(new Error('Unknown trait'), { status: 400 });
-  const parts = [`${t1}${t2 ? ` + ${t2}` : ''}`];
-  let pool = traitValue(sheet, t1) + (t2 ? traitValue(sheet, t2) : 0);
+  if (!traits || !traits.length || traits.some(t => !isTrait(t))) throw Object.assign(new Error('Unknown trait'), { status: 400 });
+  const parts = [traits.join(' + ')];
+  let pool = traits.reduce((sum, t) => sum + traitValue(sheet, t), 0);
   const bp = bloodPotency(sheet, clan);
   const tr = trackers(sheet);
   const frenzied = !!sheet?.frenzyState;
 
-  if ((isDiscipline(t1) || isDiscipline(t2)) && BP.disciplineBonus[bp]) {
+  if (traits.some(isDiscipline) && BP.disciplineBonus[bp]) {
     pool += BP.disciplineBonus[bp];
     parts.push(`BP Disc +${BP.disciplineBonus[bp]}`);
   }
   if (specialty) {
     // A Storyteller-granted specialty is taken as given; a player's own must exist on one of the skills.
-    const hasOne = !ownSpecialtyOnly || [t1, t2].some(t => {
+    const hasOne = !ownSpecialtyOnly || traits.some(t => {
       const node = sheet?.skills?.[t];
       return node && typeof node === 'object' && Array.isArray(node.specialties) && node.specialties.length > 0;
     });
@@ -142,8 +156,8 @@ function traitPool({ sheet, clan, traits, specialty, ownSpecialtyOnly = true, ef
   // Ignored in frenzy, or for a spent Willpower (charged by the caller).
   let impaired = 0;
   if (!frenzied) {
-    if (tr.healthImpaired && (PHYSICAL.has(t1) || PHYSICAL.has(t2))) impaired += 2;
-    if (tr.willpowerImpaired && (MENTAL_SOCIAL.has(t1) || MENTAL_SOCIAL.has(t2))) impaired += 2;
+    if (tr.healthImpaired && traits.some(t => PHYSICAL.has(t))) impaired += 2;
+    if (tr.willpowerImpaired && traits.some(t => MENTAL_SOCIAL.has(t))) impaired += 2;
   }
   if (impaired && !ignoreImpairment) { pool -= impaired; parts.push(`Impaired −${impaired}`); }
   if (tr.degeneration && !frenzied) { pool -= 2; parts.push('Degeneration −2'); }
