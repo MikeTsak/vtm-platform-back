@@ -4,7 +4,7 @@
 // Storyteller broadcast channel. Realtime nudges go through fastify.io.
 const { insertRoll, formatRoll } = require('../services/rolls');
 const { rollD10 } = require('../services/dice');
-const { getSessionInternalId } = require('../services/liveSession');
+const { getSessionInternalId, emitSessionRefresh } = require('../services/liveSession');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, moderateLimiter } = opts;
@@ -46,7 +46,7 @@ module.exports = async function (fastify, opts) {
 
       const internalId = rows[0].id;
       // Calculate total duration
-      const duration = Math.floor((Date.now() - new Date(rows[0].created_at).getTime()) / 1000);
+      const duration = Math.max(0, Math.floor((Date.now() - new Date(rows[0].created_at).getTime()) / 1000));
 
       await pool.query(
         "UPDATE live_sessions SET status='ended', ended_at=NOW(), duration_seconds=?, ended_by=? WHERE id=?",
@@ -54,6 +54,7 @@ module.exports = async function (fastify, opts) {
       );
 
       log.adm('Live Session Ended', { session: req.params.id, duration_seconds: duration });
+      await emitSessionRefresh(fastify.io, internalId);
       reply.send({ ok: true, duration_seconds: duration });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to end session' });
@@ -91,8 +92,9 @@ module.exports = async function (fastify, opts) {
     const s = rows[0];
     try { s.metadata = typeof s.metadata === 'string' ? JSON.parse(s.metadata) : (s.metadata || {}); } catch (e) { s.metadata = {}; }
     if (s.status === 'active') {
-      s.duration_seconds = Math.floor((Date.now() - new Date(s.created_at).getTime()) / 1000);
+      s.duration_seconds = Math.max(0, Math.floor((Date.now() - new Date(s.created_at).getTime()) / 1000));
     }
+    s.server_time = Date.now();
     reply.send({ session: s });
   });
 
@@ -101,9 +103,22 @@ module.exports = async function (fastify, opts) {
     const internalId = await getSessionInternalId(req.params.id);
     if (!internalId) return reply.status(404).json({ error: 'Session not found' });
 
-  const { characterId } = req.body;
-    await pool.query('INSERT IGNORE INTO live_session_participants (session_id, user_id, character_id) VALUES (?, ?, ?)',
-      [internalId, req.user.id, characterId]);
+    let { characterId } = req.body || {};
+    if (!characterId) {
+      const [cRows] = await pool.query('SELECT id FROM characters WHERE user_id=? ORDER BY id DESC LIMIT 1', [req.user.id]);
+      if (cRows.length) characterId = cRows[0].id;
+    }
+
+    await pool.query(
+      `INSERT INTO live_session_participants (session_id, user_id, character_id)
+       VALUES (?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         character_id = COALESCE(VALUES(character_id), character_id),
+         joined_at = CURRENT_TIMESTAMP`,
+      [internalId, req.user.id, characterId || null]
+    );
+
+    await emitSessionRefresh(fastify.io, internalId);
     reply.send({ ok: true });
   });
 
@@ -144,7 +159,7 @@ module.exports = async function (fastify, opts) {
         rollType: roll_type, note, isHidden: !!is_hidden,
         extra: { ...(disc ? { disc: String(disc).slice(0, 60) } : {}), ...(power_name ? { power_name: String(power_name).slice(0, 120) } : {}) },
       });
-      if (req.server.io) req.server.io.to(`session_${req.params.id}`).emit('refresh_session');
+      await emitSessionRefresh(fastify.io, internalId);
       reply.send({ ok: true });
     } catch (e) {
       log.err('Failed to log live session event', { message: e.message });
@@ -154,12 +169,23 @@ module.exports = async function (fastify, opts) {
 
   fastify.get('/api/live-session/:id/players', { preHandler: [authRequired] }, async (req, reply) => {
     const internalId = await getSessionInternalId(req.params.id);
+    if (!internalId) return reply.status(404).json({ error: 'Session not found' });
     const [players] = await pool.query(`
-    SELECT c.id, c.name, c.clan, c.sheet, c.user_id
-    FROM live_session_participants lsp
-    JOIN characters c ON lsp.character_id = c.id
-    WHERE lsp.session_id = ?
-  `, [internalId]);
+      SELECT 
+        lsp.session_id,
+        lsp.user_id,
+        COALESCE(lsp.character_id, c.id) AS character_id,
+        COALESCE(c.id, lsp.character_id, lsp.user_id) AS id,
+        COALESCE(c.name, u.display_name, 'Player') AS name,
+        COALESCE(c.clan, 'Mortal') AS clan,
+        c.sheet,
+        u.display_name AS user_name
+      FROM live_session_participants lsp
+      LEFT JOIN characters c ON lsp.character_id = c.id
+      LEFT JOIN users u ON lsp.user_id = u.id
+      WHERE lsp.session_id = ?
+      ORDER BY lsp.joined_at ASC
+    `, [internalId]);
     reply.send({ players });
   });
 
@@ -169,9 +195,7 @@ module.exports = async function (fastify, opts) {
       const internalId = await getSessionInternalId(req.params.id);
       const { metadata } = req.body;
       await pool.query('UPDATE live_sessions SET metadata = ? WHERE id = ?', [JSON.stringify(metadata || {}), internalId]);
-      if (req.server.io) {
-        req.server.io.to(`session_${req.params.id}`).emit('refresh_session');
-      }
+      await emitSessionRefresh(fastify.io, internalId);
       reply.send({ ok: true });
     } catch (e) {
       console.error(e);
@@ -214,9 +238,7 @@ module.exports = async function (fastify, opts) {
       await pool.query('INSERT INTO live_session_broadcasts (session_id, message) VALUES (?, ?)',
         [internalId, builder(name)]);
 
-      if (req.server.io) {
-        req.server.io.to(`session_${req.params.id}`).emit('refresh_session');
-      }
+      await emitSessionRefresh(fastify.io, internalId);
 
       reply.send({ ok: true });
     } catch (e) {
@@ -231,9 +253,7 @@ module.exports = async function (fastify, opts) {
     await pool.query('INSERT INTO live_session_broadcasts (session_id, message, target_character_id) VALUES (?, ?, ?)',
       [internalId, req.body.message, req.body.target_character_id || null]);
 
-    if (req.server.io) {
-      req.server.io.to(`session_${req.params.id}`).emit('refresh_session');
-    }
+    await emitSessionRefresh(fastify.io, internalId);
 
     reply.send({ ok: true });
   });
@@ -365,9 +385,7 @@ module.exports = async function (fastify, opts) {
 
       await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), charId]);
 
-      if (req.server.io) {
-        req.server.io.to(`session_${req.params.id}`).emit('refresh_session');
-      }
+      await emitSessionRefresh(fastify.io, req.params.id);
 
       reply.send({ ok: true });
     } catch (e) {

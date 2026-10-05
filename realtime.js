@@ -13,7 +13,7 @@ const { log } = require('./logger');
 const { corsOrigin } = require('./config/cors');
 const { COOKIE_NAME } = require('./utils/authCookie');
 const { getTokenVersion } = require('./utils/tokenVersion');
-const { getSessionInternalId } = require('./services/liveSession');
+const { getSessionInternalId, getSessionRow } = require('./services/liveSession');
 
 function attachRealtime(fastify) {
   const io = new Server(fastify.server, {
@@ -118,22 +118,24 @@ function attachRealtime(fastify) {
       try {
         if (!sessionId) return;
 
+        const session = await getSessionRow(sessionId);
+        if (!session) return;
+
         // STs (admin/courtuser) may join any session; everyone else must be a registered participant
-        if (socket.user.role === 'admin' || socket.user.role === 'courtuser') {
-          socket.join(`session_${sessionId}`);
-          return;
+        const isStaff = socket.user.role === 'admin' || socket.user.role === 'courtuser';
+        if (!isStaff) {
+          const [rows] = await pool.query(
+            'SELECT 1 FROM live_session_participants WHERE session_id = ? AND user_id = ? LIMIT 1',
+            [session.id, socket.user.id]
+          );
+          if (rows.length === 0) return;
         }
 
-        const internalId = await getSessionInternalId(sessionId);
-        if (!internalId) return;
-
-        const [rows] = await pool.query(
-          'SELECT 1 FROM live_session_participants WHERE session_id = ? AND user_id = ? LIMIT 1',
-          [internalId, socket.user.id]
-        );
-        if (rows.length > 0) {
-          socket.join(`session_${sessionId}`);
+        socket.join(`session_${session.id}`);
+        if (session.session_code && String(session.session_code) !== String(session.id)) {
+          socket.join(`session_${session.session_code}`);
         }
+        socket.join(`session_${sessionId}`);
       } catch (e) {
         log.err('Socket join_session failed', { error: e.message });
       }
