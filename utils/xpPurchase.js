@@ -306,7 +306,7 @@ function sanitizeEntry(e, id) {
  * pass the balance check or overwrite each other's sheet.
  * @returns {Promise<{row:object, cost:number}>}
  */
-async function runPurchase({ pool, table, id, body, isAdmin, unlockedTo, logXp = true }) {
+async function runPurchase({ pool, table, id, body, isAdmin, unlockedTo, logXp = true, actorId = null }) {
   if (!['characters', 'npcs'].includes(table)) throw new Error('bad table');
   const conn = await pool.getConnection();
   try {
@@ -317,13 +317,25 @@ async function runPurchase({ pool, table, id, body, isAdmin, unlockedTo, logXp =
     const result = await applyPurchase({ sheet: row.sheet, clan: row.clan, body, isAdmin, unlockedTo });
     if (num(row.xp) < result.cost) fail(400, `Not enough XP (need ${result.cost}, have ${num(row.xp)})`);
 
-    await conn.query(`UPDATE ${table} SET xp = xp - ?, sheet = ? WHERE id=?`, [result.cost, JSON.stringify(result.sheet), id]);
-    if (logXp && table === 'characters') {
-      await conn.query(
-        'INSERT INTO xp_log (character_id, action, target, from_level, to_level, cost, payload) VALUES (?,?,?,?,?,?,?)',
-        [id, body.type, body.target || null, result.from, result.to, result.cost,
-          JSON.stringify({ disciplineKind: body.disciplineKind, powerId: body.powerId, specialty: body.specialty, by_admin: !!isAdmin })]
-      );
+    const nextSheetJson = JSON.stringify(result.sheet);
+    await conn.query(`UPDATE ${table} SET xp = xp - ?, sheet = ? WHERE id=?`, [result.cost, nextSheetJson, id]);
+    if (table === 'characters') {
+      if (logXp) {
+        await conn.query(
+          'INSERT INTO xp_log (character_id, action, target, from_level, to_level, cost, payload, actor_id) VALUES (?,?,?,?,?,?,?,?)',
+          [id, body.type, body.target || null, result.from, result.to, result.cost,
+            JSON.stringify({ disciplineKind: body.disciplineKind, powerId: body.powerId, specialty: body.specialty, by_admin: !!isAdmin }),
+            actorId || null]
+        );
+      }
+      try {
+        await conn.query(
+          'INSERT INTO character_sheet_versions (character_id, editor_id, sheet, change_summary) VALUES (?, ?, ?, ?)',
+          [id, actorId || null, nextSheetJson, `XP purchase: ${body.type || 'upgrade'} (${result.cost} XP)`]
+        );
+      } catch (err) {
+        // Non-fatal if table missing
+      }
     }
     await conn.commit();
 

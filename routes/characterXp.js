@@ -33,7 +33,7 @@ module.exports = async function (fastify, opts) {
     };
 
     try {
-      const { row, cost } = await runPurchase({ pool, table: 'characters', id: ch.id, body: req.body || {}, isAdmin: false, unlockedTo });
+      const { row, cost } = await runPurchase({ pool, table: 'characters', id: ch.id, body: req.body || {}, isAdmin: false, unlockedTo, actorId: req.user.id });
       log.xp('XP spend complete', { user_id: req.user.id, type: req.body?.type, target: req.body?.target, cost, remaining_xp: row?.xp });
       return reply.send({ character: row, spent: cost });
     } catch (e) {

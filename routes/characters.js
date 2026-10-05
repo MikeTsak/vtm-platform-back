@@ -288,6 +288,17 @@ module.exports = async function (fastify, opts) {
     vals.push(charId);
     await pool.query(`UPDATE characters SET ${fields.join(', ')} WHERE id=?`, vals);
 
+    if (sheet !== undefined) {
+      try {
+        await pool.query(
+          'INSERT INTO character_sheet_versions (character_id, editor_id, sheet, change_summary) VALUES (?, ?, ?, ?)',
+          [charId, req.user?.id || null, sheet ? JSON.stringify(sheet) : null, 'Admin character sheet edit']
+        );
+      } catch (err) {
+        // Non-fatal
+      }
+    }
+
     const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [charId]);
     const ch = out[0];
     if (ch) ch.sheet = parseSheet(ch.sheet);
@@ -372,9 +383,9 @@ module.exports = async function (fastify, opts) {
       const finalImage = await resolveItemImage(image, charId);
 
       const [r] = await pool.query(
-        `INSERT INTO inventory_items (character_id, name, item_type, description, mechanic_notes, quantity, image, researched) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [charId, name, item_type || 'Mundane', description || null, mechanic_notes || null, normaliseQty(quantity), finalImage, researched ? 1 : 0]
+        `INSERT INTO inventory_items (character_id, name, item_type, description, mechanic_notes, quantity, image, researched, granted_by) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [charId, name, item_type || 'Mundane', description || null, mechanic_notes || null, normaliseQty(quantity), finalImage, researched ? 1 : 0, req.user?.id || null]
       );
 
       const [[newItem]] = await pool.query('SELECT * FROM inventory_items WHERE id = ?', [r.insertId]);
@@ -745,10 +756,19 @@ module.exports = async function (fastify, opts) {
       delete sheetObj.allow_reset; // one re-roll per grant
 
       // Overwrite the character data and reset XP to 50
+      const rebuildSheetJson = JSON.stringify(sheetObj);
       await pool.query(
         'UPDATE characters SET name=?, clan=?, sheet=?, xp=50 WHERE id=?',
-        [name, clan, JSON.stringify(sheetObj), charId]
+        [name, clan, rebuildSheetJson, charId]
       );
+      try {
+        await pool.query(
+          'INSERT INTO character_sheet_versions (character_id, editor_id, sheet, change_summary) VALUES (?, ?, ?, ?)',
+          [charId, req.user?.id || null, rebuildSheetJson, 'Character rebuild']
+        );
+      } catch (err) {
+        // Non-fatal
+      }
 
       // Fetch and return the updated character
       const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [charId]);

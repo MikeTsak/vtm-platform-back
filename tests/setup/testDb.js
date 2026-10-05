@@ -56,7 +56,7 @@ async function truncateAll() {
   const p = getTestPool();
   await p.query('SET FOREIGN_KEY_CHECKS=0');
   const tables = [
-    'xp_log', 'xp_logs', 'inventory_items', 'character_inventory', 'retainers',
+    'character_sheet_versions', 'xp_log', 'xp_logs', 'inventory_items', 'character_inventory', 'retainers',
     'password_resets', 'characters', 'users',
   ];
   for (const table of tables) {

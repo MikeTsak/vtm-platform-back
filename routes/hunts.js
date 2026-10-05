@@ -203,11 +203,16 @@ module.exports = async function (fastify, opts) {
   // Approve or Reject a submission
   fastify.post('/api/admin/reviews/:submissionId/:action', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   const { submissionId, action } = req.params;
+    const { review_note, note } = req.body || {};
+    const reviewNote = review_note || note || null;
     const newStatus = action === 'approve' ? 'approved' : 'rejected';
 
     try {
       // 1. Update the submission status
-      await pool.query('UPDATE hunt_submissions SET status = ? WHERE id = ?', [newStatus, submissionId]);
+      await pool.query(
+        'UPDATE hunt_submissions SET status = ?, reviewed_by = ?, reviewed_at = NOW(), review_note = ? WHERE id = ?',
+        [newStatus, req.user?.id || null, reviewNote, submissionId]
+      );
 
       // 2. If the ST rejects it, we punish the player
       if (newStatus === 'rejected') {

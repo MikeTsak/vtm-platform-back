@@ -150,6 +150,9 @@ module.exports = async function (fastify, opts) {
     if (is_abaton !== undefined) {
       fields.push('is_abaton=?'); vals.push(is_abaton ? 1 : 0);
     }
+    if (owner_name !== undefined || owner_character_id !== undefined || owner_npc_id !== undefined) {
+      fields.push('assigned_by=?'); vals.push(req.user?.id || null);
+    }
 
     if (!fields.length) return reply.status(400).json({ error: 'Nothing to update' });
 
@@ -167,8 +170,8 @@ module.exports = async function (fastify, opts) {
         is_abaton: is_abaton ? 1 : 0
       };
       await pool.query(
-        'INSERT INTO domain_claims (division, owner_name, color, owner_character_id, owner_npc_id, is_abaton) VALUES (?,?,?,?,?,?)',
-        [division, base.owner_name, base.color, base.owner_character_id, base.owner_npc_id, base.is_abaton]
+        'INSERT INTO domain_claims (division, owner_name, color, owner_character_id, owner_npc_id, is_abaton, assigned_by) VALUES (?,?,?,?,?,?,?)',
+        [division, base.owner_name, base.color, base.owner_character_id, base.owner_npc_id, base.is_abaton, req.user?.id || null]
       );
     }
 
@@ -362,16 +365,16 @@ module.exports = async function (fastify, opts) {
       const [existingRow] = await pool.query('SELECT division FROM domain_claims WHERE division=?', [request.division]);
       if (existingRow.length) {
         await pool.query(
-          'UPDATE domain_claims SET owner_character_id=?, owner_npc_id=NULL, owner_name=?, color=?, claimed_at=NOW(), is_abaton=0 WHERE division=?',
-          [request.character_id, ownerName, color, request.division]
+          'UPDATE domain_claims SET owner_character_id=?, owner_npc_id=NULL, owner_name=?, color=?, claimed_at=NOW(), is_abaton=0, assigned_by=? WHERE division=?',
+          [request.character_id, ownerName, color, req.user?.id || null, request.division]
         );
       } else {
         // safety_rating starts NULL (Unknown) rather than the column's default
         // of 10 — a brand-new claim on virgin territory hasn't been vetted by
         // the Court yet, so it shouldn't silently read as "Secure".
         await pool.query(
-          'INSERT INTO domain_claims (division, owner_character_id, owner_name, color, safety_rating) VALUES (?,?,?,?,NULL)',
-          [request.division, request.character_id, ownerName, color]
+          'INSERT INTO domain_claims (division, owner_character_id, owner_name, color, safety_rating, assigned_by) VALUES (?,?,?,?,NULL,?)',
+          [request.division, request.character_id, ownerName, color, req.user?.id || null]
         );
       }
 
@@ -475,7 +478,7 @@ module.exports = async function (fastify, opts) {
         await pool.query(
           `UPDATE domain_claims
          SET previous_owner_name=?, previous_owner_character_id=?, previous_claimed_at=?,
-             owner_character_id=NULL, owner_npc_id=NULL, owner_name=NULL, color='#888888', is_abaton=0
+             owner_character_id=NULL, owner_npc_id=NULL, owner_name=NULL, color='#888888', is_abaton=0, assigned_by=NULL
          WHERE division=?`,
           [row.owner_name, row.owner_character_id, row.claimed_at, division]
         );
@@ -521,14 +524,14 @@ module.exports = async function (fastify, opts) {
       if (existingRow.length) {
         await pool.query(
           `UPDATE domain_claims
-         SET owner_character_id=?, owner_npc_id=?, owner_name=?, color=?, claimed_at=NOW(), is_abaton=0
+         SET owner_character_id=?, owner_npc_id=?, owner_name=?, color=?, claimed_at=NOW(), is_abaton=0, assigned_by=?
          WHERE division=?`,
-          [assignCharId, assignNpcId, ownerName, hex, division]
+          [assignCharId, assignNpcId, ownerName, hex, req.user?.id || null, division]
         );
       } else {
         await pool.query(
-          'INSERT INTO domain_claims (division, owner_character_id, owner_npc_id, owner_name, color, safety_rating) VALUES (?,?,?,?,?,NULL)',
-          [division, assignCharId, assignNpcId, ownerName, hex]
+          'INSERT INTO domain_claims (division, owner_character_id, owner_npc_id, owner_name, color, safety_rating, assigned_by) VALUES (?,?,?,?,?,NULL,?)',
+          [division, assignCharId, assignNpcId, ownerName, hex, req.user?.id || null]
         );
       }
 
@@ -557,7 +560,7 @@ module.exports = async function (fastify, opts) {
       await pool.query(
         `UPDATE domain_claims
        SET previous_owner_name=?, previous_owner_character_id=?, previous_claimed_at=?,
-           owner_character_id=NULL, owner_npc_id=NULL, owner_name=NULL, color='#888888', is_abaton=0
+           owner_character_id=NULL, owner_npc_id=NULL, owner_name=NULL, color='#888888', is_abaton=0, assigned_by=NULL
        WHERE division=?`,
         [row.owner_name, row.owner_character_id, row.claimed_at, division]
       );

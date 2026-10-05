@@ -304,10 +304,11 @@ module.exports = async function (fastify, opts) {
 
       const safeBody = sanitizeRichText(body); // strip active markup before persisting (XSS)
 
+      const isPriv = is_private ? 1 : 0;
       const [insertResult] = await pool.query(
         `INSERT INTO news_entries
-      (author_id, type, title, subtitle, body, theme, journalist_name, media_url, is_private)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (author_id, type, title, subtitle, body, theme, journalist_name, media_url, is_private, published_by, published_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           req.user.id,
           type,
@@ -317,7 +318,9 @@ module.exports = async function (fastify, opts) {
           theme || 'Neutral',
           journalist_name || null,
           media_url || null,
-          is_private ? 1 : 0
+          isPriv,
+          isPriv ? null : req.user.id,
+          isPriv ? null : new Date()
         ]
       );
 
@@ -512,7 +515,7 @@ module.exports = async function (fastify, opts) {
         return reply.send({ success: true, message: 'Already published' });
       }
 
-      await pool.query('UPDATE news_entries SET is_private = 0 WHERE id = ?', [req.params.id]);
+      await pool.query('UPDATE news_entries SET is_private = 0, published_by = ?, published_at = NOW() WHERE id = ?', [req.user.id, req.params.id]);
 
       // We can reuse the same broadcast logic as the POST /api/news/:id/broadcast or just trigger it via fetch.
       // Or we can just let the admin click the "Broadcast" button from the UI after publishing.

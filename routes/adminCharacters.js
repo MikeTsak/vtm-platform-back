@@ -78,6 +78,17 @@ module.exports = async function (fastify, opts) {
     vals.push(id);
     await pool.query(`UPDATE characters SET ${fields.join(', ')} WHERE id=?`, vals);
 
+    if (sheet !== undefined) {
+      try {
+        await pool.query(
+          'INSERT INTO character_sheet_versions (character_id, editor_id, sheet, change_summary) VALUES (?, ?, ?, ?)',
+          [id, req.user?.id || null, jsonStr, 'Admin character sheet update']
+        );
+      } catch (err) {
+        // Non-fatal
+      }
+    }
+
     const [rows] = await pool.query('SELECT * FROM characters WHERE id=?', [id]);
     const ch = rows[0];
     if (ch) ch.sheet = parseSheet(ch.sheet);

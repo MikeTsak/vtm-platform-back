@@ -49,8 +49,8 @@ module.exports = async function (fastify, opts) {
       const duration = Math.floor((Date.now() - new Date(rows[0].created_at).getTime()) / 1000);
 
       await pool.query(
-        "UPDATE live_sessions SET status='ended', ended_at=NOW(), duration_seconds=? WHERE id=?",
-        [duration, internalId]
+        "UPDATE live_sessions SET status='ended', ended_at=NOW(), duration_seconds=?, ended_by=? WHERE id=?",
+        [duration, req.user?.id || null, internalId]
       );
 
       log.adm('Live Session Ended', { session: req.params.id, duration_seconds: duration });

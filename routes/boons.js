@@ -2,6 +2,23 @@
 //
 // The boon ledger: who owes what to whom. Court officers write, everyone reads.
 
+const BOON_SELECT_SQL = `
+  SELECT b.*,
+    CASE 
+      WHEN u_rec.id = 3 OR LOWER(TRIM(u_rec.display_name)) = 'admin' THEN 'Mike'
+      WHEN u_rec.id = 5 OR LOWER(TRIM(u_rec.display_name)) = 'st kikos' THEN 'Kikos'
+      ELSE u_rec.display_name 
+    END AS recorded_by_name,
+    CASE 
+      WHEN u_res.id = 3 OR LOWER(TRIM(u_res.display_name)) = 'admin' THEN 'Mike'
+      WHEN u_res.id = 5 OR LOWER(TRIM(u_res.display_name)) = 'st kikos' THEN 'Kikos'
+      ELSE u_res.display_name 
+    END AS resolved_by_name
+  FROM boons b
+  LEFT JOIN users u_rec ON u_rec.id = b.recorded_by
+  LEFT JOIN users u_res ON u_res.id = b.resolved_by
+`;
+
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, requireCourt } = opts;
 
@@ -32,7 +49,7 @@ module.exports = async function (fastify, opts) {
 
       // Assuming a 'boons' table exists
       const [boons] = await pool.query(
-        `SELECT * FROM boons ORDER BY created_at DESC`
+        `${BOON_SELECT_SQL} ORDER BY b.created_at DESC`
       );
       reply.send({ boons });
     } catch (e) {
@@ -51,12 +68,12 @@ module.exports = async function (fastify, opts) {
       }
 
       const [r] = await pool.query(
-        `INSERT INTO boons (from_name, to_name, level, status, description, created_at, date_incurred) 
-    VALUES (?, ?, ?, ?, ?, NOW(), NOW())`,
-        [from_name, to_name, level, status, description || null]
+        `INSERT INTO boons (from_name, to_name, level, status, description, created_at, date_incurred, recorded_by) 
+    VALUES (?, ?, ?, ?, ?, NOW(), NOW(), ?)`,
+        [from_name, to_name, level, status, description || null, req.user?.id || null]
       );
 
-      const [[boon]] = await pool.query('SELECT * FROM boons WHERE id=?', [r.insertId]);
+      const [[boon]] = await pool.query(`${BOON_SELECT_SQL} WHERE b.id=?`, [r.insertId]);
       log.adm('Boon created', { id: r.insertId, by_user_id: req.user.id });
       reply.status(201).json({ boon });
 
@@ -88,7 +105,18 @@ module.exports = async function (fastify, opts) {
       if (from_name !== undefined) { fields.push('from_name=?'); vals.push(from_name); }
       if (to_name !== undefined) { fields.push('to_name=?'); vals.push(to_name); }
       if (level !== undefined) { fields.push('level=?'); vals.push(level); }
-      if (status !== undefined) { fields.push('status=?'); vals.push(status); }
+      if (status !== undefined) {
+        fields.push('status=?');
+        vals.push(status);
+        if (status !== 'Owed') {
+          fields.push('resolved_by=?');
+          vals.push(req.user?.id || null);
+          fields.push('resolved_at=NOW()');
+        } else {
+          fields.push('resolved_by=NULL');
+          fields.push('resolved_at=NULL');
+        }
+      }
       if (description !== undefined) { fields.push('description=?'); vals.push(description); }
 
       if (!fields.length) {
@@ -98,7 +126,7 @@ module.exports = async function (fastify, opts) {
       vals.push(id);
       await pool.query(`UPDATE boons SET ${fields.join(', ')} WHERE id=?`, vals);
 
-      const [[boon]] = await pool.query('SELECT * FROM boons WHERE id=?', [id]);
+      const [[boon]] = await pool.query(`${BOON_SELECT_SQL} WHERE b.id=?`, [id]);
       log.adm('Boon updated', { id, by_user_id: req.user.id });
       reply.send({ boon });
 
@@ -124,7 +152,7 @@ module.exports = async function (fastify, opts) {
   // --- ADMIN NEW FEATURES ---
   fastify.get('/api/admin/boons', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const [boons] = await pool.query('SELECT * FROM boons ORDER BY created_at DESC');
+      const [boons] = await pool.query(`${BOON_SELECT_SQL} ORDER BY b.created_at DESC`);
       reply.send({ boons });
     } catch (e) {
       log.err('Admin boons fetch failed', { message: e.message });

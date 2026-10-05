@@ -24,6 +24,12 @@ const SUBMIT_CLOSED_MESSAGES = {
 const FINAL_STATUSES = ['resolved', 'resolved in scene'];
 const actionName = (title) => String(title || 'your action').replace(/^\[PROJECT\]\s*/, '');
 
+const RESOLVER_NAME_SQL = `CASE 
+  WHEN res.id = 3 OR LOWER(TRIM(res.display_name)) = 'admin' THEN 'Mike'
+  WHEN res.id = 5 OR LOWER(TRIM(res.display_name)) = 'st kikos' THEN 'Kikos'
+  ELSE res.display_name 
+END`;
+
 // Push to the player who owns a downtime ("system" category, which players switch on in their sheet).
 async function notifyOwner(pool, downtime, title, body) {
   const [[row]] = await pool.query('SELECT user_id FROM characters WHERE id = ?', [downtime.character_id]);
@@ -218,7 +224,11 @@ module.exports = async function (fastify, opts) {
     }
 
     const [rows] = await pool.query(
-      'SELECT * FROM downtimes WHERE character_id=? ORDER BY created_at DESC',
+      `SELECT d.*, ${RESOLVER_NAME_SQL} AS resolved_by_name
+       FROM downtimes d
+       LEFT JOIN users res ON res.id = d.resolved_by
+       WHERE d.character_id=?
+       ORDER BY d.created_at DESC`,
       [char[0].id]
     );
 
@@ -318,6 +328,7 @@ module.exports = async function (fastify, opts) {
       if (pendingRelease) {
         r.gm_resolution = null;
         r.gm_notes = null;
+        r.resolved_by_name = null;
       }
 
       if (r.status && r.status.toLowerCase().startsWith('approved')) {
@@ -479,18 +490,31 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/admin/downtimes', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const [rows] = await pool.query(
       `SELECT d.*, c.user_id, c.name AS char_name, c.clan, u.display_name AS player_name, u.email,
+              ${RESOLVER_NAME_SQL} AS resolved_by_name,
               (u.avatar_url IS NOT NULL OR u.avatar_url_thumb IS NOT NULL) AS has_avatar
      FROM downtimes d
      JOIN characters c ON c.id=d.character_id
      JOIN users u ON u.id=c.user_id
+     LEFT JOIN users res ON res.id=d.resolved_by
      ORDER BY d.created_at DESC`
     );
+    const [adminRows] = await pool.query(
+      `SELECT id, 
+              CASE 
+                WHEN id = 3 OR LOWER(TRIM(display_name)) = 'admin' THEN 'Mike'
+                WHEN id = 5 OR LOWER(TRIM(display_name)) = 'st kikos' THEN 'Kikos'
+                ELSE display_name 
+              END AS display_name
+       FROM users 
+       WHERE role = 'admin' 
+       ORDER BY display_name ASC`
+    );
     log.adm('Admin downtimes list', { count: rows.length });
-    reply.send({ downtimes: rows });
+    reply.send({ downtimes: rows, admins: adminRows });
   });
 
   fastify.patch('/api/admin/downtimes/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
-    const { status, gm_notes, gm_resolution, scene_id, scene_title } = req.body;
+    const { status, gm_notes, gm_resolution, scene_id, scene_title, resolved_by } = req.body;
     const allowed = [
       'submitted',
       'approved',
@@ -525,8 +549,22 @@ module.exports = async function (fastify, opts) {
     if (scene_id !== undefined) { fields.push('scene_id=?'); vals.push(scene_id || null); }
     if (scene_title !== undefined) { fields.push('scene_title=?'); vals.push(scene_title || null); }
 
-    // auto-set resolved_at when marking resolved
-    if (status === 'resolved') {
+    // auto-set resolved_at and resolved_by when marking resolved
+    const isNowResolved = normalizedStatus && FINAL_STATUSES.includes(normalizedStatus.toLowerCase());
+    const wasResolved = FINAL_STATUSES.includes(String(before.status || '').toLowerCase());
+
+    if (resolved_by !== undefined) {
+      fields.push('resolved_by=?');
+      vals.push(resolved_by || null);
+    } else if (isNowResolved && (!wasResolved || (typeof gm_resolution === 'string' && gm_resolution !== before.gm_resolution))) {
+      fields.push('resolved_by=?');
+      vals.push(req.user.id);
+    } else if (normalizedStatus === 'submitted') {
+      fields.push('resolved_by=?');
+      vals.push(null);
+    }
+
+    if (status === 'resolved' || status === 'Resolved in scene') {
       fields.push('resolved_at=?');
       vals.push(new Date());
     }
@@ -550,8 +588,14 @@ module.exports = async function (fastify, opts) {
     vals.push(req.params.id);
     await pool.query(`UPDATE downtimes SET ${fields.join(', ')} WHERE id=?`, vals);
 
-    const [rows] = await pool.query('SELECT * FROM downtimes WHERE id=?', [req.params.id]);
-    log.adm('Downtime updated', { id: req.params.id, fields });
+    const [rows] = await pool.query(
+      `SELECT d.*, ${RESOLVER_NAME_SQL} AS resolved_by_name
+       FROM downtimes d
+       LEFT JOIN users res ON res.id = d.resolved_by
+       WHERE d.id = ?`,
+      [req.params.id]
+    );
+    log.adm('Downtime updated', { id: req.params.id, admin_id: req.user.id, fields });
     reply.send({ downtime: rows[0] });
 
     // Player notifications (fire and forget, after the response).
@@ -604,6 +648,12 @@ module.exports = async function (fastify, opts) {
       fields.push('status=?');
       vals.push(status);
       fields.push('reopened_at=NULL');
+      if (status === 'Resolved in scene') {
+        fields.push('resolved_by=?');
+        vals.push(req.user.id);
+        fields.push('resolved_at=?');
+        vals.push(new Date());
+      }
     }
 
     if (!fields.length) return reply.status(400).json({ error: 'Nothing to update' });
@@ -613,7 +663,13 @@ module.exports = async function (fastify, opts) {
     vals.push(downtime_ids);
     await pool.query(`UPDATE downtimes SET ${fields.join(', ')} WHERE id IN (?)`, vals);
 
-    const [rows] = await pool.query('SELECT * FROM downtimes WHERE id IN (?)', [downtime_ids]);
+    const [rows] = await pool.query(
+      `SELECT d.*, ${RESOLVER_NAME_SQL} AS resolved_by_name
+       FROM downtimes d
+       LEFT JOIN users res ON res.id = d.resolved_by
+       WHERE d.id IN (?)`,
+      [downtime_ids]
+    );
     log.adm('Downtime scenes batch updated', { count: rows.length, scene_id, scene_title });
     reply.send({ downtimes: rows });
 
@@ -1032,12 +1088,19 @@ module.exports = async function (fastify, opts) {
         if (match) finalStatus = match;
       }
 
+      const isResolved = finalStatus === 'resolved' || finalStatus === 'Resolved in scene';
       const [insertRes] = await pool.query(
-        'INSERT INTO downtimes (character_id, title, feeding_type, body, status, is_read, is_released, created_at) VALUES (?, ?, ?, ?, ?, 0, 1, ?)',
-        [ch.id, finalTitle, defaultFeed || null, String(body).trim(), finalStatus, createdAt]
+        'INSERT INTO downtimes (character_id, title, feeding_type, body, status, resolved_by, resolved_at, is_read, is_released, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?)',
+        [ch.id, finalTitle, defaultFeed || null, String(body).trim(), finalStatus, isResolved ? req.user.id : null, isResolved ? createdAt : null, createdAt]
       );
 
-      const [[createdDt]] = await pool.query('SELECT * FROM downtimes WHERE id = ?', [insertRes.insertId]);
+      const [[createdDt]] = await pool.query(
+        `SELECT d.*, ${RESOLVER_NAME_SQL} AS resolved_by_name
+         FROM downtimes d
+         LEFT JOIN users res ON res.id = d.resolved_by
+         WHERE d.id = ?`,
+        [insertRes.insertId]
+      );
 
       log.adm('Admin recorded late downtime', {
         admin_id: req.user.id,

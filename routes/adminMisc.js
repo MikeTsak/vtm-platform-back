@@ -205,7 +205,7 @@ module.exports = async function (fastify, opts) {
         const [[{ unresolvedCount }]] = await pool.query('SELECT COUNT(*) as unresolvedCount FROM domain_problems WHERE domain_id=? AND resolved=0', [dom.id]);
         const totalPenalty = prob.penalty + Number(unresolvedCount);
 
-        await pool.query('INSERT INTO domain_problems (domain_id, problem_text) VALUES (?, ?)', [dom.id, prob.text]);
+        await pool.query('INSERT INTO domain_problems (domain_id, problem_text, created_by) VALUES (?, ?, ?)', [dom.id, prob.text, req.user.id]);
         await pool.query('UPDATE domain_claims SET safety_rating = GREATEST(safety_rating - ?, 0) WHERE division=?', [totalPenalty, dom.id]);
       }
 
@@ -222,7 +222,7 @@ module.exports = async function (fastify, opts) {
       const [[{ unresolvedCount }]] = await pool.query('SELECT COUNT(*) as unresolvedCount FROM domain_problems WHERE domain_id=? AND resolved=0', [domain_id]);
       const penalty = 2 + Number(unresolvedCount);
 
-      await pool.query('INSERT INTO domain_problems (domain_id, problem_text, is_custom) VALUES (?, ?, 1)', [domain_id, problem_text]);
+      await pool.query('INSERT INTO domain_problems (domain_id, problem_text, is_custom, created_by) VALUES (?, ?, 1, ?)', [domain_id, problem_text, req.user.id]);
       await pool.query('UPDATE domain_claims SET safety_rating = GREATEST(safety_rating - ?, 0) WHERE division=?', [penalty, domain_id]);
       reply.send({ ok: true });
     } catch (e) {
@@ -232,7 +232,7 @@ module.exports = async function (fastify, opts) {
 
   fastify.patch('/api/admin/domains/resolve-problem/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      await pool.query('UPDATE domain_problems SET resolved = 1 WHERE id=?', [req.params.id]);
+      await pool.query('UPDATE domain_problems SET resolved = 1, resolved_by = ?, resolved_at = NOW() WHERE id=?', [req.user.id, req.params.id]);
       reply.send({ ok: true });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to resolve problem' });
@@ -261,7 +261,16 @@ module.exports = async function (fastify, opts) {
       if (hunger !== undefined) sheet.hunger = Math.max(0, Math.min(5, Number(hunger)));
       // blood_potency is the key the sheet reads; keep the legacy camelCase copy in sync (same as liveSessions.js).
       if (bloodPotency !== undefined) sheet.blood_potency = sheet.bloodPotency = Math.max(0, Math.min(10, Number(bloodPotency)));
-      await pool.query('UPDATE characters SET sheet = ? WHERE id = ?', [JSON.stringify(sheet), id]);
+      const nextSheetJson = JSON.stringify(sheet);
+      await pool.query('UPDATE characters SET sheet = ? WHERE id = ?', [nextSheetJson, id]);
+      try {
+        await pool.query(
+          'INSERT INTO character_sheet_versions (character_id, editor_id, sheet, change_summary) VALUES (?, ?, ?, ?)',
+          [id, req.user.id, nextSheetJson, 'Blood web update (hunger/blood potency)']
+        );
+      } catch (err) {
+        // Non-fatal if table not present in partial test setups
+      }
       reply.send({ ok: true });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to update character' });

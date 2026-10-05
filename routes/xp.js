@@ -24,7 +24,7 @@ module.exports = async function (fastify, opts) {
   // sheet editor and the XP adjust route below.
   fastify.post('/api/admin/characters/:id/xp/spend', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const { row, cost } = await runPurchase({ pool, table: 'characters', id: req.params.id, body: req.body || {}, isAdmin: true });
+      const { row, cost } = await runPurchase({ pool, table: 'characters', id: req.params.id, body: req.body || {}, isAdmin: true, actorId: req.user.id });
       log.xp('XP spend complete (admin)', { char_id: req.params.id, admin_id: req.user.id, type: req.body?.type, target: req.body?.target, cost });
       return reply.send({ character: row, spent: cost });
     } catch (e) {
@@ -45,8 +45,8 @@ module.exports = async function (fastify, opts) {
     // NEW: Log this admin grant to your existing xp_log table
     try {
       await pool.query(
-        'INSERT INTO xp_log (character_id, action, target, cost, payload) VALUES (?, ?, ?, ?, ?)',
-        [req.params.id, 'admin_grant', req.body.reason || 'Admin XP Adjustment', -delta, JSON.stringify({ admin_id: req.user.id })]
+        'INSERT INTO xp_log (character_id, action, target, cost, payload, actor_id) VALUES (?, ?, ?, ?, ?, ?)',
+        [req.params.id, 'admin_grant', req.body.reason || 'Admin XP Adjustment', -delta, JSON.stringify({ admin_id: req.user.id }), req.user.id]
       );
     } catch (err) {
       console.error('Failed to save to xp_log:', err);
@@ -74,9 +74,9 @@ module.exports = async function (fastify, opts) {
       await conn.beginTransaction();
       const [result] = await conn.query('UPDATE characters SET xp = GREATEST(0, xp + ?) WHERE id IN (?)', [delta, ids]);
       await conn.query(`
-      INSERT INTO xp_log (character_id, action, target, cost, payload)
-      SELECT id, 'admin_bulk_grant', 'Bulk Session XP', ?, ? FROM characters WHERE id IN (?)
-    `, [-delta, JSON.stringify({ admin_id: req.user.id }), ids]);
+      INSERT INTO xp_log (character_id, action, target, cost, payload, actor_id)
+      SELECT id, 'admin_bulk_grant', 'Bulk Session XP', ?, ?, ? FROM characters WHERE id IN (?)
+    `, [-delta, JSON.stringify({ admin_id: req.user.id }), req.user.id, ids]);
       await conn.commit();
 
       log.adm('Admin bulk XP adjust', { admin_id: req.user.id, delta, count: result.affectedRows });
