@@ -18,6 +18,7 @@ const { flushQueuedMessages } = require('../services/commsQueue');
 const { resolveCommsSchedule } = require('../routes/comms');
 const { purgeOldIdempotencyKeys } = require('../utils/idempotency');
 const { releasePendingAndNotify, advanceActiveCycle } = require('../services/downtimeSchedule');
+const { closeStaleSessions } = require('../services/liveSession');
 
 // ============================================================================
 // AUTOMATED LOGISTICS - DOWNTIME DEADLINE PINGS
@@ -302,6 +303,24 @@ function scheduleIdempotencyPurge() {
   });
 }
 
+// ============================================================================
+// FORGOTTEN LIVE SESSIONS
+// ============================================================================
+// A session the Storyteller never ended is closed after 24h (and everyone in it
+// is let go). Runs at boot too, so a restart catches up.
+function scheduleStaleLiveSessionClose(io) {
+  const run = async () => {
+    try {
+      const closed = await closeStaleSessions(io);
+      if (closed) log.info(`Auto-closed ${closed} forgotten live session(s).`);
+    } catch (error) {
+      log.err('Stale live session close failed', { error: error.message });
+    }
+  };
+  run();
+  return setInterval(run, 5 * 60 * 1000);
+}
+
 let started = false;
 function startJobs(fastify) {
   if (started) return;
@@ -315,6 +334,7 @@ function startJobs(fastify) {
   scheduleFeedingCycleDecay();
   scheduleQueuedMessageFlush(fastify?.io);
   scheduleIdempotencyPurge();
+  scheduleStaleLiveSessionClose(fastify?.io);
   log.start('Background jobs scheduled.');
 }
 

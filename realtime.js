@@ -13,7 +13,7 @@ const { log } = require('./logger');
 const { corsOrigin } = require('./config/cors');
 const { COOKIE_NAME } = require('./utils/authCookie');
 const { getTokenVersion } = require('./utils/tokenVersion');
-const { getSessionInternalId, getSessionRow } = require('./services/liveSession');
+const { getSessionRow, emitSessionPresence } = require('./services/liveSession');
 
 function attachRealtime(fastify) {
   const io = new Server(fastify.server, {
@@ -65,6 +65,7 @@ function attachRealtime(fastify) {
     // Real-time chat: automatically join authenticated user's private room
     const uid = socket.user?.id ? Number(socket.user.id) : null;
     if (uid) {
+      socket.data.userId = uid; // readable on RemoteSocket (fetchSockets), unlike socket.user
       socket.join(`user_${uid}`);
       if (socket.user.role === 'admin' || socket.user.role === 'courtuser') {
         socket.join('admin_chat');
@@ -119,7 +120,7 @@ function attachRealtime(fastify) {
         if (!sessionId) return;
 
         const session = await getSessionRow(sessionId);
-        if (!session) return;
+        if (!session || session.status === 'ended') return;
 
         // STs (admin/courtuser) may join any session; everyone else must be a registered participant
         const isStaff = socket.user.role === 'admin' || socket.user.role === 'courtuser';
@@ -136,9 +137,17 @@ function attachRealtime(fastify) {
           socket.join(`session_${session.session_code}`);
         }
         socket.join(`session_${sessionId}`);
+        emitSessionPresence(io, [`session_${session.id}`]);
       } catch (e) {
         log.err('Socket join_session failed', { error: e.message });
       }
+    });
+
+    // Tell a session's roster someone dropped, after a grace period so a flaky
+    // connection that bounces straight back doesn't flicker.
+    socket.on('disconnecting', () => {
+      const rooms = [...socket.rooms].filter((r) => /^session_\d+$/.test(r));
+      if (rooms.length) setTimeout(() => emitSessionPresence(io, rooms), 3000);
     });
 
     socket.on('chat_message', (payload) => {

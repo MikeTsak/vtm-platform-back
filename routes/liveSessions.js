@@ -4,10 +4,29 @@
 // Storyteller broadcast channel. Realtime nudges go through fastify.io.
 const { insertRoll, formatRoll } = require('../services/rolls');
 const { rollD10 } = require('../services/dice');
-const { getSessionInternalId, emitSessionRefresh } = require('../services/liveSession');
+const { getSessionInternalId, getSessionRow, emitSessionRefresh, closeSession, onlineUserIds, removeUserSockets } = require('../services/liveSession');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, moderateLimiter } = opts;
+
+  // Same staff notion as the socket join_session handler.
+  const isStaff = (u) => u?.role === 'admin' || u?.role === 'courtuser';
+
+  // Everything a session exposes is for its participants and staff only: the
+  // 8-character code (DDMMYY##) is guessable, so it is not an access secret.
+  // Once a session has ended only staff can still read it; a player's screen
+  // just learns it ended (GET /:id) and leaves.
+  async function isParticipant(req, internalId) {
+    const [rows] = await pool.query(
+      'SELECT 1 FROM live_session_participants WHERE session_id=? AND user_id=? LIMIT 1',
+      [internalId, req.user.id]
+    );
+    return rows.length > 0;
+  }
+  async function canRead(req, session) {
+    if (isStaff(req.user)) return true;
+    return !!session && session.status !== 'ended' && isParticipant(req, session.id);
+  }
 
   // Create a new live session (Generates an 8-character Code) - CHANGED TO requireAdmin
   fastify.post('/api/live-session', { preHandler: [authRequired, requireAdmin, moderateLimiter] }, async (req, reply) => {
@@ -40,21 +59,12 @@ module.exports = async function (fastify, opts) {
   // End an active live session - CHANGED TO requireAdmin
   fastify.post('/api/live-session/:id/end', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const [rows] = await pool.query('SELECT id, created_at, status FROM live_sessions WHERE session_code=? OR id=?', [req.params.id, req.params.id]);
+      const [rows] = await pool.query('SELECT id, session_code, created_at, status FROM live_sessions WHERE session_code=? OR id=?', [req.params.id, req.params.id]);
       if (!rows.length) return reply.status(404).json({ error: 'Session not found' });
       if (rows[0].status === 'ended') return reply.send({ ok: true, message: 'Already ended' });
 
-      const internalId = rows[0].id;
-      // Calculate total duration
-      const duration = Math.max(0, Math.floor((Date.now() - new Date(rows[0].created_at).getTime()) / 1000));
-
-      await pool.query(
-        "UPDATE live_sessions SET status='ended', ended_at=NOW(), duration_seconds=?, ended_by=? WHERE id=?",
-        [duration, req.user?.id || null, internalId]
-      );
-
+      const duration = await closeSession(fastify.io, rows[0], req.user?.id || null);
       log.adm('Live Session Ended', { session: req.params.id, duration_seconds: duration });
-      await emitSessionRefresh(fastify.io, internalId);
       reply.send({ ok: true, duration_seconds: duration });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to end session' });
@@ -82,6 +92,17 @@ module.exports = async function (fastify, opts) {
     }
   });
 
+  // Sessions running right now, so a player can tap "join" instead of typing a
+  // code. Name and code only: nothing else about a session is shown until joined.
+  fastify.get('/api/live-session/active', { preHandler: [authRequired] }, async (req, reply) => {
+    const [sessions] = await pool.query(
+      `SELECT s.session_code, s.name, u.display_name AS admin_name
+       FROM live_sessions s LEFT JOIN users u ON s.admin_id = u.id
+       WHERE s.status='active' ORDER BY s.created_at DESC LIMIT 5`
+    );
+    reply.send({ sessions });
+  });
+
   // Get session details (Calculates running timer if active)
   fastify.get('/api/live-session/:id', { preHandler: [authRequired] }, async (req, reply) => {
     const [rows] = await pool.query(
@@ -90,7 +111,25 @@ module.exports = async function (fastify, opts) {
     );
     if (!rows.length) return reply.status(404).json({ error: 'Session not found' });
     const s = rows[0];
+    if (!isStaff(req.user)) {
+      if (!(await isParticipant(req, s.id))) return reply.status(403).json({ error: 'Not a participant in this session' });
+      if (s.status === 'ended') return reply.send({ session: { id: s.id, session_code: s.session_code, status: 'ended' } });
+    }
     try { s.metadata = typeof s.metadata === 'string' ? JSON.parse(s.metadata) : (s.metadata || {}); } catch (e) { s.metadata = {}; }
+    if (!isStaff(req.user)) {
+      // Players get an allowlist, not the whole blob: metadata also holds the
+      // ST's private notes, NPC roster and every player's effects/requests,
+      // and any key added later stays private until listed here.
+      const m = s.metadata;
+      const [mine] = await pool.query('SELECT id FROM characters WHERE user_id=?', [req.user.id]);
+      const ids = new Set(mine.map((c) => String(c.id)));
+      s.metadata = {
+        scene: m.scene, ambient: m.ambient, clocks: m.clocks, initiative: m.initiative,
+        turnActorId: m.turnActorId, round: m.round,
+        activeEffects: Object.fromEntries(Object.entries(m.activeEffects || {}).filter(([id]) => ids.has(id))),
+        rollRequests: (m.rollRequests || []).filter((r) => ids.has(String(r.targetId))),
+      };
+    }
     if (s.status === 'active') {
       s.duration_seconds = Math.max(0, Math.floor((Date.now() - new Date(s.created_at).getTime()) / 1000));
     }
@@ -100,8 +139,10 @@ module.exports = async function (fastify, opts) {
 
   // Join a session
   fastify.post('/api/live-session/:id/join', { preHandler: [authRequired] }, async (req, reply) => {
-    const internalId = await getSessionInternalId(req.params.id);
-    if (!internalId) return reply.status(404).json({ error: 'Session not found' });
+    const session = await getSessionRow(req.params.id);
+    if (!session) return reply.status(404).json({ error: 'Session not found' });
+    if (session.status === 'ended') return reply.status(400).json({ error: 'That session has ended.' });
+    const internalId = session.id;
 
     let { characterId } = req.body || {};
     if (!characterId) {
@@ -126,7 +167,9 @@ module.exports = async function (fastify, opts) {
   // one table all dice go to; see routes/dice.js), plus dice-less events.
   fastify.get('/api/live-session/:id/rolls', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      const internalId = await getSessionInternalId(req.params.id);
+      const session = await getSessionRow(req.params.id);
+      if (!(await canRead(req, session))) return reply.status(403).json({ error: 'Not a participant in this session' });
+      const internalId = session.id;
       const [rows] = await pool.query(
         `SELECT r.*, COALESCE(r.character_name, c.name) AS character_name
          FROM dice_rolls r
@@ -147,10 +190,13 @@ module.exports = async function (fastify, opts) {
   // ever thrown by the server (POST /api/dice/roll), so this refuses results.
   const FEED_EVENTS = new Set(['discipline_activation', 'discipline_deactivation']);
   fastify.post('/api/live-session/:id/rolls', { preHandler: [authRequired] }, async (req, reply) => {
-    const internalId = await getSessionInternalId(req.params.id);
-    if (!internalId) return reply.status(404).json({ error: 'Session not found' });
+    const session = await getSessionRow(req.params.id);
+    if (!session) return reply.status(404).json({ error: 'Session not found' });
+    const internalId = session.id;
     const { roll_type, note, is_hidden, disc, power_name } = req.body || {};
     if (!FEED_EVENTS.has(roll_type)) return reply.status(400).json({ error: 'Dice are rolled by the server: use POST /api/dice/roll.' });
+    if (session.status === 'ended') return reply.status(400).json({ error: 'That session has ended.' });
+    if (!(await canRead(req, session))) return reply.status(403).json({ error: 'Not a participant in this session' });
 
     try {
       const [[ch]] = await pool.query('SELECT id, name FROM characters WHERE user_id=? LIMIT 1', [req.user.id]);
@@ -168,8 +214,10 @@ module.exports = async function (fastify, opts) {
   });
 
   fastify.get('/api/live-session/:id/players', { preHandler: [authRequired] }, async (req, reply) => {
-    const internalId = await getSessionInternalId(req.params.id);
-    if (!internalId) return reply.status(404).json({ error: 'Session not found' });
+    const session = await getSessionRow(req.params.id);
+    if (!session) return reply.status(404).json({ error: 'Session not found' });
+    if (!(await canRead(req, session))) return reply.status(403).json({ error: 'Not a participant in this session' });
+    const internalId = session.id;
     const [players] = await pool.query(`
       SELECT 
         lsp.session_id,
@@ -186,7 +234,25 @@ module.exports = async function (fastify, opts) {
       WHERE lsp.session_id = ?
       ORDER BY lsp.joined_at ASC
     `, [internalId]);
-    reply.send({ players });
+    // Other players' sheets (health, willpower, hunger, ...) and account names
+    // are ST data; players only get the table roster.
+    const online = await onlineUserIds(fastify.io, internalId);
+    const roster = players.map((p) => ({ ...p, online: online.has(Number(p.user_id)) }));
+    reply.send({ players: isStaff(req.user) ? roster : roster.map(({ sheet, user_name, ...pub }) => pub) });
+  });
+
+  // ST removes a player from the session: seat, live connection and all. Their
+  // screen sees it is no longer a participant and leaves; they can rejoin with
+  // the code if the removal was a mistake.
+  fastify.delete('/api/live-session/:id/participants/:userId', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    const session = await getSessionRow(req.params.id);
+    if (!session) return reply.status(404).json({ error: 'Session not found' });
+    await pool.query('DELETE FROM live_session_participants WHERE session_id=? AND user_id=?', [session.id, req.params.userId]);
+    await removeUserSockets(fastify.io, session, req.params.userId);
+    await emitSessionRefresh(fastify.io, session.id);
+    fastify.io?.to(`user_${Number(req.params.userId)}`).emit('refresh_session'); // they just left the room
+    log.adm('Removed player from Live Session', { session: req.params.id, user: req.params.userId });
+    reply.send({ ok: true });
   });
 
   // Update Session Metadata
@@ -217,8 +283,10 @@ module.exports = async function (fastify, opts) {
 
   fastify.post('/api/live-session/:id/signal', { preHandler: [authRequired, moderateLimiter] }, async (req, reply) => {
     try {
-      const internalId = await getSessionInternalId(req.params.id);
-      if (!internalId) return reply.status(404).json({ error: 'Session not found' });
+      const session = await getSessionRow(req.params.id);
+      if (!session) return reply.status(404).json({ error: 'Session not found' });
+      if (session.status === 'ended') return reply.status(400).json({ error: 'That session has ended.' });
+      const internalId = session.id;
 
       const type = String(req.body?.type || '');
       const builder = SIGNAL_MESSAGES[type];
@@ -260,7 +328,9 @@ module.exports = async function (fastify, opts) {
 
   fastify.get('/api/live-session/:id/broadcast', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      const internalId = await getSessionInternalId(req.params.id);
+      const session = await getSessionRow(req.params.id);
+      if (!(await canRead(req, session))) return reply.status(403).json({ error: 'Not a participant in this session' });
+      const internalId = session.id;
       const [rows] = await pool.query(
         `SELECT b.*
        FROM live_session_broadcasts b

@@ -44,6 +44,7 @@ async function session(adminId, metadata = {}, status = 'active') {
   return { id: r.insertId, code };
 }
 
+const seat = (s, p) => pool.query('INSERT INTO live_session_participants (session_id, user_id, character_id) VALUES (?, ?, ?)', [s.id, p.user.id, p.id]);
 const roll = (who, payload) => app.inject({ method: 'POST', url: '/api/dice/roll', headers: { cookie: who.cookie }, payload });
 const body = (res) => JSON.parse(res.body);
 async function sheetOf(id) {
@@ -92,6 +93,7 @@ describe('server-thrown dice', () => {
     const st = await storyteller();
     const p = await player(sturdy);
     const s = await session(st.user.id, { rollRequests: [{ id: 'rr-123456789', targetId: String(p.id), trait1: 'Wits', trait2: 'Brawl', difficulty: 3, specialty: 'Ambush' }] });
+    await seat(s, p);
     const first = await roll(p, { mode: 'request', requestId: 'rr-123456789', sessionId: s.code, traits: ['Strength', 'Brawl'] });
     expect(first.statusCode).toBe(200);
     const r = body(first).roll;
@@ -100,6 +102,7 @@ describe('server-thrown dice', () => {
     expect(r.session_id).toBe(s.id);
     expect((await roll(p, { mode: 'request', requestId: 'rr-123456789', sessionId: s.code })).statusCode).toBe(404);
     const other = await player(sturdy);
+    await seat(s, other);
     expect((await roll(other, { mode: 'request', requestId: 'rr-123456789', sessionId: s.code })).statusCode).toBe(404);
   });
 
@@ -142,14 +145,37 @@ describe('server-thrown dice', () => {
     expect((await roll(p, { mode: 'traits', traits: ['Strength', 'Brawl'], sessionId: ended.code })).statusCode).toBe(400);
   });
 
+  it('a player who has not joined a session cannot roll into it', async () => {
+    const st = await storyteller();
+    const p = await player(sturdy);
+    const s = await session(st.user.id);
+    expect((await roll(p, { mode: 'traits', traits: ['Strength', 'Brawl'], sessionId: s.code })).statusCode).toBe(403);
+    // Rouse Checks don't leak into it either: they are logged outside the session.
+    await app.inject({ method: 'POST', url: `/api/characters/${p.id}/rouse`, headers: { cookie: p.cookie }, payload: { sessionId: s.code, source: 'blush_of_life' } });
+    const [[row]] = await pool.query('SELECT session_id FROM dice_rolls WHERE character_id=? ORDER BY id DESC LIMIT 1', [p.id]);
+    expect(row.session_id).toBeNull();
+    await seat(s, p);
+    expect((await roll(p, { mode: 'traits', traits: ['Strength', 'Brawl'], sessionId: s.code })).statusCode).toBe(200);
+  });
+
   it('Rouse Checks made in a session land in the same table', async () => {
     const st = await storyteller();
     const p = await player(sturdy);
     const s = await session(st.user.id);
+    await seat(s, p);
     const res = await app.inject({ method: 'POST', url: `/api/characters/${p.id}/rouse`, headers: { cookie: p.cookie }, payload: { sessionId: s.code, source: 'blush_of_life' } });
     expect(res.statusCode).toBe(200);
     const [[row]] = await pool.query('SELECT roll_type, session_id FROM dice_rolls WHERE character_id=? ORDER BY id DESC LIMIT 1', [p.id]);
     expect(row).toEqual({ roll_type: 'blush_of_life', session_id: s.id });
+  });
+});
+
+describe('frenzy pool', () => {
+  it('is unspent Willpower plus a third of Humanity, rounded down', () => {
+    const { frenzyPool } = require('../services/rolls');
+    const sheet = { attributes: { Composure: 3, Resolve: 3 }, humanity: 8, willpower: { superficial: 2, aggravated: 0 } };
+    expect(frenzyPool(sheet, 'Ventrue').pool).toBe(4 + 2);   // 6 Willpower - 2 spent = 4, + floor(8/3) = 2
+    expect(frenzyPool({ ...sheet, willpower: { superficial: 0, aggravated: 0 } }, 'Ventrue').pool).toBe(6 + 2);
   });
 });
 

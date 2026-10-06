@@ -49,7 +49,12 @@ module.exports = async function (fastify, opts) {
       const sheet = parseSheet(row.sheet);
       let session = null;
       if (req.body?.sessionId) {
-        [[session]] = await conn.query("SELECT id, session_code FROM live_sessions WHERE (session_code=? OR id=?) AND status='active'", [req.body.sessionId, req.body.sessionId]);
+        // Only a session the character's player has joined (an admin may act in any).
+        [[session]] = await conn.query(
+          `SELECT ls.id, ls.session_code FROM live_sessions ls WHERE (ls.session_code=? OR ls.id=?) AND ls.status='active'
+             AND (? OR EXISTS (SELECT 1 FROM live_session_participants p WHERE p.session_id=ls.id AND p.user_id=?))`,
+          [req.body.sessionId, req.body.sessionId, req.user.role === 'admin' ? 1 : 0, row.user_id]
+        );
       }
       const logged = [];
       const logRoll = async (roll) => logged.push(await insertRoll(conn, {

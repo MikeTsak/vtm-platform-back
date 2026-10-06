@@ -1,6 +1,6 @@
 {
   "name": "back",
-  "version": "1.0.131",
+  "version": "1.0.134",
   "private": true,
   "scripts": {
     "dev": "node swagger-autogen.js && nodemon server.fastify.js",
@@ -21,6 +21,7 @@
     "migrations:status": "node scripts/migrate-remote.mjs --status",
     "backup": "node scripts/backup-db.js",
     "backup:list": "node scripts/backup-db.js --list",
+    "db:staging": "node scripts/db-staging.mjs",
     "migrate-avatar-thumbs": "node migrate-avatar-thumbs.js",
     "migrate-avatars-to-cdn": "node migrate-avatars-to-cdn.js",
     "migrate-news-urls": "node update_news_urls.js"

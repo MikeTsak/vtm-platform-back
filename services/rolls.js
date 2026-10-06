@@ -165,14 +165,14 @@ function traitPool({ sheet, clan, traits, specialty, ownSpecialtyOnly = true, ef
   return { pool: Math.max(0, pool), parts, impaired, hunger: tr.hunger };
 }
 
-/** Frenzy resistance: Willpower rating + Humanity/3, Brujah lose Bane Severity against fury. */
+/** Frenzy resistance: unspent Willpower + Humanity/3 (rounded down), Brujah lose Bane Severity against fury. */
 function frenzyPool(sheet, clan) {
   const tr = trackers(sheet);
   const bonus = Math.floor(tr.humanity / 3);
   const bane = clan === 'Brujah' && sheet?.frenzyState === 'fury' ? BP.bane[bloodPotency(sheet, clan)] : 0;
   return {
-    pool: Math.max(0, tr.maxWillpower + bonus - bane),
-    parts: [`Willpower ${tr.maxWillpower}`, `Humanity/3 ${bonus}`, ...(bane ? [`Bane −${bane}`] : [])],
+    pool: Math.max(0, Math.max(0, tr.willpowerLeft) + bonus - bane),
+    parts: [`Unspent Willpower ${Math.max(0, tr.willpowerLeft)}`, `Humanity/3 ${bonus}`, ...(bane ? [`Bane −${bane}`] : [])],
   };
 }
 

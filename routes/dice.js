@@ -17,11 +17,16 @@ const fail = (status, message) => { throw Object.assign(new Error(message), { st
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin } = opts;
 
-  async function findSession(db, idOrCode) {
+  // Dice only go into a session the roller has joined (staff may roll into any).
+  async function findSession(db, idOrCode, user) {
     if (idOrCode == null || idOrCode === '') return null;
     const [[s]] = await db.query('SELECT id, session_code, status, admin_id, metadata FROM live_sessions WHERE session_code=? OR id=?', [idOrCode, idOrCode]);
     if (!s) fail(404, 'Session not found');
     if (s.status === 'ended') fail(400, 'That session has ended.');
+    if (user.role !== 'admin' && user.role !== 'courtuser') {
+      const [seat] = await db.query('SELECT 1 FROM live_session_participants WHERE session_id=? AND user_id=? LIMIT 1', [s.id, user.id]);
+      if (!seat.length) fail(403, 'Join the session before rolling in it.');
+    }
     s.metadata = parseSheet(s.metadata);
     return s;
   }
@@ -59,7 +64,7 @@ module.exports = async function (fastify, opts) {
     const admin = isAdmin(req.user);
     try {
       if (!b.mode || b.mode === 'free') {
-        const session = b.sessionId != null && b.sessionId !== '' ? await findSession(pool, b.sessionId) : null;
+        const session = b.sessionId != null && b.sessionId !== '' ? await findSession(pool, b.sessionId, req.user) : null;
         if (session && !admin) fail(403, 'Only the Storyteller can post free rolls to a session.');
         const [[own]] = await pool.query('SELECT id, name FROM characters WHERE user_id=? LIMIT 1', [req.user.id]);
         const dice = rollPool(b.pool, b.hunger);
@@ -82,7 +87,7 @@ module.exports = async function (fastify, opts) {
       let rows = [];
       try {
         await conn.beginTransaction();
-        session = await findSession(conn, b.sessionId);
+        session = await findSession(conn, b.sessionId, req.user);
         const [[ch]] = await conn.query('SELECT id, name, clan, sheet FROM characters WHERE user_id=? LIMIT 1 FOR UPDATE', [req.user.id]);
         if (!ch) fail(400, 'Create a character first');
         const sheet = parseSheet(ch.sheet);
@@ -196,6 +201,10 @@ module.exports = async function (fastify, opts) {
       if (!orig || orig.user_id !== req.user.id || !orig.character_id) fail(404, 'Roll not found');
       if (orig.rerolled) fail(400, 'That roll has already been rerolled.');
       if (NO_REROLL.has(orig.roll_type)) fail(400, 'Willpower can\'t reroll that kind of test.');
+      if (orig.session_id) {
+        const [[s]] = await conn.query('SELECT status FROM live_sessions WHERE id=?', [orig.session_id]);
+        if (s?.status === 'ended') fail(400, 'That session has ended.');
+      }
       const roll = formatRoll(orig);
       const normal = roll.results.normal || [];
       const picks = [...new Set((Array.isArray(req.body?.indices) ? req.body.indices : []).map(Number))]
