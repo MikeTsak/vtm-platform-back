@@ -354,9 +354,9 @@ module.exports = async function (fastify, opts) {
       const payload = {
         content: text || 'An invitation to Elysium has been issued.',
         _customFile: {
-          name: 'elysium-invitation.png',
+          name: `elysium-invitation.${match[1].split('/')[1] === 'jpeg' ? 'jpg' : match[1].split('/')[1] || 'png'}`,
           data: buffer,
-          type: 'image/png'
+          type: match[1]
         }
       };
 

@@ -107,7 +107,17 @@ module.exports = async function (fastify, opts) {
 
       // Fetch existing settings
       const [rows] = await pool.query('SELECT push_settings FROM users WHERE id=?', [req.user.id]);
-      const currentSettings = rows[0].push_settings || { chat: false, system: false };
+      let currentSettings = { chat: false, system: false };
+      try {
+        // The column can come back as a JSON string or an already-parsed object. Spreading a
+        // STRING below turns it into {"0":"{","1":"\"",…}, and every save then re-embeds the
+        // previous blob — that is how three users' rows reached 5–75 MB.
+        const raw = rows[0].push_settings;
+        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (parsed && typeof parsed === 'object') currentSettings = parsed;
+      } catch (_) { /* unparseable: fall back to the defaults */ }
+      // Drop the character-indexed keys left behind by that bug (GET already hides them).
+      for (const key of Object.keys(currentSettings)) if (!isNaN(key)) delete currentSettings[key];
 
       // Merge new settings
       const newSettings = { ...currentSettings, ...settings };

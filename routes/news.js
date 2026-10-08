@@ -10,7 +10,7 @@ const { sanitizeRichText } = require('../utils/sanitize');
 const { xmlEscape, getAuthorSignature, isVideoUrl, resolveMediaUrl } = require('../services/news');
 
 module.exports = async function (fastify, opts) {
-  const { pool, log, authRequired, requireAdmin, imageClient } = opts;
+  const { pool, log, authRequired, optionalAuth, requireAdmin, imageClient } = opts;
 
   // GET /api/news/public - Fetch only news, no rumors (No auth required)
   fastify.get('/api/news/public', async (req, reply) => {
@@ -47,6 +47,18 @@ module.exports = async function (fastify, opts) {
       if (rows.length === 0) {
         return reply.status(404).json({ error: 'Article not found' });
       }
+
+      // Public page, but remember logged-in readers. Admins (and admins
+      // impersonating a player) are skipped so previewing doesn't pollute it.
+      await optionalAuth(req);
+      if (req.user && req.user.role !== 'admin' && !req.user.imp) {
+        pool.query(
+          `INSERT INTO news_reads (news_id, user_id) VALUES (?, ?)
+           ON DUPLICATE KEY UPDATE open_count = open_count + 1, last_read_at = NOW()`,
+          [rows[0].id, req.user.id]
+        ).catch((e) => log.err('Record news read failed', { message: e.message }));
+      }
+
       reply.send({ item: rows[0] });
     } catch (e) {
       log.err('Fetch public article failed', { message: e.message });
@@ -534,7 +546,9 @@ module.exports = async function (fastify, opts) {
     try {
       const [rows] = await pool.query(`
       SELECT n.*, u.display_name as author_real_name, u.role as author_role,
-             c.name as char_name, c.camarilla_titles as char_titles, c.image_url as char_image
+             c.name as char_name, c.camarilla_titles as char_titles, c.image_url as char_image,
+             (SELECT COUNT(*) FROM news_reads r WHERE r.news_id = n.id) as reader_count,
+             (SELECT COALESCE(SUM(r.open_count), 0) FROM news_reads r WHERE r.news_id = n.id) as open_total
       FROM news_entries n
       LEFT JOIN users u ON n.author_id = u.id
       LEFT JOIN characters c ON c.user_id = u.id
@@ -546,6 +560,26 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       log.err('Fetch admin news failed', { message: e.message });
       reply.status(500).json({ error: 'Failed to load admin news' });
+    }
+  });
+
+  // GET /api/admin/news/:id/reads - Logged-in readers of one article (Admin only)
+  fastify.get('/api/admin/news/:id/reads', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const [rows] = await pool.query(
+        `SELECT r.user_id, r.first_read_at, r.last_read_at, r.open_count,
+                u.display_name, c.name as char_name, c.clan
+         FROM news_reads r
+         JOIN users u ON u.id = r.user_id
+         LEFT JOIN characters c ON c.user_id = u.id
+         WHERE r.news_id = ?
+         ORDER BY r.last_read_at DESC`,
+        [Number(req.params.id)]
+      );
+      reply.send({ readers: rows });
+    } catch (e) {
+      log.err('Fetch news readers failed', { message: e.message });
+      reply.status(500).json({ error: 'Failed to load readers' });
     }
   });
 

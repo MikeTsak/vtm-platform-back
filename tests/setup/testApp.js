@@ -12,7 +12,7 @@
 require('./env');
 const fastify = require('fastify');
 const fastifyCookie = require('@fastify/cookie');
-const { authRequired, requireAdmin } = require('../../authMiddleware.fastify');
+const { authRequired, optionalAuth, requireAdmin } = require('../../authMiddleware.fastify');
 const { validateRetainerSheet } = require('../../utils/retainerValidation');
 
 // Quiet by default; set VERBOSE_TEST_LOGS=1 to see route-level log output
@@ -136,6 +136,7 @@ function buildTestApp(pool) {
   app.register(require('../../routes/camarilla'), { pool, log: testLog, authRequired, requireAdmin });
   app.register(require('../../routes/courtActions'), { pool, log: testLog, authRequired, requireAdmin });
   app.register(require('../../routes/elysium'), { pool, log: testLog, authRequired, requireAdmin });
+  app.register(require('../../routes/news'), { pool, log: testLog, authRequired, optionalAuth, requireAdmin });
 
   app.register(require('../../routes/disciplineAccess'), {
     pool,

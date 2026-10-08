@@ -169,11 +169,25 @@ async function backup({ quiet = false, skipMedia = false, onProgress } = {}) {
     `SET SQL_MODE = 'NO_AUTO_VALUE_ON_ZERO';\n\n`,
   );
 
+  // System-versioned tables (migrations/sql/0051) report TABLE_TYPE 'SYSTEM VERSIONED', not
+  // 'BASE TABLE' — filtering on the latter alone would silently drop them from the backup.
   const [tableRows] = await conn.query(
-    `SELECT TABLE_NAME AS n FROM information_schema.TABLES
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME`,
+    `SELECT TABLE_NAME AS n, TABLE_TYPE AS t FROM information_schema.TABLES
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VERSIONED') ORDER BY TABLE_NAME`,
   );
   const tables = tableRows.map((r) => r.n);
+  const versioned = new Set(tableRows.filter((r) => r.t === 'SYSTEM VERSIONED').map((r) => r.n));
+  // Dumping history needs @@system_versioning_insert_history on restore (MariaDB 10.11+/11.x).
+  // Without it we can still write the current rows, but history would not survive a restore.
+  let canDumpHistory = false;
+  if (versioned.size) {
+    try { await conn.query('SELECT @@system_versioning_insert_history'); canDumpHistory = true; } catch { /* old server */ }
+    if (canDumpHistory) await write(`-- ${versioned.size} system-versioned table(s): full row history included\nSET @@session.system_versioning_insert_history = 1;\n\n`);
+    else {
+      await write(`-- WARNING: ${versioned.size} system-versioned table(s) dumped WITHOUT history (server lacks system_versioning_insert_history)\n\n`);
+      say('  WARNING: this server cannot dump row history; only current rows are in the backup.');
+    }
+  }
   report({ phase: 'start', total: tables.length });
 
   let totalRows = 0;
@@ -193,7 +207,12 @@ async function backup({ quiet = false, skipMedia = false, onProgress } = {}) {
       continue;
     }
 
-    const [[{ n: count }]] = await conn.query(`SELECT COUNT(*) AS n FROM \`${table}\``);
+    // History mode: every version of every row, with exact validity bounds. FROM_UNIXTIME()
+    // keeps the timestamps independent of session time zone on both dump and restore.
+    const withHistory = canDumpHistory && versioned.has(table);
+    const [[{ n: count }]] = await conn.query(
+      `SELECT COUNT(*) AS n FROM \`${table}\`${withHistory ? ' FOR SYSTEM_TIME ALL' : ''}`,
+    );
     if (count === 0) {
       report({ phase: 'table', table, rows: 0, index, total: tables.length, skipped: false });
       continue;
@@ -208,21 +227,38 @@ async function backup({ quiet = false, skipMedia = false, onProgress } = {}) {
     const MAX_BATCH_ROWS = 500;
     let buffer = [];
     let bufferBytes = 0;
+    let insertHead = `INSERT INTO \`${table}\` VALUES`;
+    let headSet = false;
     const flush = async () => {
       if (!buffer.length) return;
-      await write(`INSERT INTO \`${table}\` VALUES\n${buffer.join(',\n')};\n`);
+      await write(`${insertHead}\n${buffer.join(',\n')};\n`);
       buffer = [];
       bufferBytes = 0;
     };
 
-    const stream = conn.connection.query(`SELECT * FROM \`${table}\``).stream();
+    const stream = conn.connection.query(
+      withHistory
+        ? `SELECT *, UNIX_TIMESTAMP(row_start) AS __rs, UNIX_TIMESTAMP(row_end) AS __re FROM \`${table}\` FOR SYSTEM_TIME ALL`
+        : `SELECT * FROM \`${table}\``,
+    ).stream();
     for await (const row of stream) {
-      const tuple = `(${Object.values(row).map(sqlValue).join(',')})`;
+      let tuple;
+      if (withHistory) {
+        const { __rs, __re, ...cols } = row;
+        // row_start/row_end are hidden columns, so history rows need an explicit column list.
+        if (!headSet) {
+          insertHead = `INSERT INTO \`${table}\` (${[...Object.keys(cols), 'row_start', 'row_end'].map((c) => `\`${c}\``).join(',')}) VALUES`;
+          headSet = true;
+        }
+        tuple = `(${Object.values(cols).map(sqlValue).join(',')},FROM_UNIXTIME(${__rs}),FROM_UNIXTIME(${__re}))`;
+      } else {
+        tuple = `(${Object.values(row).map(sqlValue).join(',')})`;
+      }
       // A single row can exceed the batch limit on its own (a large image);
       // write it out by itself rather than trying to group it.
       if (tuple.length >= MAX_BATCH_BYTES) {
         await flush();
-        await write(`INSERT INTO \`${table}\` VALUES\n${tuple};\n`);
+        await write(`${insertHead}\n${tuple};\n`);
         continue;
       }
       buffer.push(tuple);
