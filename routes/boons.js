@@ -7,16 +7,36 @@ const BOON_SELECT_SQL = `
     CASE 
       WHEN u_rec.id = 3 OR LOWER(TRIM(u_rec.display_name)) = 'admin' THEN 'Mike'
       WHEN u_rec.id = 5 OR LOWER(TRIM(u_rec.display_name)) = 'st kikos' THEN 'Kikos'
+      WHEN c_rec.id IS NOT NULL THEN
+        CONCAT_WS(' ', 
+          CASE 
+            WHEN JSON_VALID(c_rec.camarilla_titles) = 1 AND JSON_LENGTH(c_rec.camarilla_titles) > 0 
+            THEN JSON_UNQUOTE(JSON_EXTRACT(c_rec.camarilla_titles, '$[0]'))
+            ELSE NULL
+          END,
+          c_rec.name
+        )
       ELSE u_rec.display_name 
     END AS recorded_by_name,
     CASE 
       WHEN u_res.id = 3 OR LOWER(TRIM(u_res.display_name)) = 'admin' THEN 'Mike'
       WHEN u_res.id = 5 OR LOWER(TRIM(u_res.display_name)) = 'st kikos' THEN 'Kikos'
+      WHEN c_res.id IS NOT NULL THEN
+        CONCAT_WS(' ', 
+          CASE 
+            WHEN JSON_VALID(c_res.camarilla_titles) = 1 AND JSON_LENGTH(c_res.camarilla_titles) > 0 
+            THEN JSON_UNQUOTE(JSON_EXTRACT(c_res.camarilla_titles, '$[0]'))
+            ELSE NULL
+          END,
+          c_res.name
+        )
       ELSE u_res.display_name 
     END AS resolved_by_name
   FROM boons b
   LEFT JOIN users u_rec ON u_rec.id = b.recorded_by
   LEFT JOIN users u_res ON u_res.id = b.resolved_by
+  LEFT JOIN characters c_rec ON c_rec.user_id = u_rec.id
+  LEFT JOIN characters c_res ON c_res.user_id = u_res.id
 `;
 
 module.exports = async function (fastify, opts) {
