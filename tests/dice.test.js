@@ -134,6 +134,25 @@ describe('server-thrown dice', () => {
     expect((await app.inject({ method: 'POST', url: `/api/dice/rolls/${theirs.id}/reroll`, headers: { cookie: p.cookie }, payload: { indices: [0] } })).statusCode).toBe(404);
   });
 
+  it('a Hunger 10 can be rerolled only when it makes the roll a Messy Critical', async () => {
+    const p = await player(sturdy);
+    // Fixed dice: a regular 10 + a Hunger 10 (Messy Critical), and a plain roll with a Hunger 10 but no pair.
+    const stored = async (normal, hunger, messy) => (await pool.query(
+      `INSERT INTO dice_rolls (user_id, character_id, roll_type, pool, hunger, sides, results_json, successes, crit_pairs, messy_crit, bestial_failure)
+       VALUES (?, ?, 'pool_roll', ?, ?, 10, ?, 0, ?, ?, 0)`,
+      [p.user.id, p.id, normal.length + hunger.length, hunger.length, JSON.stringify({ normal, hunger }), messy ? 1 : 0, messy ? 1 : 0]))[0].insertId;
+    const reroll = (id, payload) => app.inject({ method: 'POST', url: `/api/dice/rolls/${id}/reroll`, headers: { cookie: p.cookie }, payload });
+
+    const plain = await stored([3, 4], [10, 2], false);
+    expect((await reroll(plain, { hungerIndices: [0] })).statusCode).toBe(400);   // no Messy Critical
+    const messy = await stored([10, 4], [10, 2], true);
+    expect((await reroll(messy, { hungerIndices: [1] })).statusCode).toBe(400);   // the Hunger 2 stays
+    expect((await reroll(messy, { indices: [0, 1, 0], hungerIndices: [0, 0] })).statusCode).toBe(200);
+    const [[row]] = await pool.query("SELECT results_json FROM dice_rolls WHERE character_id=? AND roll_type='willpower_reroll' ORDER BY id DESC LIMIT 1", [p.id]);
+    const res = typeof row.results_json === 'string' ? JSON.parse(row.results_json) : row.results_json;
+    expect(res.hunger[1]).toBe(2);                                                 // untouched
+  });
+
   it('only the Storyteller posts free rolls to a session; ended sessions take no rolls', async () => {
     const st = await storyteller();
     const p = await player(sturdy);

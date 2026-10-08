@@ -20,6 +20,7 @@ module.exports = async function (fastify, opts) {
    */
   async function getDashboardData(userId, userRole, ch) {
     let quotaUsed = 0;
+    let quotaRejected = 0;
     const quotaLimit = 3;
     let recentDowntimes = [];
     let recentChats = [];
@@ -174,7 +175,11 @@ module.exports = async function (fastify, opts) {
 
       const [quotaRows, downtimeRows] = await Promise.all([
         pool.query(
-          'SELECT COUNT(*) AS c FROM downtimes WHERE character_id=? AND created_at >= ? AND created_at < ?',
+          `SELECT 
+            SUM(CASE WHEN LOWER(status) NOT LIKE '%reject%' THEN 1 ELSE 0 END) AS used,
+            SUM(CASE WHEN LOWER(status) LIKE '%reject%' THEN 1 ELSE 0 END) AS rejected
+           FROM downtimes 
+           WHERE character_id=? AND created_at >= ? AND created_at < ?`,
           [charId, from, to]
         ),
         pool.query(
@@ -183,12 +188,13 @@ module.exports = async function (fastify, opts) {
         )
       ]);
 
-      quotaUsed = quotaRows[0][0]?.c || 0;
+      quotaUsed = Number(quotaRows[0][0]?.used) || 0;
+      quotaRejected = Number(quotaRows[0][0]?.rejected) || 0;
       recentDowntimes = downtimeRows[0] || [];
     }
 
     return {
-      quota: { used: quotaUsed, limit: quotaLimit },
+      quota: { used: quotaUsed, rejected: quotaRejected, limit: quotaLimit },
       downtimes: recentDowntimes,
       chats: recentChats,
       news: recentNews,

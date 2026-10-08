@@ -207,9 +207,17 @@ module.exports = async function (fastify, opts) {
       }
       const roll = formatRoll(orig);
       const normal = roll.results.normal || [];
+      const hunger = roll.results.hunger || [];
       const picks = [...new Set((Array.isArray(req.body?.indices) ? req.body.indices : []).map(Number))]
         .filter(i => Number.isInteger(i) && i >= 0 && i < normal.length);
-      if (!picks.length || picks.length > 3) fail(400, 'Pick one to three regular dice to reroll.');
+      // House rule: Hunger dice can't be rerolled, except a Hunger 10 that makes
+      // the roll a Messy Critical. It counts toward the three dice.
+      const hungerPicks = [...new Set((Array.isArray(req.body?.hungerIndices) ? req.body.hungerIndices : []).map(Number))];
+      if (hungerPicks.some(i => !orig.messy_crit || !Number.isInteger(i) || hunger[i] !== 10)) {
+        fail(400, 'Only a Hunger 10 in a Messy Critical can be rerolled.');
+      }
+      const count = picks.length + hungerPicks.length;
+      if (!count || count > 3) fail(400, 'Pick one to three dice to reroll.');
 
       const [[ch]] = await conn.query('SELECT id, sheet FROM characters WHERE id=? FOR UPDATE', [orig.character_id]);
       const sheet = parseSheet(ch.sheet);
@@ -222,8 +230,8 @@ module.exports = async function (fastify, opts) {
       const row = await insertRoll(conn, {
         userId: req.user.id, characterId: orig.character_id, characterName: orig.character_name, sessionId: orig.session_id,
         rollType: 'willpower_reroll', normal: normal.map((d, i) => (picks.includes(i) ? rollD10() : d)),
-        hunger: roll.results.hunger || [], hungerLevel: orig.hunger, difficulty: roll.difficulty,
-        note: `Willpower reroll of ${picks.length} ${picks.length === 1 ? 'die' : 'dice'} (spent 1 WP)`, isHidden: !!orig.is_hidden, rerolled: true,
+        hunger: hunger.map((d, i) => (hungerPicks.includes(i) ? rollD10() : d)), hungerLevel: orig.hunger, difficulty: roll.difficulty,
+        note: `Willpower reroll of ${count} ${count === 1 ? 'die' : 'dice'}${hungerPicks.length ? ` (incl. the Messy Critical's Hunger 10)` : ''} (spent 1 WP)`, isHidden: !!orig.is_hidden, rerolled: true,
       });
       await conn.commit();
       if (orig.session_id) {
