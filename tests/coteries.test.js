@@ -224,6 +224,24 @@ describe('coterie XP', () => {
     expect(JSON.parse(res.body).coterie.coterie_xp).toBe(0);
   });
 
+  it('lets a member deposit personal XP into the bank, one way, with a ledger row', async () => {
+    await pool.query('UPDATE characters SET xp=? WHERE user_id=?', [10, members[1].user.id]);
+    const before = JSON.parse((await get(`/api/coteries/${coterieId}`, members[1].cookie)).body).coterie.coterie_xp;
+    const res = await post(`/api/coteries/${coterieId}/deposit`, members[1].cookie, { amount: 4 });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ coterie_xp: before + 4, remaining_personal_xp: 6 });
+    const [[log]] = await pool.query(
+      "SELECT bank_delta, personal_delta FROM coterie_xp_log WHERE coterie_id=? AND kind='deposit' ORDER BY id DESC LIMIT 1",
+      [coterieId]
+    );
+    expect(log).toEqual({ bank_delta: 4, personal_delta: -4 });
+
+    expect((await post(`/api/coteries/${coterieId}/deposit`, members[1].cookie, { amount: 7 })).statusCode).toBe(400);
+    expect((await post(`/api/coteries/${coterieId}/deposit`, members[1].cookie, { amount: -3 })).statusCode).toBe(400);
+    expect((await post(`/api/coteries/${coterieId}/deposit`, members[1].cookie, { amount: 1.5 })).statusCode).toBe(400);
+    expect((await post(`/api/coteries/${coterieId}/deposit`, outsider.cookie, { amount: 1 })).statusCode).toBe(403);
+  });
+
   it('never lets the bank go negative', async () => {
     await post(`/api/coteries/${coterieId}/xp`, admin.cookie, { delta: 5 });
     const res = await post(`/api/coteries/${coterieId}/xp`, admin.cookie, { delta: -50 });
@@ -425,6 +443,50 @@ describe('POST /api/coteries/:id/purchase', () => {
     });
     expect(res.statusCode).toBe(400);
     expect(JSON.parse(res.body).error).toMatch(/cannot be purchased/i);
+  });
+
+  it('adds a contribution to what the coterie already holds, and refuses past the maximum', async () => {
+    const giveHerd = (dots) => pool.query('UPDATE characters SET sheet=? WHERE user_id=?', [
+      JSON.stringify({ backgrounds: [{ id: 'backgrounds_herd__herd', name: 'Herd', dots }] }),
+      members[1].user.id,
+    ]);
+    const contribute = () => post(`/api/coteries/${coterieId}/contribute`, members[1].cookie, {
+      character_entry_id: 'backgrounds_herd__herd',
+    });
+    await giveHerd(2);
+    expect((await contribute()).statusCode).toBe(200);
+    await giveHerd(2);
+    const second = await contribute();
+    expect(second.statusCode).toBe(200);
+    expect(JSON.parse(second.body).coterie.backgrounds)
+      .toEqual([expect.objectContaining({ key: 'herd', dots: 4 })]);
+    await giveHerd(2);
+    const over = await contribute();
+    expect(over.statusCode).toBe(400);
+    expect(JSON.parse(over.body).error).toMatch(/maximum of 5/);
+    // The refused dots stay on the sheet.
+    const [[ch]] = await pool.query('SELECT sheet FROM characters WHERE user_id=?', [members[1].user.id]);
+    const sheet = typeof ch.sheet === 'string' ? JSON.parse(ch.sheet) : ch.sheet;
+    expect(sheet.backgrounds).toHaveLength(1);
+  });
+
+  it('never sells a flaw-side Background', async () => {
+    await post(`/api/coteries/${coterieId}/xp`, admin.cookie, { delta: 30 });
+    const res = await post(`/api/coteries/${coterieId}/purchase`, members[0].cookie, {
+      target: { kind: 'background', key: 'adversary' },
+      to_dots: 1, from_bank: 3, from_personal: 0,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/Flaw/);
+  });
+
+  it('ignores a client-sent Chasse: it comes from the division', async () => {
+    const res = await put(`/api/coteries/${coterieId}`, members[0].cookie, {
+      traits: { chasse: 5, lien: 1, portillon: 0 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).coterie.traits.chasse).toBe(2); // division 7 = Difficulty 5
+    expect(JSON.parse(res.body).coterie.mechanics.huntingDifficulty).toBe(5);
   });
 
   it('rejects purchasing legacy Chasse merits', async () => {

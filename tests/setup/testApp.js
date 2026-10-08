@@ -127,6 +127,7 @@ function buildTestApp(pool) {
   });
 
   app.register(require('../../routes/xp'), { pool, log: testLog, authRequired, requireAdmin });
+  app.register(require('../../routes/adminCharacters'), { pool, log: testLog, authRequired, requireAdmin });
   app.register(require('../../routes/npcs'), { pool, log: testLog, authRequired, requireAdmin });
   app.register(require('../../routes/mechanics'), { pool, authRequired });
   app.register(require('../../routes/dice'), { pool, log: testLog, authRequired, requireAdmin });

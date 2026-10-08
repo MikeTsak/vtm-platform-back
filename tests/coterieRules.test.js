@@ -159,16 +159,30 @@ describe('validateCoterie', () => {
   it('rejects Domain traits without a Domain', () => {
     const r = rules.validateCoterie(baseCoterie({
       domainId: null,
-      traits: { chasse: 2, lien: 0, portillon: 0 },
+      traits: { chasse: 0, lien: 2, portillon: 0 },
     }));
     expect(r.errors.join(' ')).toMatch(/claim a Domain/i);
   });
 
-  it('rejects a claimed Domain with no Chasse', () => {
-    const r = rules.validateCoterie(baseCoterie({
-      traits: { chasse: 0, lien: 2, portillon: 0 },
-    }));
-    expect(r.errors.join(' ')).toMatch(/Chasse/i);
+  it('takes Chasse from the division and ignores whatever the client sends', () => {
+    // Division 7 is Hunting Difficulty 5 -> Chasse 2.
+    for (const sent of [0, 5, 99]) {
+      const r = rules.validateCoterie(baseCoterie({ traits: { chasse: sent, lien: 0, portillon: 0 } }));
+      expect(r.traits.chasse).toBe(2);
+    }
+    // A Lethal (7) division is Chasse 0 and still a legal Domain.
+    const lethal = rules.validateCoterie(baseCoterie({ domainId: 39 }));
+    expect(lethal.traits.chasse).toBe(0);
+    expect(lethal.errors).toEqual([]);
+    // No Domain, no Chasse.
+    expect(rules.validateCoterie(baseCoterie({ domainId: null, traits: { chasse: 4 } })).traits.chasse).toBe(0);
+  });
+
+  it('maps every map Hunting Difficulty to Chasse = 7 - Difficulty', () => {
+    expect(rules.chasseForDivision(12)).toBe(5); // Difficulty 2
+    expect(rules.chasseForDivision(5)).toBe(3); // Difficulty 4
+    expect(rules.chasseForDivision(25)).toBe(1); // Difficulty 6
+    expect(rules.chasseForDivision(9999)).toBe(0); // unknown division
   });
 
   it('warns rather than errors for a domainless coterie', () => {
@@ -273,9 +287,9 @@ describe('validateCoterie', () => {
   it('clamps dots into the 0-5 range instead of trusting the client', () => {
     const r = rules.validateCoterie(baseCoterie({
       memberCount: 40,
-      traits: { chasse: 99, lien: -4, portillon: 0 },
+      traits: { chasse: 99, lien: -4, portillon: 99 },
     }));
-    expect(r.traits.chasse).toBe(5);
+    expect(r.traits.portillon).toBe(5);
     expect(r.traits.lien).toBe(0);
   });
 });

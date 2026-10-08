@@ -1,4 +1,6 @@
-function validateRetainerSheet(tier, sheet, isGhoul) {
+// maxDisciplines: 1 for every ghoul, except a coterie ghoul, which may carry
+// one Discipline per Tier (the extras are blood from other coterie members).
+function validateRetainerSheet(tier, sheet, isGhoul, maxDisciplines = 1) {
     if (!sheet) return "Sheet is empty.";
 
     const attrCounts = { 4: 0, 3: 0, 2: 0, 1: 0, 0: 0 }; // Tier 4: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0, 0: 0 }
@@ -40,7 +42,11 @@ function validateRetainerSheet(tier, sheet, isGhoul) {
         if (val === 1) disciplineCount++;
     }
 
-    if (isGhoul && disciplineCount > 1) return "Ghouls can only have 1 dot in exactly one Discipline.";
+    if (isGhoul && disciplineCount > maxDisciplines) {
+        return maxDisciplines === 1
+            ? "Ghouls can only have 1 dot in exactly one Discipline."
+            : `A Tier ${tier} coterie ghoul can hold at most ${maxDisciplines} Disciplines, 1 dot each.`;
+    }
     if (!isGhoul && disciplineCount > 0) return "Non-ghoul mortals cannot have Disciplines.";
 
     if (tier === 1) { // Weak Mortal

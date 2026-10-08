@@ -19,6 +19,7 @@ const rules = require('../utils/coterieRules');
 const { isAdmin, userOwnsCharacter } = require('../services/guards');
 const { parseSheet } = require('../utils/sheet');
 const { validateRetainerSheet } = require('../utils/retainerValidation');
+const RULES_CATALOG = require('../data/rulesCatalog.json');
 
 const safeParse = (val, fallback) => {
   if (val == null) return fallback;
@@ -41,6 +42,73 @@ const jsonColumn = (val, fallback) => {
   return parsed == null ? null : JSON.stringify(parsed);
 };
 
+/* ------------------------------------------------------------------ *
+ * Coterie ghouls: blood from more than one member
+ * ------------------------------------------------------------------ */
+
+// House rule (2026-10-08): a coterie ghoul is blood bound to its domitor
+// only, but may carry one Discipline per Tier. The domitor's Discipline is
+// set when the sheet is built; each extra one is 1 dot of a DIFFERENT
+// member's clan Discipline, added only by that member (their blood).
+// `sheet.bloodSources` maps Discipline -> giving character id.
+const errataless = (n) => String(n || '').replace(/\s*\(Errata\)\s*$/i, '').trim().toLowerCase();
+
+function clanDisciplines(clan) {
+  return Object.entries(RULES_CATALOG.disciplines)
+    .filter(([name, d]) => name !== 'Thin-blood Alchemy' && (d.clanAffinity || []).includes(clan))
+    .map(([name]) => name);
+}
+
+function isLevelOnePower(discipline, powerName) {
+  const d = RULES_CATALOG.disciplines[discipline];
+  return !!d && Object.values(d.powers || {})
+    .some((p) => p.level === 1 && errataless(p.name) === errataless(powerName));
+}
+
+// Only the display fields the client's power picker produces are kept.
+const POWER_FIELDS = ['id', 'name', 'level', 'cost', 'duration', 'dice_pool', 'opposing_pool', 'notes', 'description'];
+const cleanPower = (power, discipline) => {
+  const out = { discipline };
+  for (const k of POWER_FIELDS) {
+    if (power && power[k] != null) out[k] = typeof power[k] === 'number' ? power[k] : String(power[k]).slice(0, 2000);
+  }
+  return out;
+};
+
+// Splits a ghoul sheet into the domitor's own part and the extra Disciplines.
+function splitBlood(sheet) {
+  const all = sheet || {};
+  const sources = all.bloodSources || {};
+  const extras = Object.keys(sources)
+    .filter((d) => all.disciplines && all.disciplines[d])
+    .map((d) => ({
+      discipline: d,
+      source: Number(sources[d]),
+      power: (all.powers || []).find((x) => x && x.discipline === d) || null,
+    }));
+  const names = new Set(extras.map((e) => e.discipline));
+  const own = {
+    ...all,
+    disciplines: Object.fromEntries(Object.entries(all.disciplines || {}).filter(([d]) => !names.has(d))),
+    powers: (all.powers || []).filter((x) => !(x && names.has(x.discipline))),
+  };
+  delete own.bloodSources;
+  return { own, extras };
+}
+
+function withBlood(own, extras) {
+  if (!extras.length) return own;
+  return {
+    ...own,
+    disciplines: { ...own.disciplines, ...Object.fromEntries(extras.map((e) => [e.discipline, 1])) },
+    powers: [...(own.powers || []), ...extras.filter((e) => e.power).map((e) => e.power)],
+    bloodSources: Object.fromEntries(extras.map((e) => [e.discipline, e.source])),
+  };
+}
+
+const disciplineCount = (sheet) =>
+  Object.values((sheet && sheet.disciplines) || {}).filter((v) => Number(v) === 1).length;
+
 const CHASSE_MERIT_KEYS = new Set([
   'apartment_towers', 'back_alleys', 'funerary', 'gated_community',
   'hospital', 'nightlife', 'shelter', 'built_in_flock', 'mithraeum'
@@ -51,7 +119,7 @@ const CHASSE_MERIT_KEYS = new Set([
 function presentCoterie(row, members = []) {
   if (!row) return null;
   const traits = {
-    chasse: Number(row.chasse) || 0,
+    chasse: rules.chasseForDivision(row.domain_id),
     lien: Number(row.lien) || 0,
     portillon: Number(row.portillon) || 0,
   };
@@ -92,7 +160,7 @@ function presentCoterie(row, members = []) {
     updated_at: row.updated_at,
     budget,
     mechanics: {
-      huntingDifficulty: rules.huntingDifficulty(traits.chasse),
+      huntingDifficulty: row.domain_id != null ? rules.divisionDifficulty(row.domain_id) : null,
       chasseSize: rules.CHASSE_SIZE_TABLE[traits.chasse] || null,
       lienBonusDice: rules.lienBonusDice(traits.lien),
       portillonPenaltyDice: rules.portillonPenaltyDice(traits.portillon),
@@ -257,7 +325,7 @@ module.exports = async function (fastify, opts) {
           JSON.stringify(check.flaws),
           JSON.stringify(Array.isArray(body.extras) ? body.extras : []),
           check.pointsPerMember,
-          Number(body.bonus_points) || 0,
+          bonusPoints,
           // Starting XP is an ST award, not something a player declares.
           isAdmin(req.user) ? Math.max(0, Number(body.coterie_xp) || 0) : 0,
           rulesOverride ? 1 : 0,
@@ -365,10 +433,11 @@ module.exports = async function (fastify, opts) {
           const roster = byCoterie.get(r.id) || [];
           return {
             ...r,
+            chasse: rules.chasseForDivision(r.domain_id),
             member_count: roster.length,
             members: roster,
             mechanics: {
-              huntingDifficulty: rules.huntingDifficulty(r.chasse),
+              huntingDifficulty: r.domain_id != null ? rules.divisionDifficulty(r.domain_id) : null,
               lienBonusDice: rules.lienBonusDice(r.lien),
               portillonPenaltyDice: rules.portillonPenaltyDice(r.portillon),
             },
@@ -438,7 +507,12 @@ module.exports = async function (fastify, opts) {
         [id]
       );
 
-      reply.send({ coterie: presentCoterie(row, members), members, xp_log: xpLog });
+      const [retainers] = await pool.query(
+        'SELECT id, name, tier, domitor_character_id FROM retainers WHERE coterie_id=? ORDER BY tier DESC, name',
+        [id]
+      );
+
+      reply.send({ coterie: presentCoterie(row, members), members, xp_log: xpLog, retainers });
     } catch (e) {
       log.err('Read coterie failed', { message: e.message, stack: e.stack });
       reply.status(500).json({ error: 'Failed to load coterie' });
@@ -772,6 +846,9 @@ module.exports = async function (fastify, opts) {
     if (catalog && !catalog[key]) {
       return reply.status(400).json({ error: `Unknown coterie ${kind}: ${key}` });
     }
+    if (kind === 'background' && catalog[key].flaw) {
+      return reply.status(400).json({ error: `${catalog[key].name} is a Flaw: it grants dots, it is not bought with XP` });
+    }
 
     const conn = await pool.getConnection();
     try {
@@ -940,6 +1017,66 @@ module.exports = async function (fastify, opts) {
   });
 
   /* ================================================================ *
+   * XP — deposit (member moves personal XP into the bank)
+   * ================================================================ */
+
+  // One-way: a deposit is never refunded. A withdrawal would let XP move
+  // between characters through the bank.
+  fastify.post('/api/coteries/:id/deposit', { preHandler: [authRequired] }, async (req, reply) => {
+    const id = Number(req.params.id);
+    const amount = Number((req.body || {}).amount);
+    if (!Number.isInteger(amount) || amount < 1) {
+      return reply.status(400).json({ error: 'amount must be a positive whole number of XP' });
+    }
+
+    const { member } = await access(req, id);
+    if (!member) return reply.status(403).json({ error: 'Only a member can deposit into this coterie' });
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [[ch]] = await conn.query(
+        'SELECT id, name, xp FROM characters WHERE user_id=? ORDER BY id ASC LIMIT 1 FOR UPDATE',
+        [req.user.id]
+      );
+      if (!ch) {
+        await conn.rollback();
+        return reply.status(400).json({ error: 'You need a character sheet to deposit XP.' });
+      }
+      if ((Number(ch.xp) || 0) < amount) {
+        await conn.rollback();
+        return reply.status(400).json({ error: `Not enough personal XP (need ${amount}, have ${ch.xp || 0}).` });
+      }
+      const [[row]] = await conn.query('SELECT name, coterie_xp FROM coteries WHERE id=? FOR UPDATE', [id]);
+      if (!row) { await conn.rollback(); return reply.status(404).json({ error: 'Not found' }); }
+
+      await conn.query('UPDATE characters SET xp = xp - ? WHERE id=?', [amount, ch.id]);
+      await conn.query('UPDATE coteries SET coterie_xp = coterie_xp + ? WHERE id=?', [amount, id]);
+      await conn.query(
+        `INSERT INTO xp_log (character_id, action, target, from_level, to_level, cost, payload, actor_id)
+         VALUES (?,?,?,?,?,?,?,?)`,
+        [ch.id, 'coterie_deposit', `Deposit to ${row.name}`, null, null, amount,
+         JSON.stringify({ coterie_id: id }), req.user.id]
+      ).catch(() => { /* xp_log is best-effort, as elsewhere */ });
+      await conn.query(
+        `INSERT INTO coterie_xp_log (coterie_id, user_id, kind, bank_delta, personal_delta, character_id, note)
+         VALUES (?,?,?,?,?,?,?)`,
+        [id, req.user.id, 'deposit', amount, -amount, ch.id, `Deposited by ${ch.name || 'a member'}`.slice(0, 500)]
+      );
+      await conn.commit();
+
+      log.xp('Coterie XP deposit', { coterie_id: id, by_user_id: req.user.id, character_id: ch.id, amount });
+      reply.send({ coterie_xp: (Number(row.coterie_xp) || 0) + amount, remaining_personal_xp: Number(ch.xp) - amount });
+    } catch (e) {
+      await conn.rollback();
+      log.err('Coterie deposit failed', { message: e.message });
+      reply.status(500).json({ error: 'Failed to deposit XP' });
+    } finally {
+      conn.release();
+    }
+  });
+
+  /* ================================================================ *
    * Contribute — hand a personal Background over to the coterie
    * ================================================================ */
 
@@ -947,7 +1084,9 @@ module.exports = async function (fastify, opts) {
    * Moves one Background off the caller's own character sheet and into the
    * coterie's shared Backgrounds, free of XP (the dots were already paid for).
    * Only entries listed in rules.CONTRIBUTABLE_BACKGROUNDS are eligible. The
-   * coterie keeps the higher of its current rating and the contributed one.
+   * contributed dots add to the coterie's rating (corebook p.195: Advantage
+   * dots go into the pool); a contribution that would pass the Background's
+   * maximum is refused rather than silently losing the excess.
    *
    * body: { character_entry_id: string }
    */
@@ -997,7 +1136,13 @@ module.exports = async function (fastify, opts) {
       const backgrounds = safeParse(row.backgrounds_json, []);
       const existing = backgrounds.find((b) => b && b.key === key);
       const fromDots = existing ? Number(existing.dots) || 0 : 0;
-      const toDots = Math.max(fromDots, givenDots);
+      const toDots = fromDots + givenDots;
+      if (toDots > def.max) {
+        await conn.rollback();
+        return reply.status(400).json({
+          error: `The coterie holds ${def.name} ${fromDots}; adding your ${givenDots} would pass the maximum of ${def.max}.`,
+        });
+      }
       if (existing) existing.dots = toDots;
       else backgrounds.push({ key, name: def.name, dots: toDots, note: null });
 
@@ -1099,8 +1244,26 @@ module.exports = async function (fastify, opts) {
     return null;
   }
 
+  // House rule: whoever makes a ghoul is its domitor, and only they (or a
+  // Storyteller) may rebuild, re-bind or release it. Mortal retainers stay
+  // editable by any member. Returns an error string, or null when allowed.
+  async function ghoulGuard(conn, coterieId, req, admin, { oldDomitorId, newDomitorId }) {
+    if (admin) return null;
+    const me = (await loadMembers(conn, coterieId)).find((m) => Number(m.user_id) === Number(req.user.id));
+    const mine = me && me.character_id != null ? Number(me.character_id) : null;
+    if (oldDomitorId != null && Number(oldDomitorId) !== mine) {
+      return "Only this ghoul's domitor (or a Storyteller) can change or release them.";
+    }
+    if (newDomitorId != null && Number(newDomitorId) !== mine) {
+      return 'A ghoul drinks your blood: you can only make a ghoul with yourself as domitor.';
+    }
+    return null;
+  }
+
+  // The extras on a coterie ghoul are only ever written by the blood routes:
+  // anything the client sends as an extra is dropped here.
   const retainerInput = (body) => {
-    const sheet = body && typeof body.sheet === 'object' && body.sheet ? body.sheet : null;
+    const sheet = body && typeof body.sheet === 'object' && body.sheet ? splitBlood(body.sheet).own : null;
     return {
       name: String((body && body.name) || '').trim().slice(0, 255),
       tier: Number(body && body.tier),
@@ -1154,7 +1317,8 @@ module.exports = async function (fastify, opts) {
 
   fastify.post('/api/coteries/:id/retainers', { preHandler: [authRequired] }, async (req, reply) => {
     const id = Number(req.params.id);
-    if (!(await access(req, id)).allowed) return reply.status(403).json({ error: 'Not a member of this coterie' });
+    const acc = await access(req, id);
+    if (!acc.allowed) return reply.status(403).json({ error: 'Not a member of this coterie' });
     const input = retainerInput(req.body);
     if (!input.name) return reply.status(400).json({ error: 'The retainer needs a name.' });
 
@@ -1163,7 +1327,8 @@ module.exports = async function (fastify, opts) {
       await conn.beginTransaction();
       const budget = await retainerBudget(conn, id);
       if (!budget) { await conn.rollback(); return reply.status(404).json({ error: 'Not found' }); }
-      const err = await checkCoterieRetainer(conn, id, input, budget);
+      const err = await checkCoterieRetainer(conn, id, input, budget)
+        || await ghoulGuard(conn, id, req, acc.admin, { newDomitorId: input.domitorId });
       if (err) { await conn.rollback(); return reply.status(400).json({ error: err }); }
 
       const [r] = await conn.query(
@@ -1189,7 +1354,8 @@ module.exports = async function (fastify, opts) {
   fastify.put('/api/coteries/:id/retainers/:rid', { preHandler: [authRequired] }, async (req, reply) => {
     const id = Number(req.params.id);
     const rid = Number(req.params.rid);
-    if (!(await access(req, id)).allowed) return reply.status(403).json({ error: 'Not a member of this coterie' });
+    const acc = await access(req, id);
+    if (!acc.allowed) return reply.status(403).json({ error: 'Not a member of this coterie' });
     const input = retainerInput(req.body);
 
     const conn = await pool.getConnection();
@@ -1199,7 +1365,10 @@ module.exports = async function (fastify, opts) {
       const [[old]] = await conn.query('SELECT * FROM retainers WHERE id=? AND coterie_id=? FOR UPDATE', [rid, id]);
       if (!budget || !old) { await conn.rollback(); return reply.status(404).json({ error: 'Retainer not found' }); }
       input.name = input.name || old.name;
-      const err = await checkCoterieRetainer(conn, id, input, budget);
+      const err = await ghoulGuard(conn, id, req, acc.admin, {
+        oldDomitorId: old.domitor_character_id, newDomitorId: input.domitorId,
+      }) || await checkCoterieRetainer(conn, id, input, budget)
+        || bloodCarryOver(parseSheet(old.sheet), input);
       if (err) { await conn.rollback(); return reply.status(400).json({ error: err }); }
 
       await conn.query(
@@ -1220,13 +1389,134 @@ module.exports = async function (fastify, opts) {
     }
   });
 
+  // A rebuild keeps the other members' blood. Returns an error string, or null
+  // after merging the old extras into input.sheet.
+  function bloodCarryOver(oldSheet, input) {
+    const { extras } = splitBlood(oldSheet);
+    if (!extras.length) return null;
+    if (input.sheet?.isGhoul !== true) {
+      return 'Other members have given this ghoul their blood: withdraw it before making them mortal.';
+    }
+    const clash = extras.find((e) => input.sheet.disciplines && input.sheet.disciplines[e.discipline]);
+    if (clash) return `${clash.discipline} already comes from another member's blood; pick a different Discipline.`;
+    if (extras.some((e) => e.source === input.domitorId)) {
+      return "The new domitor already gives this ghoul their blood; withdraw it first.";
+    }
+    if (disciplineCount(input.sheet) + extras.length > input.tier) {
+      return `A Tier ${input.tier} ghoul holds at most ${input.tier} Discipline(s), and ${extras.length} come from other members' blood. Withdraw one first.`;
+    }
+    input.sheet = withBlood(input.sheet, extras);
+    return null;
+  }
+
+  // A member who is not the domitor feeds the ghoul and passes on 1 dot of
+  // one of their clan Disciplines. body: { discipline, power: { name, ... } }
+  fastify.post('/api/coteries/:id/retainers/:rid/blood', { preHandler: [authRequired] }, async (req, reply) => {
+    const id = Number(req.params.id);
+    const rid = Number(req.params.rid);
+    const discipline = String((req.body || {}).discipline || '');
+    const power = (req.body || {}).power || {};
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const fail = async (status, error) => { await conn.rollback(); return reply.status(status).json({ error }); };
+
+      const [[ret]] = await conn.query('SELECT * FROM retainers WHERE id=? AND coterie_id=? FOR UPDATE', [rid, id]);
+      if (!ret) return fail(404, 'Retainer not found');
+      const sheet = parseSheet(ret.sheet);
+      if (sheet?.isGhoul !== true) return fail(400, 'Only a ghoul can take your blood.');
+
+      const me = (await loadMembers(conn, id)).find((m) => Number(m.user_id) === Number(req.user.id));
+      if (!me || me.character_id == null) return fail(403, 'Only a coterie member can give their blood.');
+      const myId = Number(me.character_id);
+      if (myId === Number(ret.domitor_character_id)) {
+        return fail(400, 'You are the domitor: your Discipline is chosen when you build the sheet.');
+      }
+
+      const { own, extras } = splitBlood(sheet);
+      if (extras.some((e) => e.source === myId)) return fail(400, 'Your blood already gives this ghoul a Discipline.');
+      if (!clanDisciplines(me.clan).includes(discipline)) {
+        return fail(400, `${discipline || 'That'} is not a ${me.clan || 'clan'} Discipline you can pass on.`);
+      }
+      if (sheet.disciplines && sheet.disciplines[discipline]) return fail(400, `The ghoul already has ${discipline}.`);
+      if (disciplineCount(sheet) >= Number(ret.tier)) {
+        return fail(400, `A Tier ${ret.tier} ghoul holds at most ${ret.tier} Discipline(s). It has no room for more blood.`);
+      }
+      if (!isLevelOnePower(discipline, power.name)) return fail(400, `Pick a level 1 ${discipline} power.`);
+
+      const next = withBlood(own, [...extras, { discipline, source: myId, power: cleanPower(power, discipline) }]);
+      const err = validateRetainerSheet(Number(ret.tier), next, true, Number(ret.tier));
+      if (err) return fail(400, err);
+
+      await conn.query('UPDATE retainers SET sheet=? WHERE id=?', [JSON.stringify(next), rid]);
+      await conn.commit();
+      log.adm('Coterie ghoul given blood', { coterie_id: id, retainer_id: rid, discipline, by_character_id: myId, by_user_id: req.user.id });
+      const [[row]] = await pool.query('SELECT * FROM retainers WHERE id=?', [rid]);
+      row.sheet = parseSheet(row.sheet);
+      reply.send(row);
+    } catch (e) {
+      await conn.rollback();
+      log.err('Give blood to coterie ghoul failed', { message: e.message, retainer_id: rid });
+      reply.status(500).json({ error: 'Failed to give blood' });
+    } finally {
+      conn.release();
+    }
+  });
+
+  // The giver, the domitor or a Storyteller takes one extra Discipline back.
+  fastify.delete('/api/coteries/:id/retainers/:rid/blood/:discipline', { preHandler: [authRequired] }, async (req, reply) => {
+    const id = Number(req.params.id);
+    const rid = Number(req.params.rid);
+    const discipline = String(req.params.discipline || '');
+    const acc = await access(req, id);
+    if (!acc.allowed) return reply.status(403).json({ error: 'Not a member of this coterie' });
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const fail = async (status, error) => { await conn.rollback(); return reply.status(status).json({ error }); };
+
+      const [[ret]] = await conn.query('SELECT * FROM retainers WHERE id=? AND coterie_id=? FOR UPDATE', [rid, id]);
+      if (!ret) return fail(404, 'Retainer not found');
+      const { own, extras } = splitBlood(parseSheet(ret.sheet));
+      const gift = extras.find((e) => e.discipline === discipline);
+      if (!gift) return fail(404, `${discipline} is not another member's blood on this ghoul.`);
+
+      if (!acc.admin) {
+        const me = (await loadMembers(conn, id)).find((m) => Number(m.user_id) === Number(req.user.id));
+        const myId = me && me.character_id != null ? Number(me.character_id) : null;
+        if (myId !== gift.source && myId !== Number(ret.domitor_character_id)) {
+          return fail(403, 'Only the member who gave this blood, the domitor or a Storyteller can take it back.');
+        }
+      }
+
+      const next = withBlood(own, extras.filter((e) => e !== gift));
+      await conn.query('UPDATE retainers SET sheet=? WHERE id=?', [JSON.stringify(next), rid]);
+      await conn.commit();
+      log.adm('Coterie ghoul blood withdrawn', { coterie_id: id, retainer_id: rid, discipline, source_character_id: gift.source, by_user_id: req.user.id });
+      const [[row]] = await pool.query('SELECT * FROM retainers WHERE id=?', [rid]);
+      row.sheet = parseSheet(row.sheet);
+      reply.send(row);
+    } catch (e) {
+      await conn.rollback();
+      log.err('Withdraw blood from coterie ghoul failed', { message: e.message, retainer_id: rid });
+      reply.status(500).json({ error: 'Failed to withdraw blood' });
+    } finally {
+      conn.release();
+    }
+  });
+
   fastify.delete('/api/coteries/:id/retainers/:rid', { preHandler: [authRequired] }, async (req, reply) => {
     const id = Number(req.params.id);
     const rid = Number(req.params.rid);
-    if (!(await access(req, id)).allowed) return reply.status(403).json({ error: 'Not a member of this coterie' });
+    const acc = await access(req, id);
+    if (!acc.allowed) return reply.status(403).json({ error: 'Not a member of this coterie' });
     try {
-      const [[old]] = await pool.query('SELECT name, tier FROM retainers WHERE id=? AND coterie_id=?', [rid, id]);
+      const [[old]] = await pool.query('SELECT name, tier, domitor_character_id FROM retainers WHERE id=? AND coterie_id=?', [rid, id]);
       if (!old) return reply.status(404).json({ error: 'Retainer not found' });
+      const err = await ghoulGuard(null, id, req, acc.admin, { oldDomitorId: old.domitor_character_id });
+      if (err) return reply.status(403).json({ error: err });
       await pool.query('DELETE FROM retainers WHERE id=?', [rid]);
       log.adm('Coterie retainer released', { coterie_id: id, retainer_id: rid, name: old.name, tier: old.tier, by_user_id: req.user.id });
       reply.send({ ok: true });

@@ -677,28 +677,6 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  fastify.get('/api/admin/retainers', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
-    try {
-      const [rows] = await pool.query(`
-        SELECT r.id, r.character_id, r.name, r.tier, r.sheet, r.created_at, COALESCE(c.name, CONCAT('Coterie: ', co.name)) as domitor_name
-        FROM retainers r
-        LEFT JOIN characters c ON r.character_id = c.id
-        LEFT JOIN coteries co ON r.coterie_id = co.id
-      `);
-      for (const row of rows) {
-        row.sheet = parseSheet(row.sheet);
-      }
-        const payload = JSON.stringify(rows);
-        return reply
-          .header('Content-Type', 'application/json; charset=utf-8')
-          .header('Content-Length', Buffer.byteLength(payload))
-          .send(payload);
-    } catch (e) {
-      log.err('Failed to get all retainers for admin', { error: e.message });
-      reply.status(500).json({ error: 'Failed to fetch retainers' });
-    }
-  });
-
   fastify.put('/api/admin/characters/:id/reset', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const charId = req.params.id;

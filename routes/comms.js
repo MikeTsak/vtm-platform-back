@@ -10,6 +10,7 @@ function resolveCommsSchedule(scheduleStr, masterEnabledStr, nowInput = new Date
   const masterEnabled = masterEnabledStr === 'true';
   let isCommsEnabled = masterEnabled;
   let nextOpening = null;
+  let nextClosing = null;
 
   try {
     const schedule = typeof scheduleStr === 'string' ? JSON.parse(scheduleStr) : (scheduleStr || {});
@@ -90,13 +91,33 @@ function resolveCommsSchedule(scheduleStr, masterEnabledStr, nowInput = new Date
           }
         }
       }
+    } else {
+      for (let offset = 1; offset <= 30; offset++) {
+        const futureDate = new Date(now.getTime() + offset * 24 * 60 * 60 * 1000);
+        const futureDateStr = getAthensDate(futureDate);
+        const state = schedule[futureDateStr];
+
+        if (state === false || state === 'event') {
+          const dayName = getAthensDayName(futureDate);
+          const euDate = getAthensEuDate(futureDate);
+          nextClosing = {
+            day: dayName,
+            time: '00:01',
+            date: euDate,
+            iso: `${futureDateStr}T00:01:00+03:00`,
+            formatted: `${dayName} at 00:01 (${euDate})`
+          };
+          break;
+        }
+      }
     }
   } catch (err) { }
 
   return {
     isCommsEnabled,
     masterEnabled,
-    nextOpening
+    nextOpening,
+    nextClosing
   };
 }
 
@@ -114,7 +135,8 @@ module.exports = async function (fastify, opts) {
       reply.send({
         comms_enabled: info.isCommsEnabled,
         master_enabled: info.masterEnabled,
-        next_opening: info.nextOpening
+        next_opening: info.nextOpening,
+        next_closing: info.nextClosing
       });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to fetch comms status' });
@@ -134,7 +156,8 @@ module.exports = async function (fastify, opts) {
       const payload = {
         comms_enabled: info.isCommsEnabled,
         master_enabled: info.masterEnabled,
-        next_opening: info.nextOpening
+        next_opening: info.nextOpening,
+        next_closing: info.nextClosing
       };
       if (io) io.emit('comms:status', payload);
       else if (fastify.io) fastify.io.emit('comms:status', payload);
@@ -144,7 +167,7 @@ module.exports = async function (fastify, opts) {
           .catch((e) => log.err('Queued message flush failed', { error: e.message }));
       }
 
-      reply.send({ ok: true, comms_enabled: info.isCommsEnabled, next_opening: info.nextOpening });
+      reply.send({ ok: true, comms_enabled: info.isCommsEnabled, next_opening: info.nextOpening, next_closing: info.nextClosing });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to update comms status' });
     }
@@ -178,7 +201,8 @@ module.exports = async function (fastify, opts) {
       const payload = {
         comms_enabled: info.isCommsEnabled,
         master_enabled: info.masterEnabled,
-        next_opening: info.nextOpening
+        next_opening: info.nextOpening,
+        next_closing: info.nextClosing
       };
       if (io) io.emit('comms:status', payload);
       else if (fastify.io) fastify.io.emit('comms:status', payload);
@@ -188,7 +212,7 @@ module.exports = async function (fastify, opts) {
           .catch((e) => log.err('Queued message flush failed', { error: e.message }));
       }
 
-      reply.send({ ok: true, comms_enabled: info.isCommsEnabled, next_opening: info.nextOpening });
+      reply.send({ ok: true, comms_enabled: info.isCommsEnabled, next_opening: info.nextOpening, next_closing: info.nextClosing });
     } catch (e) {
       reply.status(500).json({ error: 'Failed to update comms schedule' });
     }

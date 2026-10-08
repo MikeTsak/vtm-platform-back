@@ -29,25 +29,52 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  // --- Admin: fetch all ghouls ---
-  fastify.get('/api/admin/ghouls', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  // --- Admin: every retainer — personal mortals, ghouls, and coterie-owned ---
+  // `manage_*` is the character the Retainers page is opened as: the owner of
+  // a personal retainer, else a coterie retainer's domitor, else the
+  // coterie's first member. `blood_from` names the members whose blood gives
+  // a coterie ghoul its extra Disciplines (sheet.bloodSources).
+  fastify.get('/api/admin/retainers', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const [ghouls] = await pool.query(`
-      SELECT 
-        r.id, r.name as retainer_name, r.tier, r.sheet, r.created_at, 
-        c.id as domitor_id, c.name as domitor_name, c.clan as domitor_clan, c.xp as domitor_xp, c.image_url as domitor_image_url,
-        u.display_name as player_name, u.id as user_id
-      FROM retainers r
-      -- coterie ghouls list under the member whose blood they drink
-      JOIN characters c ON c.id = COALESCE(r.character_id, r.domitor_character_id)
-      JOIN users u ON c.user_id = u.id
-      WHERE JSON_EXTRACT(r.sheet, '$.isGhoul') = true
-      ORDER BY r.created_at DESC
-    `);
-      reply.send({ ghouls });
+      const [rows] = await pool.query(`
+        SELECT r.id, r.name, r.tier, r.sheet, r.created_at,
+               r.character_id, r.coterie_id, r.domitor_character_id,
+               oc.name AS owner_name, oc.clan AS owner_clan, ou.display_name AS owner_player, oc.user_id AS owner_user_id,
+               co.name AS coterie_name,
+               dc.name AS domitor_name, dc.clan AS domitor_clan, du.display_name AS domitor_player, dc.user_id AS domitor_user_id,
+               mc.id AS manage_id, mc.name AS manage_name, mc.clan AS manage_clan, mc.xp AS manage_xp
+          FROM retainers r
+          LEFT JOIN characters oc ON oc.id = r.character_id
+          LEFT JOIN users ou ON ou.id = oc.user_id
+          LEFT JOIN coteries co ON co.id = r.coterie_id
+          LEFT JOIN characters dc ON dc.id = r.domitor_character_id
+          LEFT JOIN users du ON du.id = dc.user_id
+          LEFT JOIN characters mc ON mc.id = COALESCE(
+            r.character_id, r.domitor_character_id,
+            (SELECT m.character_id FROM coterie_members m
+              WHERE m.coterie_id = r.coterie_id AND m.character_id IS NOT NULL
+              ORDER BY m.id LIMIT 1))
+         ORDER BY r.created_at DESC
+      `);
+
+      const sourceIds = new Set();
+      for (const r of rows) {
+        r.sheet = parseSheet(r.sheet);
+        for (const id of Object.values((r.sheet && r.sheet.bloodSources) || {})) sourceIds.add(Number(id));
+      }
+      const names = new Map();
+      if (sourceIds.size) {
+        const [chars] = await pool.query('SELECT id, name FROM characters WHERE id IN (?)', [[...sourceIds]]);
+        for (const c of chars) names.set(Number(c.id), c.name);
+      }
+      for (const r of rows) {
+        r.blood_from = Object.fromEntries(Object.entries((r.sheet && r.sheet.bloodSources) || {})
+          .map(([disc, id]) => [disc, names.get(Number(id)) || 'a former member']));
+      }
+      reply.send({ retainers: rows });
     } catch (e) {
-      console.error('Failed to fetch all ghouls:', e);
-      reply.status(500).json({ error: 'Failed to fetch ghouls' });
+      log.err('Failed to fetch all retainers', { message: e.message });
+      reply.status(500).json({ error: 'Failed to fetch retainers' });
     }
   });
 

@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Erebus Portal API",
-    "version": "1.0.134",
+    "version": "1.0.137",
     "description": "API documentation for the Vampire: The Masquerade RPG portal."
   },
   "servers": [
@@ -864,16 +864,6 @@
           "200": {
             "description": "OK"
           },
-          "500": {
-            "description": "Internal Server Error"
-          }
-        }
-      }
-    },
-    "/api/admin/retainers": {
-      "get": {
-        "description": "",
-        "responses": {
           "500": {
             "description": "Internal Server Error"
           }
@@ -2502,7 +2492,7 @@
         }
       }
     },
-    "/api/admin/ghouls": {
+    "/api/admin/retainers": {
       "get": {
         "description": "",
         "responses": {
@@ -7170,6 +7160,38 @@
         }
       }
     },
+    "/api/coteries/{id}/deposit": {
+      "post": {
+        "description": "",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        }
+      }
+    },
     "/api/coteries/{id}/contribute": {
       "post": {
         "description": "",
@@ -7328,6 +7350,93 @@
           },
           "404": {
             "description": "Not Found"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        }
+      }
+    },
+    "/api/coteries/{id}/retainers/{rid}/blood": {
+      "post": {
+        "description": "",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "example": "any"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/coteries/{id}/retainers/{rid}/blood/{discipline}": {
+      "delete": {
+        "description": "",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "discipline",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "description": "Forbidden"
           },
           "500": {
             "description": "Internal Server Error"
@@ -8675,11 +8784,8 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "OK"
-          },
-          "500": {
-            "description": "Internal Server Error"
+          "default": {
+            "description": ""
           }
         },
         "requestBody": {
@@ -8689,6 +8795,9 @@
                 "type": "object",
                 "properties": {
                   "indices": {
+                    "example": "any"
+                  },
+                  "hungerIndices": {
                     "example": "any"
                   }
                 }
@@ -8737,6 +8846,29 @@
     "/api/admin/dice/rolls/all": {
       "delete": {
         "description": "",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK"
