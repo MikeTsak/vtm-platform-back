@@ -4,6 +4,7 @@
 // permissions, media, and broadcast.
 const axios = require('axios');
 const sharp = require('sharp');
+const { sendDiscordChannelMessage } = require('../services/discord');
 const { getSetting } = require('../utils/settings');
 const { sanitizeRichText } = require('../utils/sanitize');
 const { xmlEscape, getAuthorSignature, isVideoUrl, resolveMediaUrl } = require('../services/news');
@@ -391,12 +392,7 @@ module.exports = async function (fastify, opts) {
               }
             }
 
-            await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, payload, {
-              headers: {
-                'Authorization': `Bot ${process.env.DISCORD_BOT_TOKEN}`,
-                'Content-Type': 'application/json'
-              }
-            });
+            await sendDiscordChannelMessage(channelId, payload);
           }
         } catch (discordErr) {
           log.err('Discord news broadcast failed', { error: discordErr.response?.data ? JSON.stringify(discordErr.response.data) : discordErr.message });
@@ -489,12 +485,7 @@ module.exports = async function (fastify, opts) {
         }
       }
 
-      await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, payload, {
-        headers: {
-          'Authorization': `Bot ${process.env.DISCORD_BOT_TOKEN}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      await sendDiscordChannelMessage(channelId, payload);
 
       log.ok('News/Announcement rebroadcast triggered', { user_id: req.user.id, entry_id: req.params.id });
       reply.send({ success: true });

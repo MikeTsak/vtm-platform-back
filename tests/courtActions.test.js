@@ -26,7 +26,7 @@ const call = (user, method, url, payload) => app.inject({ method, url, payload, 
 beforeAll(async () => {
   pool = await setupTestDatabase();
   await truncateAll();
-  for (const t of ['blood_hunts', 'court_wanted', 'elysium_invitation_reads', 'elysium_invitations', 'events']) await pool.query(`DELETE FROM ${t}`);
+  for (const t of ['blood_hunts', 'court_wanted', 'elysium_invitation_versions', 'elysium_invitation_reads', 'elysium_invitations', 'events']) await pool.query(`DELETE FROM ${t}`);
   app = buildTestApp(pool);
   await app.ready();
 
@@ -149,5 +149,40 @@ describe('Elysium invitation', () => {
     cur = JSON.parse((await call(player, 'GET', '/api/elysium/current')).body);
     expect(cur.status).toBe('barred');
     expect(cur.invitation.location).toBeUndefined();
+  });
+
+  it('keeps every version, who made it, and every opening, for the admin only', async () => {
+    // Re-send must not erase who already read it; it only re-arms the pop-up.
+    await call(keeper, 'POST', `/api/court-actions/elysium/${eventId}/publish`, { publish: true, reannounce: true });
+    await call(keeper, 'PUT', `/api/court-actions/elysium/${eventId}`, { name: 'Feast of Thorns', location: 'The Zappeion', body: 'Come, {name}.', barred: [] });
+    let cur = JSON.parse((await call(player, 'GET', '/api/elysium/current')).body);
+    expect(cur.read).toBe(false);
+    await call(player, 'POST', `/api/elysium/${eventId}/read`);
+    await call(player, 'POST', `/api/elysium/${eventId}/read`);
+
+    expect((await call(keeper, 'GET', `/api/admin/elysium/invitations/${eventId}`)).statusCode).toBe(403);
+    const res = await call(admin, 'GET', `/api/admin/elysium/invitations/${eventId}`);
+    expect(res.statusCode).toBe(200);
+    const h = JSON.parse(res.body);
+    expect(h.versions.map(v => v.action)).toEqual(['save', 'publish', 'edit', 'reannounce', 'edit']);
+    expect(h.versions.every(v => v.actor_office === 'Keeper')).toBe(true);
+    expect(h.versions[1].published).toBe(true);
+    const r = h.reads.find(x => x.user_id === player.user.id);
+    expect(r.open_count).toBe(3);
+    expect(r.seen_as).toBe('invited');
+    expect(r.first_version_id).toBe(h.versions[1].id);
+
+    const list = JSON.parse((await call(admin, 'GET', '/api/admin/elysium/invitations')).body).invitations;
+    expect(list.find(i => i.id === eventId).version_count).toBe(5);
+  });
+
+  it('stores the card language, and drops anything but el / en', async () => {
+    const draft = { name: 'Feast of Thorns', location: 'The Zappeion', body: 'Come.', barred: [] };
+    let res = await call(keeper, 'PUT', `/api/court-actions/elysium/${eventId}`, { ...draft, design: { lang: 'el' } });
+    expect(JSON.parse(res.body).invitation.design.lang).toBe('el');
+    res = await call(keeper, 'PUT', `/api/court-actions/elysium/${eventId}`, { ...draft, design: { lang: 'fr' } });
+    expect(JSON.parse(res.body).invitation.design.lang).toBeUndefined();
+    const cur = JSON.parse((await call(player, 'GET', '/api/elysium/current')).body);
+    expect(cur.invitation.design.lang).toBeUndefined(); // card then defaults to English
   });
 });

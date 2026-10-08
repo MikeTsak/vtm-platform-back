@@ -20,6 +20,43 @@ function getDiscordClient() {
   }
 }
 
+// img.miketsak.gr drops every request from Discordbot, so an embed image hosted
+// there renders as an empty box. Download it ourselves and send it as an
+// attachment the embed points at (attachment://) — Discord never fetches it.
+async function inlineEmbedImage(payload) {
+  const url = payload?.embeds?.[0]?.image?.url;
+  if (!url || !/^https?:\/\//i.test(url)) return { payload, file: null };
+  try {
+    const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 15000, maxContentLength: 10 * 1024 * 1024 });
+    const type = String(res.headers['content-type'] || 'image/png').split(';')[0];
+    const name = `image.${type.split('/')[1] || 'png'}`;
+    const [first, ...rest] = payload.embeds;
+    return {
+      payload: { ...payload, embeds: [{ ...first, image: { url: `attachment://${name}` } }, ...rest] },
+      file: { name, type, data: Buffer.from(res.data) },
+    };
+  } catch (err) {
+    log.warn('Could not inline Discord embed image, sending URL as-is', { url, error: err.message });
+    return { payload, file: null };
+  }
+}
+
+// discord.js gateway send body.
+const gatewayBody = (payload, file) =>
+  file ? { ...payload, files: [{ attachment: file.data, name: file.name }] } : payload;
+
+// REST body: plain JSON, or multipart with payload_json + files[0].
+// No explicit Content-Type for FormData — axios sets the boundary itself.
+function restRequest(payload, file, token) {
+  if (!file) {
+    return { body: payload, headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' } };
+  }
+  const form = new FormData();
+  form.append('payload_json', JSON.stringify(payload));
+  form.append('files[0]', new Blob([file.data], { type: file.type }), file.name);
+  return { body: form, headers: { Authorization: `Bot ${token}` } };
+}
+
 /**
  * Send a Direct Message to a Discord user.
  * Tries Gateway bot client first, then falls back to Discord REST API directly.
@@ -37,14 +74,16 @@ async function sendDiscordDM(recipientDiscordId, messageText) {
     throw new Error('Discord bot token is not configured on the server.');
   }
 
-  const payload = typeof messageText === 'string' ? { content: messageText } : messageText;
+  const { payload, file } = await inlineEmbedImage(
+    typeof messageText === 'string' ? { content: messageText } : messageText
+  );
 
   const client = getDiscordClient();
   if (client?.isReady()) {
     try {
       const discordUser = await client.users.fetch(recipientDiscordId);
       if (discordUser) {
-        return await discordUser.send(payload);
+        return await discordUser.send(gatewayBody(payload, file));
       }
     } catch (clientErr) {
       if (clientErr.code === 50007) {
@@ -70,16 +109,11 @@ async function sendDiscordDM(recipientDiscordId, messageText) {
 
     const dmChannelId = channelRes.data.id;
 
+    const { body, headers } = restRequest(payload, file, token);
     const messageRes = await axios.post(
       `https://discord.com/api/v10/channels/${dmChannelId}/messages`,
-      payload,
-      {
-        headers: {
-          Authorization: `Bot ${token}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 10000
-      }
+      body,
+      { headers, timeout: 30000 }
     );
 
     return messageRes.data;
@@ -107,12 +141,14 @@ async function sendDiscordChannelMessage(channelId, content) {
     throw new Error('Discord bot token is not configured on the server.');
   }
 
+  const { payload, file } = await inlineEmbedImage(typeof content === 'string' ? { content } : content);
+
   const client = getDiscordClient();
   if (client?.isReady()) {
     try {
       const channel = await client.channels.fetch(channelId);
       if (channel) {
-        return await channel.send(content);
+        return await channel.send(gatewayBody(payload, file));
       }
     } catch (clientErr) {
       log.warn('Discord client channel send failed, falling back to REST API', { error: clientErr.message });
@@ -120,16 +156,11 @@ async function sendDiscordChannelMessage(channelId, content) {
   }
 
   // Fallback: Discord REST API
+  const { body, headers } = restRequest(payload, file, token);
   const messageRes = await axios.post(
     `https://discord.com/api/v10/channels/${channelId}/messages`,
-    typeof content === 'string' ? { content } : content,
-    {
-      headers: {
-        Authorization: `Bot ${token}`,
-        'Content-Type': 'application/json'
-      },
-      timeout: 10000
-    }
+    body,
+    { headers, timeout: 30000 }
   );
 
   return messageRes.data;

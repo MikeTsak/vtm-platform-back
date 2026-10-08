@@ -5,6 +5,7 @@
 
 const { getSetting, setSetting } = require('../utils/settings');
 const { parseSheet } = require('../utils/sheet');
+const { recordVersion } = require('../services/elysiumHistory');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, sendPushNotification, broadcastNtfyAlert } = opts;
@@ -64,6 +65,7 @@ module.exports = async function (fastify, opts) {
           'INSERT INTO elysium_invitations (event_id, name, updated_by) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name), updated_by = VALUES(updated_by)',
           [req.params.id, name, req.user.id]
         );
+        await recordVersion(Number(req.params.id), 'calendar_rename', req.user.id, 'Storyteller');
       }
       if (updates.length === 0) return reply.send({ ok: true });
       values.push(req.params.id);

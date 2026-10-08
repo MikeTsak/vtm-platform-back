@@ -1,7 +1,7 @@
 // routes/rumors.js
 //
 // Rumours: short in-fiction posts with optional broadcast to Discord/ntfy.
-const axios = require('axios');
+const { sendDiscordChannelMessage } = require('../services/discord');
 const { getSetting } = require('../utils/settings');
 const { sanitizeRichText } = require('../utils/sanitize');
 const { isVideoUrl, resolveMediaUrl } = require('../services/news');
@@ -112,12 +112,7 @@ module.exports = async function (fastify, opts) {
               }
             }
 
-            await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, payload, {
-              headers: {
-                'Authorization': `Bot ${process.env.DISCORD_BOT_TOKEN}`,
-                'Content-Type': 'application/json'
-              }
-            });
+            await sendDiscordChannelMessage(channelId, payload);
           }
         } catch (discordErr) {
           log.err('Discord rumor broadcast failed', { error: discordErr.response?.data ? JSON.stringify(discordErr.response.data) : discordErr.message });
@@ -188,12 +183,7 @@ module.exports = async function (fastify, opts) {
         }
       }
 
-      await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, payload, {
-        headers: {
-          'Authorization': `Bot ${process.env.DISCORD_BOT_TOKEN}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      await sendDiscordChannelMessage(channelId, payload);
 
       log.ok('Rumor rebroadcast triggered', { user_id: req.user.id, rumor_id: req.params.id });
       reply.send({ success: true });
