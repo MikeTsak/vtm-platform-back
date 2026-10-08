@@ -19,6 +19,7 @@ const { resolveCommsSchedule } = require('../routes/comms');
 const { purgeOldIdempotencyKeys } = require('../utils/idempotency');
 const { releasePendingAndNotify, advanceActiveCycle } = require('../services/downtimeSchedule');
 const { closeStaleSessions } = require('../services/liveSession');
+const { expireBloodHunts } = require('../services/bloodHunts');
 
 // ============================================================================
 // AUTOMATED LOGISTICS - DOWNTIME DEADLINE PINGS
@@ -322,6 +323,13 @@ function scheduleStaleLiveSessionClose(io) {
 }
 
 let started = false;
+// Every 10 minutes: Blood Hunts past their expiry end and the target's flag clears.
+function scheduleBloodHuntExpiry() {
+  return cron.schedule('*/10 * * * *', async () => {
+    try { await expireBloodHunts(); } catch (e) { log.err('Blood Hunt expiry failed', { message: e.message }); }
+  });
+}
+
 function startJobs(fastify) {
   if (started) return;
   started = true;
@@ -335,6 +343,7 @@ function startJobs(fastify) {
   scheduleQueuedMessageFlush(fastify?.io);
   scheduleIdempotencyPurge();
   scheduleStaleLiveSessionClose(fastify?.io);
+  scheduleBloodHuntExpiry();
   log.start('Background jobs scheduled.');
 }
 

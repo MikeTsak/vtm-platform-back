@@ -2,6 +2,8 @@
 //
 // The Camarilla hierarchy roster — public view and the Storyteller editor.
 
+const { MAIN_COURT, parseTitles } = require('../services/courtOffices');
+
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin } = opts;
 
@@ -159,7 +161,14 @@ module.exports = async function (fastify, opts) {
     try {
       await pool.query(`UPDATE ${table} SET ${dbField} = ? WHERE id = ?`, [dbValue, id]);
       log.adm(`Updated Camarilla ${field}`, { type, id, value: dbValue, by_user: req.user.id });
-      reply.send({ ok: true });
+      // Titles (or ex-status) on a player can change whether their account should
+      // be a court user; hand the editor a hint so it can offer to fix the role.
+      let court_access = null;
+      if (type === 'player' && (field === 'titles' || field === 'is_ex' || field === 'is_deceased')) {
+        const [[c]] = await pool.query('SELECT user_id FROM characters WHERE id = ?', [id]);
+        if (c?.user_id) court_access = (await courtAccessMismatches(c.user_id))[0] || null;
+      }
+      reply.send({ ok: true, court_access });
     } catch (e) {
       log.err('Camarilla update failed', { message: e.message });
       reply.status(500).json({ error: "Database update failed" });
@@ -216,5 +225,29 @@ module.exports = async function (fastify, opts) {
       log.err('Status update failed', { message: e.message });
       reply.status(500).json({ error: 'Database update failed' });
     }
+  });
+
+  // Accounts whose role disagrees with the Hierarchy: holds a main-court office
+  // but is a plain user, or is a court user holding none. Admins are never touched.
+  async function courtAccessMismatches(onlyUserId = null) {
+    const [rows] = await pool.query(
+      `SELECT u.id AS user_id, u.role, u.display_name, c.name, c.camarilla_titles, c.is_ex, c.is_deceased
+         FROM users u LEFT JOIN characters c ON c.user_id = u.id
+        WHERE u.role IN ('user','courtuser') ${onlyUserId ? 'AND u.id = ?' : ''}`,
+      onlyUserId ? [onlyUserId] : []
+    );
+    const byUser = new Map();
+    for (const r of rows) {
+      const u = byUser.get(r.user_id) || { user_id: r.user_id, role: r.role, name: r.name || r.display_name, offices: [] };
+      if (!r.is_ex && !r.is_deceased) u.offices.push(...parseTitles(r.camarilla_titles).filter(t => MAIN_COURT.includes(t)));
+      byUser.set(r.user_id, u);
+    }
+    return [...byUser.values()]
+      .map(u => ({ ...u, suggested_role: u.offices.length ? 'courtuser' : 'user' }))
+      .filter(u => u.suggested_role !== u.role);
+  }
+
+  fastify.get('/api/admin/camarilla/court-access', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    reply.send({ mismatches: await courtAccessMismatches() });
   });
 };

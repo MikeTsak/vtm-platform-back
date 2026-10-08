@@ -405,7 +405,7 @@ module.exports = async function (fastify, opts) {
       // -----------------------------------
 
       log.ok('News entry created', { user_id: req.user.id, type, title });
-      reply.send({ ok: true });
+      reply.send({ ok: true, id: insertResult.insertId });
     } catch (e) {
       log.err('Create news failed', { message: e.message });
       reply.status(500).json({ error: 'Failed to post' });

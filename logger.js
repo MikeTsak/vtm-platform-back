@@ -295,11 +295,29 @@ function expressErrorHandler(err, req, res, next) {
 /* =========================
  * Process signal handlers
  * ========================= */
+const mb = (n) => Math.round(n / 1048576);
+function vitals() {
+  const m = process.memoryUsage();
+  return `rss=${mb(m.rss)}MB heap=${mb(m.heapUsed)}/${mb(m.heapTotal)}MB ext=${mb(m.external)}MB buf=${mb(m.arrayBuffers)}MB up=${Math.round(process.uptime() / 60)}m`;
+}
+
 function installProcessHandlers() {
+  // Restart forensics. A silent death (no "exit"/"SIGTERM" line before the next
+  // boot) means the host's resource limiter SIGKILLed us; rss in the last
+  // vitals line then shows how close to the package's memory cap we were.
+  setInterval(() => log.info(`vitals ${vitals()}`), 5 * 60 * 1000).unref();
+  process.on('exit', (code) => { try { log.adm(`exit code=${code} ${vitals()}`); } catch (_) {} });
+
+  // A stray error (dropped DB socket, Discord hiccup, one bad request) should
+  // not take the whole API down and drop every connected socket. Only bail out
+  // if it is happening in a tight loop.
+  // ponytail: crude loop guard; replace with real supervision if it ever matters.
+  let recent = [];
   process.on('uncaughtException', (e) => {
-    log.error('uncaughtException', { message: e.message, stack: e.stack }, 'err');
-    // give streams a moment to flush
-    setTimeout(() => process.exit(1), 50);
+    log.error('uncaughtException', { message: e.message, stack: e.stack, vitals: vitals() }, 'err');
+    const now = Date.now();
+    recent = recent.filter((t) => now - t < 60_000).concat(now);
+    if (recent.length >= 5) setTimeout(() => process.exit(1), 50);
   });
 
   process.on('unhandledRejection', (reason) => {
@@ -309,7 +327,7 @@ function installProcessHandlers() {
   });
 
   const graceful = (sig) => () => {
-    log.adm(`Received ${sig}, shutting down…`);
+    log.adm(`Received ${sig}, shutting down… ${vitals()}`);
     try { fileStream && fileStream.end(); } catch (_) {}
     setTimeout(() => process.exit(0), 50);
   };

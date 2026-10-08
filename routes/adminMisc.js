@@ -11,7 +11,12 @@ module.exports = async function (fastify, opts) {
 
   fastify.get('/api/admin/events', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const [events] = await pool.query('SELECT * FROM events ORDER BY date ASC');
+      // Elysium name / publish state come from the Keeper's invitation (routes/elysium.js).
+      const [events] = await pool.query(
+        `SELECT e.*, i.name AS elysium_name, i.published_at AS invitation_published_at
+           FROM events e LEFT JOIN elysium_invitations i ON i.event_id = e.id
+          ORDER BY e.date ASC`
+      );
       reply.send({ events });
     } catch (e) {
       log.err('Admin events fetch failed', { message: e.message });
@@ -21,8 +26,9 @@ module.exports = async function (fastify, opts) {
 
   fastify.post('/api/admin/events', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const { title, date_string, description } = req.body;
-      await pool.query('INSERT INTO events (title, date, description) VALUES (?, ?, ?)', [title, new Date(date_string), description || null]);
+      const { title, date_string, description, is_elysium } = req.body;
+      const elysium = is_elysium !== undefined ? !!is_elysium : /modern/i.test(title || '');
+      await pool.query('INSERT INTO events (title, date, description, is_elysium) VALUES (?, ?, ?, ?)', [title, new Date(date_string), description || null, elysium ? 1 : 0]);
       reply.send({ ok: true });
     } catch (e) {
       log.err('Admin events create failed', { message: e.message });
@@ -32,7 +38,7 @@ module.exports = async function (fastify, opts) {
 
   fastify.patch('/api/admin/events/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const { title, date_string, description } = req.body;
+      const { title, date_string, description, is_elysium, elysium_name } = req.body;
       const updates = [];
       const values = [];
       if (title !== undefined) {
@@ -46,6 +52,18 @@ module.exports = async function (fastify, opts) {
       if (description !== undefined) {
         updates.push('description = ?');
         values.push(description || null);
+      }
+      if (is_elysium !== undefined) {
+        updates.push('is_elysium = ?');
+        values.push(is_elysium ? 1 : 0);
+      }
+      // Same column the Keeper edits, so Calendar and Court Actions stay in step.
+      if (elysium_name !== undefined) {
+        const name = String(elysium_name || '').trim().slice(0, 160) || null;
+        await pool.query(
+          'INSERT INTO elysium_invitations (event_id, name, updated_by) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name), updated_by = VALUES(updated_by)',
+          [req.params.id, name, req.user.id]
+        );
       }
       if (updates.length === 0) return reply.send({ ok: true });
       values.push(req.params.id);

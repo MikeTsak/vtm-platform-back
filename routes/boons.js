@@ -128,7 +128,7 @@ module.exports = async function (fastify, opts) {
       if (status !== undefined) {
         fields.push('status=?');
         vals.push(status);
-        if (status !== 'Owed') {
+        if (String(status).toLowerCase() !== 'owed') {
           fields.push('resolved_by=?');
           vals.push(req.user?.id || null);
           fields.push('resolved_at=NOW()');
