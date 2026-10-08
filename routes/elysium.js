@@ -5,8 +5,11 @@
 // names it and writes/designs the invitation. The cycle turns on the day of
 // the gathering: from that morning (Athens time) the next Elysium is current.
 
+const axios = require('axios');
 const { requireCapability, signingOffice } = require('../services/courtOffices');
 const { recordVersion } = require('../services/elysiumHistory');
+const { sendDiscordChannelMessage } = require('../services/discord');
+const { getSetting } = require('../utils/settings');
 
 const TEXT_FIELDS = { name: 160, location: 255, salutation: 255, body: 8000, dress_code: 160, signature: 160 };
 const DESIGN_SLUGS = ['cardPreset', 'bannerPreset', 'accent', 'ornament', 'font', 'seal'];
@@ -77,7 +80,7 @@ module.exports = async function (fastify, opts) {
   async function guestView(eventId, userId) {
     const inv = await loadInvitation(eventId);
     const [[character]] = await pool.query(
-      'SELECT id, name, clan, is_bloodhunted FROM characters WHERE user_id = ? ORDER BY id ASC LIMIT 1',
+      'SELECT id, name, clan, is_bloodhunted FROM characters WHERE user_id = ? ORDER BY (COALESCE(is_ex, 0) + COALESCE(is_deceased, 0)) ASC, id ASC LIMIT 1',
       [userId]
     );
     const published = !!inv?.published_at;
@@ -110,7 +113,7 @@ module.exports = async function (fastify, opts) {
       const resent = await lastReannounce(event.id);
 
       reply.send({
-        event: { id: event.id, date: event.date, name: inv?.name || null },
+        event: { id: event.id, date: event.date, name: published ? (inv.name || null) : null },
         status,
         read: !!read && (!resent || (read.last_version_id || 0) >= resent.id),
         character: character ? { name: character.name, clan: character.clan } : null,
@@ -148,6 +151,30 @@ module.exports = async function (fastify, opts) {
 
   /* ---------------- Keeper of Elysium ---------------- */
 
+  // The image CDN sends no CORS headers, so the browser cannot read its pictures to
+  // draw them into a downloaded card. The Keeper / a Storyteller fetches an uploaded
+  // background through here instead. Locked to the CDN's own host: not a general proxy.
+  const CDN_HOST = 'img.miketsak.gr';
+  fastify.get('/api/elysium/image', { preHandler: [authRequired, requireCapability('keeper')] }, async (req, reply) => {
+    let url;
+    try { url = new URL(String(req.query?.u || '')); } catch { return reply.status(400).send({ error: 'Invalid image address' }); }
+    if (url.protocol !== 'https:' || url.host !== CDN_HOST || url.username || url.password) {
+      return reply.status(400).send({ error: 'Only images from the portal image host can be exported' });
+    }
+    try {
+      const r = await axios.get(url.href, {
+        responseType: 'arraybuffer', timeout: 15000, maxContentLength: 12 * 1024 * 1024,
+        maxRedirects: 0, validateStatus: (s) => s === 200,
+      });
+      const type = String(r.headers['content-type'] || '');
+      if (!type.startsWith('image/')) return reply.status(415).send({ error: 'Not an image' });
+      reply.header('Content-Type', type).header('Cache-Control', 'private, max-age=3600').send(Buffer.from(r.data));
+    } catch (e) {
+      log.warn('Elysium image proxy failed', { message: e.message });
+      reply.status(502).send({ error: 'The image could not be fetched' });
+    }
+  });
+
   // The Keeper works on the current Elysium; admins may open any (?eventId=).
   async function resolveEventId(req) {
     if (req.court.isAdmin && req.query?.eventId) return parseInt(req.query.eventId, 10) || null;
@@ -183,6 +210,12 @@ module.exports = async function (fastify, opts) {
       const eventId = await resolveEventId(req);
       if (!eventId) return reply.status(409).send({ error: 'Only the coming Elysium can be prepared.' });
       const b = req.body || {};
+      const autosave = b.autosave === true;
+      if (autosave) {
+        // Autosave never touches what players can see; a live invitation is saved explicitly.
+        const [[live]] = await pool.query('SELECT published_at FROM elysium_invitations WHERE event_id = ?', [eventId]);
+        if (live?.published_at) return reply.status(409).send({ error: 'A published invitation is saved explicitly.' });
+      }
       const vals = {};
       for (const [k, max] of Object.entries(TEXT_FIELDS)) {
         vals[k] = typeof b[k] === 'string' && b[k].trim() ? b[k].trim().slice(0, max) : null;
@@ -197,7 +230,8 @@ module.exports = async function (fastify, opts) {
         [eventId, vals.name, vals.location, vals.salutation, vals.body, vals.dress_code, vals.signature, design, barred, req.user.id]
       );
       const [[cur]] = await pool.query('SELECT published_at FROM elysium_invitations WHERE event_id = ?', [eventId]);
-      await recordVersion(eventId, cur?.published_at ? 'edit' : 'save', req.user.id, signingOffice(req.court, 'keeper'));
+      // Autosaves leave no history entry; the explicit save or publish that follows snapshots the result.
+      if (!autosave) await recordVersion(eventId, cur?.published_at ? 'edit' : 'save', req.user.id, signingOffice(req.court, 'keeper'));
       log.adm('Elysium invitation saved', { event_id: eventId, by: req.user.id });
       reply.send({ ok: true, invitation: await loadInvitation(eventId) });
     } catch (e) {
@@ -298,6 +332,40 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       log.err('Admin elysium history failed', { message: e.message });
       reply.status(500).send({ error: 'Failed to load the invitation history' });
+    }
+  });
+
+  // Push an image of the Elysium invitation to Discord. Called by the Admin.
+  fastify.post('/api/admin/elysium/invitations/:eventId/discord', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const { image, text } = req.body || {};
+      if (!image) return reply.status(400).send({ error: 'Image data URL required.' });
+
+      const match = image.match(/^data:(image\/\w+);base64,(.+)$/);
+      if (!match) return reply.status(400).send({ error: 'Invalid image format.' });
+
+      const buffer = Buffer.from(match[2], 'base64');
+      const channelId = await getSetting('discord_channel_id', null);
+      
+      if (!channelId) {
+        return reply.status(400).send({ error: 'Discord channel ID is not configured.' });
+      }
+
+      const payload = {
+        content: text || 'An invitation to Elysium has been issued.',
+        _customFile: {
+          name: 'elysium-invitation.png',
+          data: buffer,
+          type: 'image/png'
+        }
+      };
+
+      await sendDiscordChannelMessage(channelId, payload);
+      log.adm('Elysium invitation pushed to Discord', { event_id: req.params.eventId, by: req.user.id });
+      reply.send({ ok: true });
+    } catch (e) {
+      log.err('Discord push failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to push to Discord.' });
     }
   });
 };

@@ -136,6 +136,7 @@ describe('Elysium invitation', () => {
     let cur = JSON.parse((await call(player, 'GET', '/api/elysium/current')).body);
     expect(cur.status).toBe('pending');
     expect(cur.invitation).toBeNull();
+    expect(cur.event.name).toBeNull(); // the Keeper's draft title is not announced yet
 
     await call(keeper, 'POST', `/api/court-actions/elysium/${eventId}/publish`, { publish: true });
     cur = JSON.parse((await call(player, 'GET', '/api/elysium/current')).body);
@@ -184,5 +185,28 @@ describe('Elysium invitation', () => {
     expect(JSON.parse(res.body).invitation.design.lang).toBeUndefined();
     const cur = JSON.parse((await call(player, 'GET', '/api/elysium/current')).body);
     expect(cur.invitation.design.lang).toBeUndefined(); // card then defaults to English
+  });
+
+  it('autosaves drafts quietly, never onto a published invitation, and image export is locked down', async () => {
+    const [e2] = await pool.query("INSERT INTO events (title, date, is_elysium) VALUES ('Modern Day Event', NOW() + INTERVAL 40 DAY, 1)");
+    const id2 = e2.insertId;
+    const versions = async () => (await pool.query('SELECT COUNT(*) AS n FROM elysium_invitation_versions WHERE event_id=?', [id2]))[0][0].n;
+    const draft = { name: 'Later', location: 'Somewhere', body: 'Hi', barred: [], autosave: true };
+
+    // Admin may work on any Elysium; the Keeper only on the coming one.
+    expect((await call(admin, 'PUT', `/api/court-actions/elysium/${id2}`, draft)).statusCode).toBe(200);
+    expect(await versions()).toBe(0);
+    expect((await call(admin, 'PUT', `/api/court-actions/elysium/${id2}`, { ...draft, autosave: false })).statusCode).toBe(200);
+    expect(await versions()).toBe(1);
+
+    await call(admin, 'POST', `/api/court-actions/elysium/${id2}/publish`, { publish: true });
+    expect((await call(admin, 'PUT', `/api/court-actions/elysium/${id2}`, draft)).statusCode).toBe(409);
+
+    // The image proxy: Keeper/admin only, and only the portal's own image host.
+    const img = (u, who) => call(who, 'GET', `/api/elysium/image?u=${encodeURIComponent(u)}`);
+    expect((await img('https://img.miketsak.gr/uploads/x.webp', player)).statusCode).toBe(403);
+    expect((await img('http://169.254.169.254/latest/meta-data', keeper)).statusCode).toBe(400);
+    expect((await img('https://evil.example/img.png', keeper)).statusCode).toBe(400);
+    expect((await img('https://img.miketsak.gr@evil.example/x.png', keeper)).statusCode).toBe(400);
   });
 });

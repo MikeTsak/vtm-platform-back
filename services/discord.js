@@ -141,14 +141,24 @@ async function sendDiscordChannelMessage(channelId, content) {
     throw new Error('Discord bot token is not configured on the server.');
   }
 
-  const { payload, file } = await inlineEmbedImage(typeof content === 'string' ? { content } : content);
+  let payloadObj = typeof content === 'string' ? { content } : content;
+  let customFile = null;
+  if (payloadObj._customFile) {
+    customFile = payloadObj._customFile;
+    // We shouldn't mutate the original object directly if possible, but let's make a copy
+    payloadObj = { ...payloadObj };
+    delete payloadObj._customFile;
+  }
+
+  const { payload, file } = await inlineEmbedImage(payloadObj);
+  const finalFile = customFile || file;
 
   const client = getDiscordClient();
   if (client?.isReady()) {
     try {
       const channel = await client.channels.fetch(channelId);
       if (channel) {
-        return await channel.send(gatewayBody(payload, file));
+        return await channel.send(gatewayBody(payload, finalFile));
       }
     } catch (clientErr) {
       log.warn('Discord client channel send failed, falling back to REST API', { error: clientErr.message });
@@ -156,7 +166,7 @@ async function sendDiscordChannelMessage(channelId, content) {
   }
 
   // Fallback: Discord REST API
-  const { body, headers } = restRequest(payload, file, token);
+  const { body, headers } = restRequest(payload, finalFile, token);
   const messageRes = await axios.post(
     `https://discord.com/api/v10/channels/${channelId}/messages`,
     body,
