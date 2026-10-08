@@ -270,6 +270,20 @@ async function backup({ quiet = false, skipMedia = false, onProgress } = {}) {
     report({ phase: 'table', table, rows: count, index, total: tables.length, skipped: false });
   }
 
+  // Triggers (e.g. users -> user_change_log, migration 0051). SHOW CREATE TABLE does not include
+  // them, and their migration is already recorded in schema_migrations, so without this a restored
+  // database silently stops logging. DEFINER is stripped: on another server/user the restore would
+  // otherwise need SUPER and fail; the restoring user becomes the definer instead.
+  const [triggers] = await conn.query(
+    'SELECT TRIGGER_NAME AS n FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() ORDER BY TRIGGER_NAME',
+  );
+  for (const { n } of triggers) {
+    const [[t]] = await conn.query(`SHOW CREATE TRIGGER \`${n}\``);
+    const ddl = t['SQL Original Statement'].replace(/\s+DEFINER\s*=\s*\S+@\S+/i, '');
+    await write(`\n--\n-- trigger ${n}\n--\nDROP TRIGGER IF EXISTS \`${n}\`;\nDELIMITER ;;\n${ddl} ;;\nDELIMITER ;\n`);
+  }
+  if (triggers.length) say(`  ${'(triggers)'.padEnd(32)} ${triggers.length}`);
+
   await write(`\nSET FOREIGN_KEY_CHECKS = 1;\n`);
   await new Promise((res, rej) => {
     gzip.end();

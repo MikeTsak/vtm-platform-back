@@ -1,5 +1,11 @@
 -- =====================================================================
--- 0051_history_and_indexes — PRODUCTION SCRIPT (run by hand, e.g. phpMyAdmin)
+-- 0051_history_and_indexes — manual/production equivalent (FALLBACK ONLY)
+-- =====================================================================
+--
+-- You normally do NOT need this file. migrations/list/0051_history_and_indexes.js applies the
+-- same change automatically on the first boot after npm run deploy, and records itself in
+-- schema_migrations. Use this only if you want to apply it by hand in phpMyAdmin. Running both
+-- is harmless: every statement here is idempotent.
 -- =====================================================================
 --
 -- What it does (all lossless — no row is changed, moved or deleted):
@@ -15,6 +21,11 @@
 --
 -- The app needs NO code change: versioning adds hidden ROW_START / ROW_END columns,
 -- SELECT * does not return them, INSERT/UPDATE statements are unaffected.
+--
+-- SCHEMA NAME: this file targets the database named vtm explicitly (objects are written as vtm.table with
+--   backticks) and never relies on the "current database". phpMyAdmin silently switches the current database
+--   to information_schema whenever a query mentions it, which makes DATABASE() lie. If your database has a
+--   different name, find-and-replace vtm with it everywhere in this file.
 --
 -- BEFORE YOU RUN
 --   * Take a backup:  npm run deploy:backup:full   (in back/)
@@ -37,34 +48,37 @@
 -- ---------------------------------------------------------------------
 SELECT VERSION() AS mariadb_version, @@innodb_buffer_pool_size / 1048576 AS buffer_pool_mb;
 SELECT TABLE_NAME, ENGINE FROM information_schema.TABLES
- WHERE TABLE_SCHEMA = DATABASE() AND ENGINE <> 'InnoDB' AND TABLE_TYPE = 'BASE TABLE';
+ WHERE TABLE_SCHEMA = 'vtm' AND ENGINE <> 'InnoDB' AND TABLE_TYPE = 'BASE TABLE';
+-- sanity: must be about 90 tables, and must include characters / users / downtimes. If it says 0, the schema name is wrong.
+SELECT COUNT(*) AS tables_in_schema, SUM(TABLE_NAME IN ('characters','users','downtimes')) AS key_tables_found
+ FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm';
 -- tables from STEP 4 that do not exist on this server (they will just be skipped):
 SELECT t.n AS missing_table FROM (SELECT 'characters' AS n UNION ALL SELECT 'coteries' AS n UNION ALL SELECT 'coterie_members' AS n UNION ALL SELECT 'retainers' AS n UNION ALL SELECT 'npcs' AS n UNION ALL SELECT 'domain_claims' AS n UNION ALL SELECT 'domain_claim_requests' AS n UNION ALL SELECT 'domain_guests' AS n UNION ALL SELECT 'domain_residents' AS n UNION ALL SELECT 'domain_manager_grants' AS n UNION ALL SELECT 'domain_overlay_grants' AS n UNION ALL SELECT 'domain_problems' AS n UNION ALL SELECT 'domain_codex_entries' AS n UNION ALL SELECT 'boons' AS n UNION ALL SELECT 'inventory_items' AS n UNION ALL SELECT 'discipline_access' AS n UNION ALL SELECT 'discipline_requests' AS n UNION ALL SELECT 'downtimes' AS n UNION ALL SELECT 'news_entries' AS n UNION ALL SELECT 'rumors' AS n UNION ALL SELECT 'events' AS n UNION ALL SELECT 'premonitions' AS n UNION ALL SELECT 'elysium_invitations' AS n UNION ALL SELECT 'blood_hunts' AS n UNION ALL SELECT 'court_wanted' AS n UNION ALL SELECT 'user_news_permissions' AS n UNION ALL SELECT 'app_settings' AS n UNION ALL SELECT 'portal_settings' AS n UNION ALL SELECT 'hunts' AS n UNION ALL SELECT 'hunt_steps' AS n UNION ALL SELECT 'hunt_groups' AS n UNION ALL SELECT 'feedings' AS n) t
- LEFT JOIN information_schema.TABLES i ON i.TABLE_SCHEMA = DATABASE() AND i.TABLE_NAME = t.n
+ LEFT JOIN information_schema.TABLES i ON i.TABLE_SCHEMA = 'vtm' AND i.TABLE_NAME = t.n
  WHERE i.TABLE_NAME IS NULL;
 
 -- ---------------------------------------------------------------------
 -- STEP 1 — MyISAM -> InnoDB (lossless engine change)
 -- ---------------------------------------------------------------------
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'wiki_tags' AND ENGINE = 'MyISAM') = 1, 'ALTER TABLE `wiki_tags` ENGINE = InnoDB', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'wiki_article_tags' AND ENGINE = 'MyISAM') = 1, 'ALTER TABLE `wiki_article_tags` ENGINE = InnoDB', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'wiki_journal_entries' AND ENGINE = 'MyISAM') = 1, 'ALTER TABLE `wiki_journal_entries` ENGINE = InnoDB', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'wiki_timeline_events' AND ENGINE = 'MyISAM') = 1, 'ALTER TABLE `wiki_timeline_events` ENGINE = InnoDB', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'wiki_admin_notes' AND ENGINE = 'MyISAM') = 1, 'ALTER TABLE `wiki_admin_notes` ENGINE = InnoDB', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'wiki_tags' AND ENGINE = 'MyISAM') = 1, 'ALTER TABLE `vtm`.`wiki_tags` ENGINE = InnoDB', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'wiki_article_tags' AND ENGINE = 'MyISAM') = 1, 'ALTER TABLE `vtm`.`wiki_article_tags` ENGINE = InnoDB', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'wiki_journal_entries' AND ENGINE = 'MyISAM') = 1, 'ALTER TABLE `vtm`.`wiki_journal_entries` ENGINE = InnoDB', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'wiki_timeline_events' AND ENGINE = 'MyISAM') = 1, 'ALTER TABLE `vtm`.`wiki_timeline_events` ENGINE = InnoDB', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'wiki_admin_notes' AND ENGINE = 'MyISAM') = 1, 'ALTER TABLE `vtm`.`wiki_admin_notes` ENGINE = InnoDB', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
 
 -- ---------------------------------------------------------------------
 -- STEP 2 — composite indexes (additive; IF NOT EXISTS makes them idempotent)
 -- ---------------------------------------------------------------------
 -- admin per-character view: WHERE character_id = ? ORDER BY created_at DESC LIMIT 500
-CREATE INDEX IF NOT EXISTS idx_xp_char_created ON xp_log (character_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_dice_char_created ON dice_rolls (character_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_xp_char_created ON `vtm`.`xp_log` (character_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_dice_char_created ON `vtm`.`dice_rolls` (character_id, created_at);
 -- activity heatmap: WHERE session_start BETWEEN ... (was a full scan; table grows forever)
-CREATE INDEX IF NOT EXISTS idx_us_session_start ON user_sessions (session_start);
+CREATE INDEX IF NOT EXISTS idx_us_session_start ON `vtm`.`user_sessions` (session_start);
 
 -- ---------------------------------------------------------------------
 -- STEP 3 — user_change_log + triggers (history for users without copying 80 MB blobs)
 -- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS user_change_log (
+CREATE TABLE IF NOT EXISTS `vtm`.`user_change_log` (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_id INT UNSIGNED NOT NULL,
   action ENUM('update','delete') NOT NULL,
@@ -78,57 +92,57 @@ CREATE TABLE IF NOT EXISTS user_change_log (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 -- Deliberately no FOREIGN KEY: the log must outlive the user it describes.
 -- If CREATE TRIGGER is refused (host denies the TRIGGER privilege) skip these two; nothing else depends on them.
-CREATE OR REPLACE TRIGGER trg_users_change_log AFTER UPDATE ON users FOR EACH ROW INSERT INTO user_change_log (user_id, action, old_email, new_email, old_display_name, new_display_name, old_role, new_role, old_discord_id, new_discord_id) SELECT OLD.id, 'update', OLD.email, NEW.email, OLD.display_name, NEW.display_name, OLD.role, NEW.role, OLD.discord_id, NEW.discord_id FROM DUAL WHERE NOT (OLD.email <=> NEW.email AND OLD.display_name <=> NEW.display_name AND OLD.role <=> NEW.role AND OLD.discord_id <=> NEW.discord_id);
-CREATE OR REPLACE TRIGGER trg_users_delete_log AFTER DELETE ON users FOR EACH ROW INSERT INTO user_change_log (user_id, action, old_email, old_display_name, old_role, old_discord_id) VALUES (OLD.id, 'delete', OLD.email, OLD.display_name, OLD.role, OLD.discord_id);
+CREATE OR REPLACE TRIGGER `vtm`.trg_users_change_log AFTER UPDATE ON `vtm`.`users` FOR EACH ROW INSERT INTO `vtm`.`user_change_log` (user_id, action, old_email, new_email, old_display_name, new_display_name, old_role, new_role, old_discord_id, new_discord_id) SELECT OLD.id, 'update', OLD.email, NEW.email, OLD.display_name, NEW.display_name, OLD.role, NEW.role, OLD.discord_id, NEW.discord_id FROM DUAL WHERE NOT (OLD.email <=> NEW.email AND OLD.display_name <=> NEW.display_name AND OLD.role <=> NEW.role AND OLD.discord_id <=> NEW.discord_id);
+CREATE OR REPLACE TRIGGER `vtm`.trg_users_delete_log AFTER DELETE ON `vtm`.`users` FOR EACH ROW INSERT INTO `vtm`.`user_change_log` (user_id, action, old_email, old_display_name, old_role, old_discord_id) VALUES (OLD.id, 'delete', OLD.email, OLD.display_name, OLD.role, OLD.discord_id);
 
 -- ---------------------------------------------------------------------
 -- STEP 4 — system versioning (32 tables). Needs MariaDB >= 10.3.4
 -- ---------------------------------------------------------------------
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'characters' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `characters` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'coteries' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `coteries` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'coterie_members' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `coterie_members` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'retainers' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `retainers` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'npcs' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `npcs` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'domain_claims' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `domain_claims` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'domain_claim_requests' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `domain_claim_requests` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'domain_guests' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `domain_guests` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'domain_residents' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `domain_residents` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'domain_manager_grants' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `domain_manager_grants` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'domain_overlay_grants' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `domain_overlay_grants` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'domain_problems' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `domain_problems` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'domain_codex_entries' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `domain_codex_entries` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'boons' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `boons` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'inventory_items' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `inventory_items` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'discipline_access' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `discipline_access` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'discipline_requests' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `discipline_requests` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'downtimes' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `downtimes` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'news_entries' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `news_entries` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'rumors' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `rumors` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'events' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `events` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'premonitions' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `premonitions` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'elysium_invitations' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `elysium_invitations` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'blood_hunts' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `blood_hunts` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'court_wanted' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `court_wanted` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_news_permissions' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `user_news_permissions` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'app_settings' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `app_settings` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'portal_settings' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `portal_settings` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'hunts' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `hunts` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'hunt_steps' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `hunt_steps` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'hunt_groups' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `hunt_groups` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
-SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'feedings' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `feedings` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'characters' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`characters` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'coteries' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`coteries` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'coterie_members' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`coterie_members` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'retainers' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`retainers` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'npcs' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`npcs` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'domain_claims' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`domain_claims` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'domain_claim_requests' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`domain_claim_requests` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'domain_guests' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`domain_guests` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'domain_residents' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`domain_residents` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'domain_manager_grants' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`domain_manager_grants` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'domain_overlay_grants' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`domain_overlay_grants` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'domain_problems' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`domain_problems` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'domain_codex_entries' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`domain_codex_entries` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'boons' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`boons` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'inventory_items' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`inventory_items` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'discipline_access' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`discipline_access` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'discipline_requests' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`discipline_requests` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'downtimes' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`downtimes` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'news_entries' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`news_entries` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'rumors' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`rumors` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'events' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`events` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'premonitions' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`premonitions` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'elysium_invitations' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`elysium_invitations` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'blood_hunts' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`blood_hunts` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'court_wanted' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`court_wanted` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'user_news_permissions' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`user_news_permissions` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'app_settings' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`app_settings` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'portal_settings' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`portal_settings` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'hunts' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`hunts` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'hunt_steps' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`hunt_steps` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'hunt_groups' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`hunt_groups` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
+SET @s = IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_NAME = 'feedings' AND TABLE_TYPE = 'BASE TABLE') = 1, 'ALTER TABLE `vtm`.`feedings` ADD SYSTEM VERSIONING', 'DO 0'); PREPARE p FROM @s; EXECUTE p; DEALLOCATE PREPARE p;
 
 -- ---------------------------------------------------------------------
 -- STEP 5 — refresh optimizer statistics (harmless)
 -- ---------------------------------------------------------------------
-ANALYZE TABLE `users`, `characters`, `chat_messages`, `chat_group_messages`, `npc_messages`, `downtimes`, `dice_rolls`, `xp_log`, `user_sessions`, `domain_claims`, `coteries`;
+ANALYZE TABLE `vtm`.`users`, `vtm`.`characters`, `vtm`.`chat_messages`, `vtm`.`chat_group_messages`, `vtm`.`npc_messages`, `vtm`.`downtimes`, `vtm`.`dice_rolls`, `vtm`.`xp_log`, `vtm`.`user_sessions`, `vtm`.`domain_claims`, `vtm`.`coteries`;
 
 -- ---------------------------------------------------------------------
 -- STEP 6 — verify (read-only)
 -- ---------------------------------------------------------------------
-SELECT COUNT(*) AS versioned_tables FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'SYSTEM VERSIONED';  -- expect 32 (fewer = some tables absent, see STEP 0)
-SELECT TABLE_NAME, ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND ENGINE = 'MyISAM';  -- expect no rows
-SELECT TRIGGER_NAME FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME LIKE 'trg_users_%';  -- expect 2 rows
-SELECT TABLE_NAME, INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND INDEX_NAME IN ('idx_xp_char_created','idx_dice_char_created','idx_us_session_start');  -- expect 3 rows
+SELECT COUNT(*) AS versioned_tables FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND TABLE_TYPE = 'SYSTEM VERSIONED';  -- expect 32 (fewer = some tables absent, see STEP 0)
+SELECT TABLE_NAME, ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'vtm' AND ENGINE = 'MyISAM';  -- expect no rows
+SELECT TRIGGER_NAME FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = 'vtm' AND TRIGGER_NAME LIKE 'trg_users_%';  -- expect 2 rows
+SELECT TABLE_NAME, INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = 'vtm' AND INDEX_NAME IN ('idx_xp_char_created','idx_dice_char_created','idx_us_session_start');  -- expect 3 rows
 
 -- ---------------------------------------------------------------------
 -- OPTIONAL — shrink corrupted users.push_settings (MODIFIES DATA, so commented out; read the notes)
@@ -145,27 +159,27 @@ SELECT TABLE_NAME, INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCH
 --
 -- A) read-only: who is affected, and what are their two real values?
 -- SELECT id, ROUND(LENGTH(push_settings) / 1048576, 2) AS mb, JSON_EXTRACT(push_settings, '$.chat') AS chat, JSON_EXTRACT(push_settings, '$.system') AS system_flag
---   FROM users WHERE LENGTH(push_settings) > 10000;   -- slow on the 75 MB row (tens of seconds); that is normal
+--   FROM `vtm`.`users` WHERE LENGTH(push_settings) > 10000;   -- slow on the 75 MB row (tens of seconds); that is normal
 -- B) shrink them. Back up first.
--- UPDATE users SET push_settings = JSON_OBJECT('chat', JSON_EXTRACT(push_settings, '$.chat'), 'system', JSON_EXTRACT(push_settings, '$.system'))
+-- UPDATE `vtm`.`users` SET push_settings = JSON_OBJECT('chat', JSON_EXTRACT(push_settings, '$.chat'), 'system', JSON_EXTRACT(push_settings, '$.system'))
 --   WHERE LENGTH(push_settings) > 10000;
 -- C) reclaim the freed space on disk (brief table lock; 38 rows, so fast):
--- OPTIMIZE TABLE users;
+-- OPTIMIZE TABLE `vtm`.`users`;
 
 -- ---------------------------------------------------------------------
 -- HOW TO USE THE HISTORY (examples — commented out)
 -- ---------------------------------------------------------------------
--- SELECT * FROM characters FOR SYSTEM_TIME AS OF '2026-09-01 00:00:00' WHERE id = 7;                      -- the sheet as of a date
--- SELECT id, xp, ROW_START, ROW_END FROM characters FOR SYSTEM_TIME ALL WHERE id = 7 ORDER BY ROW_START;     -- every version of it
--- SELECT * FROM downtimes FOR SYSTEM_TIME ALL WHERE ROW_END < '2038-01-01';                                  -- only superseded / deleted rows
--- SELECT * FROM user_change_log WHERE user_id = 12 ORDER BY changed_at;
+-- SELECT * FROM `vtm`.`characters` FOR SYSTEM_TIME AS OF '2026-09-01 00:00:00' WHERE id = 7;                      -- the sheet as of a date
+-- SELECT id, xp, ROW_START, ROW_END FROM `vtm`.`characters` FOR SYSTEM_TIME ALL WHERE id = 7 ORDER BY ROW_START;     -- every version of it
+-- SELECT * FROM `vtm`.`downtimes` FOR SYSTEM_TIME ALL WHERE ROW_END < '2038-01-01';                                  -- only superseded / deleted rows
+-- SELECT * FROM `vtm`.`user_change_log` WHERE user_id = 12 ORDER BY changed_at;
 
 -- ---------------------------------------------------------------------
 -- OPTIONAL — retention (history grows forever; these tables are tiny, so this is just a lever)
 -- ---------------------------------------------------------------------
 -- Needs the DELETE HISTORY privilege. Removes ONLY superseded versions, never current rows.
--- DELETE HISTORY FROM downtimes BEFORE SYSTEM_TIME '2025-01-01 00:00:00';
--- DELETE FROM user_change_log WHERE changed_at < '2025-01-01';
+-- DELETE HISTORY FROM `vtm`.`downtimes` BEFORE SYSTEM_TIME '2025-01-01 00:00:00';
+-- DELETE FROM `vtm`.`user_change_log` WHERE changed_at < '2025-01-01';
 
 -- ---------------------------------------------------------------------
 -- OPTIONAL — server settings (need SUPER / host support; skip on shared hosting)
@@ -176,37 +190,37 @@ SELECT TABLE_NAME, INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCH
 -- ---------------------------------------------------------------------
 -- ROLLBACK (commented). NOTE: DROP SYSTEM VERSIONING DELETES the stored history.
 -- ---------------------------------------------------------------------
--- ALTER TABLE `characters` DROP SYSTEM VERSIONING;
--- ALTER TABLE `coteries` DROP SYSTEM VERSIONING;
--- ALTER TABLE `coterie_members` DROP SYSTEM VERSIONING;
--- ALTER TABLE `retainers` DROP SYSTEM VERSIONING;
--- ALTER TABLE `npcs` DROP SYSTEM VERSIONING;
--- ALTER TABLE `domain_claims` DROP SYSTEM VERSIONING;
--- ALTER TABLE `domain_claim_requests` DROP SYSTEM VERSIONING;
--- ALTER TABLE `domain_guests` DROP SYSTEM VERSIONING;
--- ALTER TABLE `domain_residents` DROP SYSTEM VERSIONING;
--- ALTER TABLE `domain_manager_grants` DROP SYSTEM VERSIONING;
--- ALTER TABLE `domain_overlay_grants` DROP SYSTEM VERSIONING;
--- ALTER TABLE `domain_problems` DROP SYSTEM VERSIONING;
--- ALTER TABLE `domain_codex_entries` DROP SYSTEM VERSIONING;
--- ALTER TABLE `boons` DROP SYSTEM VERSIONING;
--- ALTER TABLE `inventory_items` DROP SYSTEM VERSIONING;
--- ALTER TABLE `discipline_access` DROP SYSTEM VERSIONING;
--- ALTER TABLE `discipline_requests` DROP SYSTEM VERSIONING;
--- ALTER TABLE `downtimes` DROP SYSTEM VERSIONING;
--- ALTER TABLE `news_entries` DROP SYSTEM VERSIONING;
--- ALTER TABLE `rumors` DROP SYSTEM VERSIONING;
--- ALTER TABLE `events` DROP SYSTEM VERSIONING;
--- ALTER TABLE `premonitions` DROP SYSTEM VERSIONING;
--- ALTER TABLE `elysium_invitations` DROP SYSTEM VERSIONING;
--- ALTER TABLE `blood_hunts` DROP SYSTEM VERSIONING;
--- ALTER TABLE `court_wanted` DROP SYSTEM VERSIONING;
--- ALTER TABLE `user_news_permissions` DROP SYSTEM VERSIONING;
--- ALTER TABLE `app_settings` DROP SYSTEM VERSIONING;
--- ALTER TABLE `portal_settings` DROP SYSTEM VERSIONING;
--- ALTER TABLE `hunts` DROP SYSTEM VERSIONING;
--- ALTER TABLE `hunt_steps` DROP SYSTEM VERSIONING;
--- ALTER TABLE `hunt_groups` DROP SYSTEM VERSIONING;
--- ALTER TABLE `feedings` DROP SYSTEM VERSIONING;
--- DROP TRIGGER IF EXISTS trg_users_change_log;  DROP TRIGGER IF EXISTS trg_users_delete_log;  DROP TABLE IF EXISTS user_change_log;
--- DROP INDEX IF EXISTS idx_xp_char_created ON xp_log;  DROP INDEX IF EXISTS idx_dice_char_created ON dice_rolls;  DROP INDEX IF EXISTS idx_us_session_start ON user_sessions;
+-- ALTER TABLE `vtm`.`characters` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`coteries` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`coterie_members` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`retainers` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`npcs` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`domain_claims` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`domain_claim_requests` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`domain_guests` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`domain_residents` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`domain_manager_grants` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`domain_overlay_grants` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`domain_problems` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`domain_codex_entries` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`boons` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`inventory_items` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`discipline_access` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`discipline_requests` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`downtimes` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`news_entries` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`rumors` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`events` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`premonitions` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`elysium_invitations` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`blood_hunts` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`court_wanted` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`user_news_permissions` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`app_settings` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`portal_settings` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`hunts` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`hunt_steps` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`hunt_groups` DROP SYSTEM VERSIONING;
+-- ALTER TABLE `vtm`.`feedings` DROP SYSTEM VERSIONING;
+-- DROP TRIGGER IF EXISTS `vtm`.trg_users_change_log;  DROP TRIGGER IF EXISTS `vtm`.trg_users_delete_log;  DROP TABLE IF EXISTS `vtm`.`user_change_log`;
+-- DROP INDEX IF EXISTS idx_xp_char_created ON `vtm`.`xp_log`;  DROP INDEX IF EXISTS idx_dice_char_created ON `vtm`.`dice_rolls`;  DROP INDEX IF EXISTS idx_us_session_start ON `vtm`.`user_sessions`;
