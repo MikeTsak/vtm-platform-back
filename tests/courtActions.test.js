@@ -90,17 +90,15 @@ describe('Blood Hunts', () => {
 
 describe('Dangerous domains', () => {
   it('ranks assessed divisions worst first for security offices only', async () => {
-    for (const t of ['domain_problems', 'domain_claims']) await pool.query(`DELETE FROM ${t}`);
+    await pool.query('DELETE FROM domain_claims');
     await pool.query("INSERT INTO domain_claims (division, owner_name, color, owner_npc_id, safety_rating) VALUES (1, 'x', '#000', ?, 9), (2, NULL, '#888', NULL, 3), (3, NULL, '#888', NULL, 3), (4, NULL, '#888', NULL, NULL)", [targetId]);
-    await pool.query("INSERT INTO domain_problems (domain_id, problem_text) VALUES (3, 'SI van spotted')");
 
     expect((await call(keeper, 'GET', '/api/court-actions/dangerous-domains')).statusCode).toBe(403);
     expect((await call(player, 'GET', '/api/court-actions/dangerous-domains')).statusCode).toBe(403);
     const res = await call(sheriff, 'GET', '/api/court-actions/dangerous-domains');
     expect(res.statusCode).toBe(200);
     const { domains } = JSON.parse(res.body);
-    expect(domains.map(d => d.division)).toEqual([3, 2, 1]); // unassessed 4 left out; incidents break the tie
-    expect(domains[0].incidents[0].text).toBe('SI van spotted');
+    expect(domains.map(d => d.division)).toEqual([2, 3, 1]); // unassessed 4 left out; equal ratings by division
     expect(domains[2].owner_name).toBe('Villain');
   });
 });

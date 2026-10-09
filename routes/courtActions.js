@@ -191,34 +191,25 @@ module.exports = async function (fastify, opts) {
   /* ---------------- Prince / Seneschal ---------------- */
 
   // The city's most dangerous divisions, worst first: lowest Masquerade safety
-  // rating (the incident draw lowers it), then most unresolved incidents.
-  // Unassessed divisions (no rating) are left out: unknown is not dangerous.
+  // rating (domain_claims.safety_rating). Unassessed divisions (no rating) are left out: unknown is not dangerous.
   fastify.get('/api/court-actions/dangerous-domains', { preHandler: [authRequired, requireCapability('security')] }, async (req, reply) => {
     try {
       const [rows] = await pool.query(
         `SELECT d.division, d.safety_rating, d.is_abaton, d.claimed_at,
                 COALESCE(c.name, n.name, d.owner_name) AS owner_name, COALESCE(c.clan, n.clan) AS owner_clan,
-                (d.owner_character_id IS NOT NULL OR d.owner_npc_id IS NOT NULL) AS is_claimed,
-                (SELECT COUNT(*) FROM domain_problems p WHERE p.domain_id = d.division AND p.resolved = 0) AS open_incidents
+                (d.owner_character_id IS NOT NULL OR d.owner_npc_id IS NOT NULL) AS is_claimed
            FROM domain_claims d
            LEFT JOIN characters c ON c.id = d.owner_character_id
            LEFT JOIN npcs n ON n.id = d.owner_npc_id
           WHERE d.safety_rating IS NOT NULL
-          ORDER BY d.safety_rating ASC, open_incidents DESC, d.division ASC`
+          ORDER BY d.safety_rating ASC, d.division ASC`
       );
-      const [incidents] = await pool.query(
-        'SELECT domain_id, problem_text, created_at FROM domain_problems WHERE resolved = 0 ORDER BY created_at DESC'
-      );
-      const byDivision = {};
-      for (const i of incidents) (byDivision[i.domain_id] ||= []).push({ text: i.problem_text, at: i.created_at });
       reply.send({
         domains: rows.map(r => ({
           ...r,
           is_abaton: !!r.is_abaton,
           is_claimed: !!r.is_claimed,
           owner_name: r.is_claimed ? r.owner_name : null,
-          open_incidents: Number(r.open_incidents),
-          incidents: byDivision[r.division] || [],
         })),
       });
     } catch (e) {
