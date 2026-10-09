@@ -1,5 +1,7 @@
 # VTM Platform (V5 LARP) — Backend
 
+**Current Version:** 1.0.163
+
 Fastify + MariaDB backend API for the **Vampire: The Masquerade V5 LARP** platform.
 
 It provides authentication, character management, XP economy (including discipline power assignment), downtimes, domains/claims, and admin tooling (users, XP tools, and NPCs).
