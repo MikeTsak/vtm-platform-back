@@ -292,6 +292,24 @@ async function sendDiscordMailNotifications(isTest = false) {
   }
 }
 
+async function broadcastDiscordAnnouncement(content) {
+  const isEnabled = await getSetting('discord_enabled', 'true') === 'true';
+  if (!isEnabled) return;
+
+  const channelId = await getSetting('discord_channel_id', null);
+  if (!channelId) {
+    log.warn('Discord announcement skipped: No channel ID configured in Admin Settings.');
+    return;
+  }
+
+  try {
+    await sendDiscordChannelMessage(channelId, content);
+  } catch (e) {
+    log.err('Discord announcement broadcast failed', { message: e.message });
+  }
+}
+
+
 const exported = {
   getDiscordClient,
   sendDiscordDM,
@@ -299,6 +317,7 @@ const exported = {
   LOG_CHANNEL_ID,
   reportErrorToDiscord,
   sendDiscordMailNotifications,
+  broadcastDiscordAnnouncement,
 };
 
 // Backwards-compatible getter for `discordClient`

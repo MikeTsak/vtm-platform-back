@@ -8,6 +8,7 @@ const pool = require('../db');
 const { log } = require('../logger');
 const { sendPushNotification } = require('./push');
 const { parseTitles } = require('./courtOffices');
+const { broadcastDiscordAnnouncement } = require('./discord');
 
 // The flag mirrors the ledger: set while any active hunt names the target.
 async function setBloodhuntFlag(targetType, targetId) {
@@ -25,7 +26,10 @@ async function expireBloodHunts() {
   );
   for (const h of due) {
     await pool.query("UPDATE blood_hunts SET status='expired', closed_at=NOW() WHERE id=?", [h.id]);
-    if (h.status === 'active') await setBloodhuntFlag(h.target_type, h.target_id);
+    if (h.status === 'active') {
+      await setBloodhuntFlag(h.target_type, h.target_id);
+      broadcastDiscordAnnouncement(`🕊️ **BLOOD HUNT EXPIRED**\nThe Blood Hunt for **${h.target_name}** has expired and is no longer in effect.`);
+    }
     log.info('Blood Hunt expired', { id: h.id, target: h.target_name });
   }
   return due.length;
