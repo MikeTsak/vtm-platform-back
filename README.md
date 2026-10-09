@@ -1,16 +1,37 @@
-# VTM Platform (V5 LARP) — Backend
+<div align="center">
+  <img src="https://img.shields.io/badge/Vampire%20Platform-Backend-black?style=for-the-badge&logo=fastify" alt="Vampire Platform Backend" />
+  <h1>🦇 VTM Platform (V5 LARP) — Backend 🦇</h1>
+  <p><strong>Current Version: 1.0.163</strong></p>
 
-**Current Version:** 1.0.163
+  <p>
+    <img src="https://img.shields.io/badge/Fastify-202020?style=for-the-badge&logo=fastify&logoColor=white" alt="Fastify" />
+    <img src="https://img.shields.io/badge/MariaDB-003545?style=for-the-badge&logo=mariadb&logoColor=white" alt="MariaDB" />
+    <img src="https://img.shields.io/badge/Node.js-339933?style=for-the-badge&logo=nodedotjs&logoColor=white" alt="Node" />
+    <img src="https://img.shields.io/badge/Socket.io-010101?style=for-the-badge&logo=socketdotio&logoColor=white" alt="Socket.io" />
+    <img src="https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge" alt="License" />
+  </p>
+</div>
 
-Fastify + MariaDB backend API for the **Vampire: The Masquerade V5 LARP** platform.
+## 📖 Overview
 
-It provides authentication, character management, XP economy (including discipline power assignment), downtimes, domains/claims, and admin tooling (users, XP tools, and NPCs).
+The high-performance API backend driving the **Vampire: The Masquerade V5 LARP** platform. 
+
+It provides authentication, character management, XP economy, domain administration, web push notifications, Discord bot integration, and real-time updates.
 
 - Frontend: Located in the `front/` directory of this repository
 - API base (local default): `http://localhost:3001/api`
 - Swagger UI (if enabled): `http://localhost:3001/api-docs`
 
-## Project Ecosystem
+## ✨ Latest Features
+- **Fastify Core**: Rebuilt on Fastify for massive throughput and reduced overhead.
+- **Robust Database & Migrations**: MariaDB integration with custom migration systems for seamless schema evolution.
+- **Discord Bot Integration**: Built-in Discord worker using `discord.js` to bridge the game world and community servers.
+- **Real-Time Ecosystem**: `socket.io` for live updates and instant messaging.
+- **Web Push Notifications**: Integrated `web-push` for native browser alerts and reminders.
+- **Security First**: Comprehensive protection with JWT, `bcryptjs`, `@fastify/helmet`, rate-limiting, and `zod` payload validation.
+- **Automated API Docs**: `swagger-autogen` for constantly updated, interactive OpenAPI specifications.
+
+## 🗺️ Project Ecosystem
 
 This backend is part of the Vampire Platform monorepo, which includes:
 
