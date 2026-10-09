@@ -254,7 +254,7 @@ module.exports = async function (fastify, opts) {
         const npcName = npcInfo?.name || 'NPC';
         const playerName = charInfo?.name || playerInfo?.display_name || 'Player';
 
-        const notifTitle = `💬 ${npcName} (from ${playerName})`;
+        const notifTitle = `Erebus Portal - 💬 ${npcName} (from ${playerName})`;
         const notifBody = message.attachment_id ? '📷 Image Attachment' : message.body;
 
         // 2. Find all admins and their ntfy topic + subscriptions
@@ -361,7 +361,7 @@ module.exports = async function (fastify, opts) {
           const notifBody = message.attachment_id ? '📷 Image Attachment' : message.body;
 
           // Send push directly to the player (not awaited, see above)
-          sendPushNotification(user_id, npcName, notifBody, { url: '/schrecknet', icon: `/api/npcs/${npc_id}/avatar` }, 'chat').catch(() => { });
+          sendPushNotification(user_id, `Erebus Portal - ${npcName}`, notifBody, { url: '/schrecknet', icon: `/api/npcs/${npc_id}/avatar` }, 'chat').catch(() => { });
         } catch (pushErr) {
           log.err('Failed to notify player of NPC reply', { error: pushErr.message });
         }

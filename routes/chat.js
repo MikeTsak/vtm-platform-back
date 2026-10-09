@@ -626,13 +626,21 @@ module.exports = async function (fastify, opts) {
       // --- NEW: PUSH NOTIFICATIONS ΓΙΑ ΟΜΑΔΙΚΕΣ ---
       try {
         // 1. Βρίσκουμε το όνομα της ομάδας
-        const [[groupInfo]] = await pool.query('SELECT name FROM chat_groups WHERE id=?', [groupId]);
+        const [[groupInfo]] = await pool.query('SELECT name, icon FROM chat_groups WHERE id=?', [groupId]);
         const groupName = groupInfo?.name || 'Group Chat';
         const senderName = message.char_name || message.display_name || 'Someone';
 
         // 2. Φτιάχνουμε το περιεχόμενο της ειδοποίησης
-        const notifTitle = `💬 ${groupName} (${senderName})`;
+        const notifTitle = `Erebus Portal - 💬 ${groupName} (${senderName})`;
         const notifBody = message.attachment_id ? '📷 Image Attachment' : message.body;
+
+        let iconUrl = null;
+        if (groupInfo?.icon) {
+          if (!groupInfo.icon.startsWith(':')) {
+            const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">${groupInfo.icon}</text></svg>`;
+            iconUrl = `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
+          }
+        }
 
         // 3. Βρίσκουμε όλα τα μέλη εκτός από τον αποστολέα
         [members] = await pool.query('SELECT user_id FROM chat_group_members WHERE group_id=? AND user_id!=?', [groupId, req.user.id]);
@@ -642,7 +650,7 @@ module.exports = async function (fastify, opts) {
         // web push in turn, so one slow push endpoint made the send look
         // stuck, and the retry stored the message twice.
         for (const member of members) {
-          sendPushNotification(member.user_id, notifTitle, notifBody, { url: '/schrecknet', icon: `/api/users/${req.user.id}/avatar` }, 'chat').catch(() => { });
+          sendPushNotification(member.user_id, notifTitle, notifBody, { url: '/schrecknet', icon: iconUrl }, 'chat').catch(() => { });
         }
       } catch (pushErr) {
         log.err('Failed to notify group members', { error: pushErr.message });
@@ -892,9 +900,11 @@ module.exports = async function (fastify, opts) {
       // Fetch back with attachment info
       const [[message]] = await pool.query(
         `SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at, cm.attachment_id, cm.reply_to_id, cm.emoji_size,
-              u_sender.display_name as sender_name
+              u_sender.display_name as sender_name,
+              c.name as char_name
        FROM chat_messages cm
        JOIN users u_sender ON cm.sender_id = u_sender.id
+       LEFT JOIN characters c ON c.user_id = cm.sender_id
        WHERE cm.id = ?`,
         [r.insertId]
       );
@@ -902,9 +912,10 @@ module.exports = async function (fastify, opts) {
       // Was missing category: 'chat' — it fell through to the default
       // 'system' category, so a player who'd only enabled chat
       // notifications (not system) never got pushed for a DM at all.
+      const finalSenderName = message.char_name || message.sender_name;
       sendPushNotification(
         recipient_id,
-        message.sender_name,
+        `Erebus Portal - ${finalSenderName}`,
         message.attachment_id ? '📷 Image Attachment' : message.body,
         { url: '/schrecknet', icon: `/api/users/${req.user.id}/avatar` },
         'chat'

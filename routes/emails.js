@@ -120,7 +120,7 @@ module.exports = async function (fastify, opts) {
           if (fastify.io) fastify.io.to(`user_${thread.user_id}`).emit('emails:refresh', { type: 'new' });
           const [[identity]] = await pool.query('SELECT display_name FROM email_identities WHERE id=?', [thread.identity_id]);
 
-          const pushTitle = `📧 Reply from ${identity?.display_name || 'NPC'}`;
+          const pushTitle = `Erebus Portal - 📧 Reply from ${identity?.display_name || 'NPC'}`;
           const pushBody = `Re: ${thread.subject}`;
 
           await sendPushNotification(thread.user_id, pushTitle, pushBody, { url: '/surfaceweb', icon: `/api/identities/${thread.identity_id}/avatar` }, 'chat').catch(() => { });
@@ -248,11 +248,12 @@ module.exports = async function (fastify, opts) {
       // --- NEW: SEND PUSH TO ADMINS ---
       try {
         const [[idRow]] = await pool.query('SELECT display_name FROM email_identities WHERE id=?', [identityId]);
-        const [[player]] = await pool.query('SELECT display_name FROM users WHERE id=?', [req.user.id]);
+        const [[player]] = await pool.query('SELECT u.display_name, c.name as char_name FROM users u LEFT JOIN characters c ON c.user_id = u.id WHERE u.id=?', [req.user.id]);
         const [admins] = await pool.query("SELECT id FROM users WHERE role = 'admin'");
 
-        const pushTitle = `📧 Email to ${idRow?.display_name || identityName}`;
-        const pushBody = `From ${player?.display_name}: ${subject || 'New Reply'}`;
+        const pushTitle = `Erebus Portal - 📧 Email to ${idRow?.display_name || identityName}`;
+        const senderName = player?.char_name || player?.display_name || 'Someone';
+        const pushBody = `From ${senderName}: ${subject || 'New Reply'}`;
 
         for (const admin of admins) {
           if (admin.id !== req.user.id) await sendPushNotification(admin.id, pushTitle, pushBody, { url: '/surfaceweb', icon: `/api/users/${req.user.id}/avatar` }, 'chat').catch(() => { });
@@ -329,7 +330,7 @@ module.exports = async function (fastify, opts) {
       if (status === 'sent') {
         // Push notification to the target player
         try {
-          const pushTitle = `📧 New message from ${display_name}`;
+          const pushTitle = `Erebus Portal - 📧 New message from ${display_name}`;
           const pushBody = `Re: ${subject}`;
           await sendPushNotification(user_id, pushTitle, pushBody, { url: '/surfaceweb', icon: `/api/identities/${identity.id}/avatar` }, 'chat').catch(() => {});
         } catch (e) { log.err('Admin DM push failed', { error: e.message }); }

@@ -37,7 +37,14 @@ async function sendPushNotification(userId, title, body, data = {}, category = '
     // being read back out of the push payload with no other context. Not
     // every caller passes one (system-level notifications, the test push):
     // those fall back to the service worker's own generic app icon.
-    const iconFullUrl = data.icon ? (origin ? (origin + data.icon) : data.icon) : null;
+    let iconFullUrl = null;
+    if (data.icon) {
+      if (data.icon.startsWith('http') || data.icon.startsWith('data:')) {
+        iconFullUrl = data.icon;
+      } else {
+        iconFullUrl = origin ? (origin + data.icon) : data.icon;
+      }
+    }
 
     if (isEnabled) {
       // Send Web Push
