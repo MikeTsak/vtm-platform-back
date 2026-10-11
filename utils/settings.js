@@ -1,6 +1,12 @@
 const pool = require('../db');
 const { log } = require('../logger');
 
+// key -> { value, at }. Entries expire after CACHE_TTL_MS: production runs
+// several Passenger processes, each with its own cache, and setSetting only
+// refreshes the process that handled the write. Without expiry the others
+// served a stale value until they happened to restart.
+// ponytail: TTL-bounded staleness; pub/sub invalidation if 30s ever matters.
+const CACHE_TTL_MS = 30 * 1000;
 const settingsCache = new Map();
 
 /**
@@ -9,10 +15,8 @@ const settingsCache = new Map();
  * @param {any} [defaultValue=null] - Value to return if key not found
  */
 async function getSetting(key, defaultValue = null) {
-  if (settingsCache.has(key)) {
-    // log.info(`⚡ [cache hit] ${key}`); // Uncomment for extreme debugging
-    return settingsCache.get(key);
-  }
+  const cached = settingsCache.get(key);
+  if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.value;
 
   try {
     const [[row]] = await pool.query(
@@ -21,10 +25,8 @@ async function getSetting(key, defaultValue = null) {
     );
     const hasValue = row && row.setting_value !== null && row.setting_value !== undefined && row.setting_value !== '';
     const value = hasValue ? row.setting_value : defaultValue;
-    if (row && hasValue) {
-      log.info(`💾 [cache miss] Fetched ${key} from DB and caching it.`);
-      settingsCache.set(key, value); // Only cache if it exists in DB with valid value
-    }
+    if (hasValue) settingsCache.set(key, { value, at: Date.now() }); // Only cache if it exists in DB with valid value
+    else settingsCache.delete(key);
     return value;
   } catch (e) {
     log.err('getSetting failed', { key, message: e.message });
@@ -45,7 +47,7 @@ async function setSetting(key, value) {
        ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
       [key, value]
     );
-    settingsCache.set(key, value);
+    settingsCache.set(key, { value, at: Date.now() });
     return true;
   } catch (e) {
     log.err('setSetting failed', { key, message: e.message });

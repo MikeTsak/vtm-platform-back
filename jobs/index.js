@@ -20,6 +20,7 @@ const { purgeOldIdempotencyKeys } = require('../utils/idempotency');
 const { releasePendingAndNotify, advanceActiveCycle } = require('../services/downtimeSchedule');
 const { closeStaleSessions } = require('../services/liveSession');
 const { expireBloodHunts } = require('../services/bloodHunts');
+const { runWillpowerReset } = require('../services/willpowerReset');
 
 // ============================================================================
 // AUTOMATED LOGISTICS - DOWNTIME DEADLINE PINGS
@@ -268,6 +269,29 @@ function scheduleFeedingCycleDecay() {
 }
 
 // ============================================================================
+// WILLPOWER RESET (day after a Modern Day event)
+// ============================================================================
+// Daily just after midnight, and once at boot so a restart that skipped the
+// cron still catches up. See services/willpowerReset.js.
+function scheduleWillpowerReset() {
+  const run = async () => {
+    try {
+      const res = await runWillpowerReset();
+      if (!res) return;
+      log.info(`Willpower reset after event ${res.day}: ${res.reset} character(s) healed.`);
+      await broadcastNtfyAlert(`Willpower reset to full after the ${res.day} event.\n${res.reset} character(s) had spent Willpower restored.`, {
+        title: 'Willpower Reset',
+        tags: ['sparkles'],
+      });
+    } catch (error) {
+      log.err('Willpower reset failed', { error: error.message });
+    }
+  };
+  run();
+  return cron.schedule('8 0 * * *', run);
+}
+
+// ============================================================================
 // QUEUED NPC MESSAGE FLUSH (SchreckNet + SurfaceWeb)
 // ============================================================================
 // Every minute: safety net for schedule-based comms openings. The admin's
@@ -340,6 +364,7 @@ function startJobs(fastify) {
   scheduleDailySummary();
   scheduleNightlyBackup();
   scheduleFeedingCycleDecay();
+  scheduleWillpowerReset();
   scheduleQueuedMessageFlush(fastify?.io);
   scheduleIdempotencyPurge();
   scheduleStaleLiveSessionClose(fastify?.io);

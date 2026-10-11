@@ -16,6 +16,12 @@ const CATALOG = require('../data/rulesCatalog.json');
 const { xpCost } = require('./xpCost');
 const { parseSheet } = require('./sheet');
 const { isPredatorDiscipline } = require('../data/predatorDisciplines');
+const { checkSubmission } = require('../services/downtimeSchedule');
+
+// House rule: a dot of Attribute, Discipline or Blood Potency costs the XP AND a downtime action
+// (Skills, Rituals and merits are XP only). Mirrored by DOWNTIME_TRAINED in the front's CharacterView.
+const DOWNTIME_TRAINED = ['attribute', 'discipline', 'blood_potency'];
+const needsDowntime = (body) => DOWNTIME_TRAINED.includes(body?.type) && body?.disciplineKind !== 'select';
 
 class PurchaseError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -306,7 +312,7 @@ function sanitizeEntry(e, id) {
  * pass the balance check or overwrite each other's sheet.
  * @returns {Promise<{row:object, cost:number}>}
  */
-async function runPurchase({ pool, table, id, body, isAdmin, unlockedTo, logXp = true, actorId = null }) {
+async function runPurchase({ pool, table, id, body, isAdmin, unlockedTo, logXp = true, actorId = null, chargeDowntime = false }) {
   if (!['characters', 'npcs'].includes(table)) throw new Error('bad table');
   const conn = await pool.getConnection();
   try {
@@ -316,6 +322,24 @@ async function runPurchase({ pool, table, id, body, isAdmin, unlockedTo, logXp =
 
     const result = await applyPurchase({ sheet: row.sheet, clan: row.clan, body, isAdmin, unlockedTo });
     if (num(row.xp) < result.cost) fail(400, `Not enough XP (need ${result.cost}, have ${num(row.xp)})`);
+
+    // Activated player characters file the training as a downtime action of this cycle, resolved on
+    // the spot. Characters not yet activated (still spending their starting XP) and Storytellers skip it.
+    // The row lock above serialises this character's purchases, so two can't take the last slot.
+    if (chargeDowntime && needsDowntime(body) && parseSheet(row.sheet)?.is_active === true) {
+      const label = body.type === 'blood_potency' ? 'Blood Potency' : body.target;
+      const { error } = await checkSubmission({ characterId: id });
+      if (error) fail(400, `Raising ${label} also needs a downtime action this cycle. ${error}`);
+      const what = `${label} ${result.from ?? 0} → ${result.to}`;
+      const power = body.type === 'discipline' ? findPower(body.target, body.powerId || body.powerName) : null;
+      await conn.query(
+        `INSERT INTO downtimes (character_id, title, body, status, gm_resolution, resolved_at, is_released)
+         VALUES (?, ?, ?, 'resolved', ?, NOW(), 1)`,
+        [id, `[XP] Training: ${what}`.slice(0, 140),
+          `Trained ${what}${power ? ` (${power.name})` : ''} for ${result.cost} XP.`,
+          'Filed automatically with the XP purchase: Attribute, Discipline and Blood Potency dots need a downtime action alongside the XP.']
+      );
+    }
 
     const nextSheetJson = JSON.stringify(result.sheet);
     await conn.query(`UPDATE ${table} SET xp = xp - ?, sheet = ? WHERE id=?`, [result.cost, nextSheetJson, id]);
@@ -350,4 +374,4 @@ async function runPurchase({ pool, table, id, body, isAdmin, unlockedTo, logXp =
   }
 }
 
-module.exports = { applyPurchase, runPurchase, PurchaseError, allowedDots, ATTRIBUTES, SKILLS, CATALOG };
+module.exports = { applyPurchase, runPurchase, needsDowntime, PurchaseError, allowedDots, ATTRIBUTES, SKILLS, CATALOG };

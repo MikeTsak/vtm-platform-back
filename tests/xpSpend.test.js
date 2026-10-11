@@ -132,3 +132,84 @@ describe('POST /api/characters/xp/spend', () => {
     expect(rowB.xp).toBe(50); // untouched
   });
 });
+
+// House rule: an activated character's Attribute / Discipline / Blood Potency dot also files a
+// resolved downtime action this cycle; with no action available the purchase is refused.
+describe('XP purchases that need a downtime action', () => {
+  const { setSetting } = require('../utils/settings');
+  beforeAll(async () => {
+    await setSetting('feeding_enabled', 'false');
+    await setSetting('feeding_cycle_anchor', '2026-01-01T00:00:00Z'); // a cycle that started before these rows
+  });
+  afterAll(async () => {
+    await setSetting('feeding_enabled', 'true');
+    await setSetting('feeding_cycle_anchor', '');
+  });
+
+  const buy = (cookie, payload) => app.inject({ method: 'POST', url: '/api/characters/xp/spend', headers: { cookie }, payload });
+  const downtimes = async (charId) => (await getTestPool().query('SELECT title, status FROM downtimes WHERE character_id=?', [charId]))[0];
+
+  it("files a resolved downtime with an activated character's attribute dot", async () => {
+    const { cookie, user } = await registerUser(app);
+    const id = await createCharacter(user.id, 50, { is_active: true, attributes: { Strength: 2 } });
+    expect((await buy(cookie, { type: 'attribute', target: 'Strength', newLevel: 3 })).statusCode).toBe(200);
+    expect(await downtimes(id)).toEqual([{ title: '[XP] Training: Strength 2 → 3', status: 'resolved' }]);
+  });
+
+  it("refuses the dot, keeping the XP, when the cycle's 3 actions are used; skills still go through", async () => {
+    const { cookie, user } = await registerUser(app);
+    const id = await createCharacter(user.id, 50, { is_active: true, attributes: { Strength: 2 } });
+    for (let i = 0; i < 3; i++) {
+      await getTestPool().query("INSERT INTO downtimes (character_id, title, body) VALUES (?, 'a', 'b')", [id]);
+    }
+    const res = await buy(cookie, { type: 'attribute', target: 'Strength', newLevel: 3 });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/downtime limit reached/i);
+    expect((await buy(cookie, { type: 'blood_potency', target: 'Blood Potency' })).statusCode).toBe(400);
+    expect((await buy(cookie, { type: 'skill', target: 'Brawl', newLevel: 1 })).statusCode).toBe(200);
+    const [[row]] = await getTestPool().query('SELECT xp FROM characters WHERE id=?', [id]);
+    expect(row.xp).toBe(47); // only the skill (3 XP) was charged
+    expect(await downtimes(id)).toHaveLength(3);
+  });
+
+  it('refuses the dot until the character has fed, and the quota says why', async () => {
+    const { cookie, user } = await registerUser(app);
+    const id = await createCharacter(user.id, 50, { is_active: true, attributes: { Strength: 2 } });
+    await setSetting('feeding_enabled', 'true');
+    try {
+      const res = await buy(cookie, { type: 'attribute', target: 'Strength', newLevel: 3 });
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).error).toMatch(/must feed/i);
+      const quota = JSON.parse((await app.inject({ method: 'GET', url: '/api/downtimes/quota', headers: { cookie } })).body);
+      expect(quota.submit_block.code).toBe('not_fed');
+      // A normal submission goes through the same check.
+      const dt = await app.inject({ method: 'POST', url: '/api/downtimes', headers: { cookie }, payload: { title: 't', body: 'b' } });
+      expect(JSON.parse(dt.body).error).toMatch(/must feed/i);
+    } finally {
+      await setSetting('feeding_enabled', 'false');
+    }
+    expect(await downtimes(id)).toHaveLength(0);
+  });
+
+  it('reports the used-up cycle through the quota and refuses a 4th normal submission', async () => {
+    const { cookie, user } = await registerUser(app);
+    const id = await createCharacter(user.id, 50, { is_active: true, attributes: { Strength: 2 } });
+    expect((await buy(cookie, { type: 'attribute', target: 'Strength', newLevel: 3 })).statusCode).toBe(200);
+    for (let i = 0; i < 2; i++) {
+      const r = await app.inject({ method: 'POST', url: '/api/downtimes', headers: { cookie }, payload: { title: `t${i}`, body: 'b' } });
+      expect(r.statusCode).toBe(200);
+    }
+    const quota = JSON.parse((await app.inject({ method: 'GET', url: '/api/downtimes/quota', headers: { cookie } })).body);
+    expect([quota.used, quota.limit, quota.submit_block?.code]).toEqual([3, 3, 'limit']);
+    const fourth = await app.inject({ method: 'POST', url: '/api/downtimes', headers: { cookie }, payload: { title: 'x', body: 'b' } });
+    expect(JSON.parse(fourth.body).error).toMatch(/limit reached/i);
+    expect(await downtimes(id)).toHaveLength(3);
+  });
+
+  it('leaves characters that are not activated yet free to spend', async () => {
+    const { cookie, user } = await registerUser(app);
+    const id = await createCharacter(user.id, 50, { attributes: { Strength: 2 } });
+    expect((await buy(cookie, { type: 'attribute', target: 'Strength', newLevel: 3 })).statusCode).toBe(200);
+    expect(await downtimes(id)).toHaveLength(0);
+  });
+});

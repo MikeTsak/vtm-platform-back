@@ -7,7 +7,7 @@ const sharp = require('sharp');
 const { sendDiscordChannelMessage } = require('../services/discord');
 const { getSetting } = require('../utils/settings');
 const { sanitizeRichText } = require('../utils/sanitize');
-const { xmlEscape, getAuthorSignature, isVideoUrl, resolveMediaUrl } = require('../services/news');
+const { xmlEscape, getAuthorSignature, isVideoUrl, resolveMediaUrl, NEWS_AUTHOR_COLUMNS, NEWS_AUTHOR_JOINS } = require('../services/news');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, optionalAuth, requireAdmin, imageClient } = opts;
@@ -36,11 +36,8 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/news/public/:id', async (req, reply) => {
     try {
       const [rows] = await pool.query(`
-      SELECT n.*, u.display_name as author_real_name, u.role as author_role,
-             c.name as char_name, c.camarilla_titles as char_titles, c.image_url as char_image
-      FROM news_entries n
-      LEFT JOIN users u ON n.author_id = u.id
-      LEFT JOIN characters c ON c.user_id = u.id
+      SELECT n.*, ${NEWS_AUTHOR_COLUMNS}
+      FROM news_entries n ${NEWS_AUTHOR_JOINS}
       WHERE n.id = ? AND n.type IN ('news', 'announcement') AND n.theme != 'RUMOR'
     `, [req.params.id]);
 
@@ -97,11 +94,8 @@ module.exports = async function (fastify, opts) {
     try {
       // Join with users to get the real name for Announcements
       const [rows] = await pool.query(`
-      SELECT n.*, u.display_name as author_real_name, u.role as author_role,
-             c.name as char_name, c.camarilla_titles as char_titles, c.image_url as char_image
-      FROM news_entries n
-      LEFT JOIN users u ON n.author_id = u.id
-      LEFT JOIN characters c ON c.user_id = u.id
+      SELECT n.*, ${NEWS_AUTHOR_COLUMNS}
+      FROM news_entries n ${NEWS_AUTHOR_JOINS}
       WHERE n.is_private = 0
       ORDER BY n.created_at DESC
       LIMIT 100
@@ -315,15 +309,28 @@ module.exports = async function (fastify, opts) {
 
       if (!title || !body) return reply.status(400).send({ error: 'Title and Body are required' });
 
+      // An admin may issue a decree in an NPC's name (shown with the NPC's
+      // name, titles and portrait; author_id still records the real poster).
+      let npcId = null;
+      if (req.body.npc_id != null && req.body.npc_id !== '') {
+        if (type !== 'announcement' || req.user.role !== 'admin') {
+          return reply.status(403).send({ error: 'Only admins can issue decrees as an NPC' });
+        }
+        const [[npc]] = await pool.query('SELECT id FROM npcs WHERE id = ?', [Number(req.body.npc_id)]);
+        if (!npc) return reply.status(400).send({ error: 'NPC not found' });
+        npcId = npc.id;
+      }
+
       const safeBody = sanitizeRichText(body); // strip active markup before persisting (XSS)
 
       const isPriv = is_private ? 1 : 0;
       const [insertResult] = await pool.query(
         `INSERT INTO news_entries
-      (author_id, type, title, subtitle, body, theme, journalist_name, media_url, is_private, published_by, published_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (author_id, npc_id, type, title, subtitle, body, theme, journalist_name, media_url, is_private, published_by, published_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           req.user.id,
+          npcId,
           type,
           title,
           subtitle || null,
@@ -389,7 +396,7 @@ module.exports = async function (fastify, opts) {
               broadcast += `\n**Source:** ${emojiTag ? `${emojiTag} ` : ''}${sourceName}`;
               broadcast += `\n**Read the full article:**\n${articleLink}`;
             } else {
-              const sig = await getAuthorSignature(req.user.id, pool);
+              const sig = await getAuthorSignature(insertResult.insertId, pool);
               broadcast += `\n*${sig}*`;
               broadcast += `\n\n**Read the full announcement here:**\n${articleLink}`;
             }
@@ -482,7 +489,7 @@ module.exports = async function (fastify, opts) {
         broadcast += `\n**Source:** ${emojiTag ? `${emojiTag} ` : ''}${sourceName}`;
         broadcast += `\n**Read the full article:**\n${articleLink}`;
       } else {
-        const sig = await getAuthorSignature(entry.author_id, pool);
+        const sig = await getAuthorSignature(entry.id, pool);
         broadcast += `\n*${sig}*`;
         broadcast += `\n\n**Read the full announcement here:**\n${articleLink}`;
       }
@@ -545,13 +552,10 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/admin/news', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const [rows] = await pool.query(`
-      SELECT n.*, u.display_name as author_real_name, u.role as author_role,
-             c.name as char_name, c.camarilla_titles as char_titles, c.image_url as char_image,
+      SELECT n.*, ${NEWS_AUTHOR_COLUMNS},
              (SELECT COUNT(*) FROM news_reads r WHERE r.news_id = n.id) as reader_count,
              (SELECT COALESCE(SUM(r.open_count), 0) FROM news_reads r WHERE r.news_id = n.id) as open_total
-      FROM news_entries n
-      LEFT JOIN users u ON n.author_id = u.id
-      LEFT JOIN characters c ON c.user_id = u.id
+      FROM news_entries n ${NEWS_AUTHOR_JOINS}
       WHERE n.type = 'news' OR n.type = 'announcement'
       ORDER BY n.created_at DESC
       LIMIT 200

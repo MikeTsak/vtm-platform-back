@@ -6,18 +6,31 @@ const XML_ENTITIES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&apos;', '"
 
 const xmlEscape = (str) => String(str).replace(/[&<>'"]/g, (c) => XML_ENTITIES[c]);
 
+// Author identity columns for a news_entries row aliased `n`; pair with
+// NEWS_AUTHOR_JOINS. A decree an admin issued as an NPC (n.npc_id) wears that
+// NPC's name, titles and portrait; the posting account's name and role are
+// nulled so it never reads as "Storyteller".
+const NEWS_AUTHOR_COLUMNS = `
+  IF(np.id IS NULL, u.display_name, NULL) as author_real_name,
+  IF(np.id IS NULL, u.role, NULL) as author_role,
+  COALESCE(np.name, c.name) as char_name,
+  IF(np.id IS NULL, c.camarilla_titles, np.camarilla_titles) as char_titles,
+  IF(np.id IS NULL, c.image_url, np.image_url) as char_image`;
+const NEWS_AUTHOR_JOINS = `
+  LEFT JOIN users u ON n.author_id = u.id
+  LEFT JOIN characters c ON c.user_id = u.id
+  LEFT JOIN npcs np ON np.id = n.npc_id`;
+
 // Renders the in-fiction byline for a news entry: character name plus their
 // highest-ranking Camarilla title, falling back to the account's display name
 // and finally to an anonymous Court attribution.
-async function getAuthorSignature(authorId, pool) {
+async function getAuthorSignature(entryId, pool) {
   try {
     const [[user]] = await pool.query(`
-      SELECT u.display_name as author_real_name, u.role as author_role,
-             c.name as char_name, c.camarilla_titles as char_titles
-      FROM users u
-      LEFT JOIN characters c ON c.user_id = u.id
-      WHERE u.id = ?
-    `, [authorId]);
+      SELECT ${NEWS_AUTHOR_COLUMNS}
+      FROM news_entries n ${NEWS_AUTHOR_JOINS}
+      WHERE n.id = ?
+    `, [entryId]);
 
     if (!user) return 'Issued by Court Authority';
 
@@ -90,4 +103,4 @@ async function resolveMediaUrl(rawUrl, appBase, pool) {
   return `${base}${trimmed.startsWith('/') ? '' : '/'}${trimmed}`;
 }
 
-module.exports = { xmlEscape, getAuthorSignature, isVideoUrl, resolveMediaUrl };
+module.exports = { xmlEscape, getAuthorSignature, isVideoUrl, resolveMediaUrl, NEWS_AUTHOR_COLUMNS, NEWS_AUTHOR_JOINS };

@@ -9,17 +9,8 @@ const { parseSheet } = require('../utils/sheet');
 const { sendPushNotification } = require('../services/push');
 const {
   deadlineEnd, submissionState, syncSettingsToActiveCycle, applyActiveCycle, readCycles, findActiveIndex, withReleaseDates,
-  releasePendingAndNotify, dateOnly,
+  releasePendingAndNotify, dateOnly, ACTIONS_PER_CYCLE, cycleWindow, checkSubmission,
 } = require('../services/downtimeSchedule');
-
-const SUBMIT_CLOSED_MESSAGES = {
-  closed: () => 'Downtime submissions are currently closed.',
-  phase: (isProject) => isProject
-    ? 'Long Term Project submissions are currently closed. Only Monthly Actions are being accepted.'
-    : 'Monthly Action submissions are currently closed. Only Long Term Projects are being accepted.',
-  not_open: () => 'Downtime submissions have not opened yet.',
-  deadline: (isProject) => `The deadline for ${isProject ? 'project' : 'downtime'} submissions has passed.`,
-};
 
 const FINAL_STATUSES = ['resolved', 'resolved in scene'];
 const actionName = (title) => String(title || 'your action').replace(/^\[PROJECT\]\s*/, '');
@@ -53,64 +44,29 @@ module.exports = async function (fastify, opts) {
     const ch = chars[0];
     if (!ch) {
       log.dt('Quota check (no character)', { user_id: req.user.id });
-      return reply.send({ used: 0, limit: 3 });
+      return reply.send({ used: 0, limit: ACTIONS_PER_CYCLE });
     }
 
-    let from = startOfMonth();
-    let to = endOfMonth();
-
-    // Tie the quota window directly to the current Downtime cycle
-    try {
-      const cycleInfo = await resolveCurrentFeedingCycle();
-      if (cycleInfo?.cycleStart && !isNaN(cycleInfo.cycleStart.getTime())) {
-        from = cycleInfo.cycleStart;
-        to = cycleInfo.cycleEnd && !isNaN(cycleInfo.cycleEnd.getTime())
-          ? cycleInfo.cycleEnd
-          : new Date(cycleInfo.cycleStart.getTime() + 90 * 24 * 60 * 60 * 1000);
-      }
-    } catch (e) {
-      try {
-        const openingStr = await getSetting('downtime_opening', null);
-        if (openingStr) {
-          const parsed = new Date(openingStr);
-          if (!isNaN(parsed.getTime())) {
-            from = parsed;
-            to = new Date(parsed.getTime() + 90 * 24 * 60 * 60 * 1000);
-          }
-        }
-      } catch (err) { }
-    }
-
-    // If deadline was manually extended beyond to, extend to so quota counts all submissions of this cycle
-    try {
-      const dlStr = await getSetting('downtime_deadline', null);
-      if (dlStr) {
-        const dlDate = new Date(dlStr);
-        if (!isNaN(dlDate.getTime()) && dlDate > to) {
-          to = dlDate;
-        }
-      }
-    } catch (err) { }
-
-    // Actions written after the deadline (replacements for rejected ones) still belong to this cycle
-    // until the next one opens, so the window must not stop at the deadline.
-    if (to < new Date()) to = new Date();
+    const { from, to } = await cycleWindow();
 
     const [rows] = await pool.query(
       "SELECT COUNT(*) AS c FROM downtimes WHERE character_id=? AND created_at >= ? AND created_at <= ? AND status <> 'rejected'",
       [ch.id, from, to]
     );
-    const [standardState, projectState] = await Promise.all([
+    const [standardState, projectState, standardCheck] = await Promise.all([
       submissionState({ isProject: false, characterId: ch.id, from, to }),
       submissionState({ isProject: true, characterId: ch.id, from, to }),
+      checkSubmission({ characterId: ch.id }),
     ]);
-    log.dt('Quota check', { user_id: req.user.id, used: rows[0].c, limit: 3 });
+    log.dt('Quota check', { user_id: req.user.id, used: rows[0].c, limit: ACTIONS_PER_CYCLE });
     reply.send({
       used: rows[0].c,
-      limit: 3,
+      limit: ACTIONS_PER_CYCLE,
       // null = open; otherwise why the form is closed ('closed' | 'phase' | 'not_open' | 'deadline')
       closed_reason: { standard: standardState.reason, project: projectState.reason },
       late_slots: { standard: standardState.lateSlots, project: projectState.lateSlots },
+      // Why one more standard action (or an XP-trained dot) would be refused right now; null = it wouldn't.
+      submit_block: standardCheck.error ? { code: standardCheck.code, message: standardCheck.error } : null,
     });
   });
 
@@ -386,75 +342,11 @@ module.exports = async function (fastify, opts) {
       return reply.status(400).json({ error: 'Create a character first' });
     }
 
-    // Feeding gate: this cycle's hunting roll must be resolved before any
-    // downtime action (standard or project) can be submitted.
-    const feedingEnabled = (await getSetting('feeding_enabled', 'true')) === 'true';
-    let currentCycleInfo = null;
-    try {
-      currentCycleInfo = await resolveCurrentFeedingCycle();
-    } catch (e) { }
-
-    if (feedingEnabled) {
-      const cycleIndex = currentCycleInfo?.cycleIndex || 0;
-      const [fed] = await pool.query(
-        "SELECT id FROM feedings WHERE character_id=? AND cycle_index=? AND status='resolved' LIMIT 1",
-        [ch.id, cycleIndex]
-      );
-      if (!fed.length) {
-        return reply.status(400).json({ error: 'You must feed this cycle before submitting downtime actions.' });
-      }
-    }
-
-    let from = startOfMonth();
-    let to = endOfMonth();
-
-    if (currentCycleInfo?.cycleStart && !isNaN(currentCycleInfo.cycleStart.getTime())) {
-      from = currentCycleInfo.cycleStart;
-      to = currentCycleInfo.cycleEnd && !isNaN(currentCycleInfo.cycleEnd.getTime())
-        ? currentCycleInfo.cycleEnd
-        : new Date(currentCycleInfo.cycleStart.getTime() + 90 * 24 * 60 * 60 * 1000);
-    } else {
-      try {
-        const openingStr = await getSetting('downtime_opening', null);
-        if (openingStr) {
-          const parsed = new Date(openingStr);
-          if (!isNaN(parsed.getTime())) {
-            from = parsed;
-            to = new Date(parsed.getTime() + 90 * 24 * 60 * 60 * 1000);
-          }
-        }
-      } catch (e) { }
-    }
-
-    // If deadline was manually extended beyond to, extend to so quota counts all submissions of this cycle
-    try {
-      const dlKey = isProjectSubmission ? 'project_deadline' : 'downtime_deadline';
-      const dlStr = await getSetting(dlKey, null);
-      if (dlStr) {
-        const dlDate = new Date(dlStr);
-        if (!isNaN(dlDate.getTime()) && dlDate > to) {
-          to = dlDate;
-        }
-      }
-    } catch (e) { }
-
-    // Actions written after the deadline (replacements for rejected ones) still belong to this cycle
-    // until the next one opens, so the window must not stop at the deadline.
-    if (to < new Date()) to = new Date();
-
-    const [cnt] = await pool.query(
-      "SELECT COUNT(*) AS c FROM downtimes WHERE character_id=? AND created_at >= ? AND created_at <= ? AND status <> 'rejected'",
-      [ch.id, from, to]
-    );
-    // Phase, opening and deadline (with replacement slots for rejected actions after the deadline).
-    const subState = await submissionState({ isProject: isProjectSubmission, characterId: ch.id, from, to });
-    if (subState.reason) {
-      return reply.status(400).json({ error: SUBMIT_CLOSED_MESSAGES[subState.reason](isProjectSubmission) });
-    }
-
-    if (cnt[0].c >= 3) {
-      log.warn('Downtime limit reached', { user_id: req.user.id, count: cnt[0].c });
-      return reply.status(400).json({ error: 'Downtime limit reached for this cycle (3).' });
+    // Feeding gate, phase/window/deadline and the per-cycle limit.
+    const { error: blocked } = await checkSubmission({ characterId: ch.id, isProject: isProjectSubmission });
+    if (blocked) {
+      log.warn('Downtime submission refused', { user_id: req.user.id, reason: blocked });
+      return reply.status(400).json({ error: blocked });
     }
 
     let defaultFeed = feeding_type;

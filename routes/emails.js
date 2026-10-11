@@ -144,10 +144,11 @@ module.exports = async function (fastify, opts) {
       const [[row]] = isAdmin
         ? await pool.query(`SELECT COUNT(*) AS count FROM email_messages WHERE sender_type = 'user' AND is_read = 0`)
         : await pool.query(`
-            SELECT COUNT(*) AS count FROM email_messages m
-            JOIN email_threads t ON t.id = m.thread_id
-            WHERE t.user_id = ? AND m.sender_type = 'identity' AND m.is_read = 0 AND m.status = 'sent'
-          `, [req.user.id]);
+            SELECT (SELECT COUNT(*) FROM email_messages m
+                    JOIN email_threads t ON t.id = m.thread_id
+                    WHERE t.user_id = ? AND m.sender_type = 'identity' AND m.is_read = 0 AND m.status = 'sent')
+                 + (SELECT COUNT(*) FROM anonymous_notes WHERE user_id = ? AND read_at IS NULL) AS count
+          `, [req.user.id, req.user.id]);
       reply.send({ count: Number(row.count) });
     } catch (e) {
       log.err('Failed to count unread emails', { message: e.message });

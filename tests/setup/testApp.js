@@ -23,6 +23,7 @@ const testLog = {
   adm: VERBOSE ? console.log : noop,
   auth: VERBOSE ? console.log : noop,
   char: VERBOSE ? console.log : noop,
+  dt: VERBOSE ? console.log : noop,
   err: VERBOSE ? console.error : noop,
   info: VERBOSE ? console.log : noop,
   mail: VERBOSE ? console.log : noop,
@@ -126,6 +127,7 @@ function buildTestApp(pool) {
     authRequired,
   });
 
+  app.register(require('../../routes/downtimes'), { pool, log: testLog, authRequired, requireAdmin, broadcastNtfyAlert: noop });
   app.register(require('../../routes/xp'), { pool, log: testLog, authRequired, requireAdmin });
   app.register(require('../../routes/adminCharacters'), { pool, log: testLog, authRequired, requireAdmin });
   app.register(require('../../routes/npcs'), { pool, log: testLog, authRequired, requireAdmin });

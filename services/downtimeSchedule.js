@@ -13,6 +13,8 @@
 
 const pool = require('../db');
 const { getSetting, setSetting } = require('../utils/settings');
+const { resolveCurrentFeedingCycle } = require('../utils/feedingCycle');
+const { startOfMonth, endOfMonth } = require('./format');
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const DEFAULT_RELEASE_TIME = '10:00';
@@ -149,6 +151,67 @@ async function submissionState({ isProject, characterId, from, to, now = new Dat
   return { reason: lateSlots > 0 ? null : 'deadline', lateSlots };
 }
 
+const ACTIONS_PER_CYCLE = 3;
+
+const SUBMIT_CLOSED_MESSAGES = {
+  closed: () => 'Downtime submissions are currently closed.',
+  phase: (isProject) => isProject
+    ? 'Long Term Project submissions are currently closed. Only Monthly Actions are being accepted.'
+    : 'Monthly Action submissions are currently closed. Only Long Term Projects are being accepted.',
+  not_open: () => 'Downtime submissions have not opened yet.',
+  deadline: (isProject) => `The deadline for ${isProject ? 'project' : 'downtime'} submissions has passed.`,
+};
+
+// The window a character's actions are counted in: the current cycle, stretched to a manually
+// extended deadline and to "now" (replacements written after the deadline still belong to this
+// cycle until the next one opens). Falls back to the opening date, then the calendar month.
+async function cycleWindow({ isProject = false, now = new Date() } = {}) {
+  let from = startOfMonth();
+  let to = endOfMonth();
+  let cycleIndex = 0;
+  const valid = (d) => d instanceof Date && !isNaN(d.getTime());
+  const cycle = await resolveCurrentFeedingCycle().catch(() => null);
+  if (valid(cycle?.cycleStart)) {
+    cycleIndex = cycle.cycleIndex || 0;
+    from = cycle.cycleStart;
+    to = valid(cycle.cycleEnd) ? cycle.cycleEnd : new Date(from.getTime() + 90 * 24 * 60 * 60 * 1000);
+  } else {
+    const openingStr = await getSetting('downtime_opening', null);
+    const opening = openingStr ? new Date(openingStr) : null;
+    if (valid(opening)) { from = opening; to = new Date(opening.getTime() + 90 * 24 * 60 * 60 * 1000); }
+  }
+  const dlStr = await getSetting(isProject ? 'project_deadline' : 'downtime_deadline', null);
+  const dl = dlStr ? new Date(dlStr) : null;
+  if (valid(dl) && dl > to) to = dl;
+  if (to < now) to = now;
+  return { from, to, cycleIndex };
+}
+
+// Can this character file one more action right now? Feeding gate, phase/window/deadline and the
+// per-cycle limit. Returns { error, code } (error null = allowed; code 'not_fed' | 'limit' | a
+// submissionState reason) plus the counting window.
+async function checkSubmission({ characterId, isProject = false }) {
+  const { from, to, cycleIndex } = await cycleWindow({ isProject });
+  const done = (error, code = null) => ({ error, code, from, to });
+
+  if ((await getSetting('feeding_enabled', 'true')) === 'true') {
+    const [fed] = await pool.query(
+      "SELECT id FROM feedings WHERE character_id=? AND cycle_index=? AND status='resolved' LIMIT 1",
+      [characterId, cycleIndex]
+    );
+    if (!fed.length) return done('You must feed this cycle before submitting downtime actions.', 'not_fed');
+  }
+  const state = await submissionState({ isProject, characterId, from, to });
+  if (state.reason) return done(SUBMIT_CLOSED_MESSAGES[state.reason](isProject), state.reason);
+
+  const [[cnt]] = await pool.query(
+    "SELECT COUNT(*) AS c FROM downtimes WHERE character_id=? AND created_at >= ? AND created_at <= ? AND status <> 'rejected'",
+    [characterId, from, to]
+  );
+  if (Number(cnt.c) >= ACTIONS_PER_CYCLE) return done(`Downtime limit reached for this cycle (${ACTIONS_PER_CYCLE}).`, 'limit');
+  return done(null);
+}
+
 // Release every held resolution and push each affected player once. Used by the release timer job and
 // by the manual release (switching mass release off).
 async function releasePendingAndNotify() {
@@ -181,6 +244,9 @@ module.exports = {
   syncSettingsToActiveCycle,
   advanceActiveCycle,
   submissionState,
+  ACTIONS_PER_CYCLE,
+  cycleWindow,
+  checkSubmission,
 };
 
 if (require.main === module) {

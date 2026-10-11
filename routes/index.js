@@ -43,6 +43,7 @@ const ROUTE_MODULES = [
   { name: 'comms', path: './comms' },
   { name: 'chat', path: './chat' },
   { name: 'emails', path: './emails' },
+  { name: 'anonymous-notes', path: './anonymousNotes' },
   { name: 'camarilla', path: './camarilla' },
   { name: 'court-actions', path: './courtActions' },
   { name: 'elysium', path: './elysium' },
