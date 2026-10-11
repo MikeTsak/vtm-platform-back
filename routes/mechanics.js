@@ -5,7 +5,7 @@
 // utils/playerSheetEdit.js); they change only through these rolls, or by a
 // Storyteller (PATCH /api/live-session/:id/players/:charId, admin sheet editor).
 
-const { isOwnerOrAdmin } = require('../services/guards');
+const { isOwnerOrAdmin, isAdmin } = require('../services/guards');
 const { parseSheet } = require('../utils/sheet');
 const { CATALOG } = require('../utils/xpPurchase');
 const { rollD10 } = require('../services/dice');
@@ -53,7 +53,7 @@ module.exports = async function (fastify, opts) {
         [[session]] = await conn.query(
           `SELECT ls.id, ls.session_code FROM live_sessions ls WHERE (ls.session_code=? OR ls.id=?) AND ls.status='active'
              AND (? OR EXISTS (SELECT 1 FROM live_session_participants p WHERE p.session_id=ls.id AND p.user_id=?))`,
-          [req.body.sessionId, req.body.sessionId, req.user.role === 'admin' ? 1 : 0, row.user_id]
+          [req.body.sessionId, req.body.sessionId, isAdmin(req.user) ? 1 : 0, row.user_id]
         );
       }
       const logged = [];

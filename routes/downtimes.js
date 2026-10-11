@@ -85,7 +85,7 @@ module.exports = async function (fastify, opts) {
     `, [id, req.user.id]);
 
       if (rows.length === 0) {
-        return reply.status(404).json({ error: 'Submission not found or unauthorized' });
+        return reply.status(404).send({ error: 'Submission not found or unauthorized' });
       }
 
       const submission = rows[0];
@@ -93,7 +93,7 @@ module.exports = async function (fastify, opts) {
       // 2. Only allow edits if status is 'submitted' or 'needs a scene' (stored as 'Needs a Scene', hence lowercase)
       const editStatus = String(submission.status || '').toLowerCase();
       if (editStatus !== 'submitted' && editStatus !== 'needs a scene') {
-        return reply.status(400).json({ error: 'You can only edit actions that are not yet approved or resolved.' });
+        return reply.status(400).send({ error: 'You can only edit actions that are not yet approved or resolved.' });
       }
 
       // 3. Check against the CORRECT global deadline setting
@@ -107,7 +107,7 @@ module.exports = async function (fastify, opts) {
       // Actions the ST sent back to "submitted" stay editable after the deadline.
       const dlEnd = deadlineEnd(deadlineStr);
       if (dlEnd && dlEnd < new Date() && !submission.reopened_at) {
-        return reply.status(400).json({
+        return reply.status(400).send({
           error: `The deadline for ${isProject ? 'project' : 'action'} submissions has passed.`
         });
       }
@@ -121,7 +121,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ success: true, message: 'Action updated successfully' });
     } catch (e) {
       console.error('Failed to update downtime/project:', e);
-      reply.status(500).json({ error: 'Internal server error while updating submission' });
+      reply.status(500).send({ error: 'Internal server error while updating submission' });
     }
   });
 
@@ -331,7 +331,7 @@ module.exports = async function (fastify, opts) {
   const { title, body, feeding_type } = req.body;
     if (!title || !body) {
       log.warn('Downtime create missing fields', { user_id: req.user.id });
-      return reply.status(400).json({ error: 'Title and body required' });
+      return reply.status(400).send({ error: 'Title and body required' });
     }
 
     const isProjectSubmission = title.startsWith('[PROJECT]');
@@ -339,14 +339,14 @@ module.exports = async function (fastify, opts) {
     const ch = chars[0];
     if (!ch) {
       log.warn('Downtime create without character', { user_id: req.user.id });
-      return reply.status(400).json({ error: 'Create a character first' });
+      return reply.status(400).send({ error: 'Create a character first' });
     }
 
     // Feeding gate, phase/window/deadline and the per-cycle limit.
     const { error: blocked } = await checkSubmission({ characterId: ch.id, isProject: isProjectSubmission });
     if (blocked) {
       log.warn('Downtime submission refused', { user_id: req.user.id, reason: blocked });
-      return reply.status(400).json({ error: blocked });
+      return reply.status(400).send({ error: blocked });
     }
 
     let defaultFeed = feeding_type;
@@ -420,12 +420,12 @@ module.exports = async function (fastify, opts) {
     let normalizedStatus = status;
     if (status) {
       const match = allowed.find(a => a.toLowerCase() === String(status).trim().toLowerCase());
-      if (!match) return reply.status(400).json({ error: 'Bad status' });
+      if (!match) return reply.status(400).send({ error: 'Bad status' });
       normalizedStatus = match;
     }
 
     const [[before]] = await pool.query('SELECT * FROM downtimes WHERE id=?', [req.params.id]);
-    if (!before) return reply.status(404).json({ error: 'Downtime not found' });
+    if (!before) return reply.status(404).send({ error: 'Downtime not found' });
 
     const fields = [];
     const vals = [];
@@ -475,7 +475,7 @@ module.exports = async function (fastify, opts) {
       vals.push(1);
     }
 
-    if (!fields.length) return reply.status(400).json({ error: 'Nothing to update' });
+    if (!fields.length) return reply.status(400).send({ error: 'Nothing to update' });
 
     vals.push(req.params.id);
     await pool.query(`UPDATE downtimes SET ${fields.join(', ')} WHERE id=?`, vals);
@@ -518,7 +518,7 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/admin/downtimes/scenes/batch', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const { downtime_ids, scene_id, scene_title, status } = req.body || {};
     if (!Array.isArray(downtime_ids) || downtime_ids.length === 0) {
-      return reply.status(400).json({ error: 'downtime_ids array required' });
+      return reply.status(400).send({ error: 'downtime_ids array required' });
     }
 
     const fields = [];
@@ -535,7 +535,7 @@ module.exports = async function (fastify, opts) {
     if (status !== undefined) {
       // Scene batches only move actions between the two scene statuses; anything else goes through PATCH.
       if (!['Needs a Scene', 'Resolved in scene'].includes(status)) {
-        return reply.status(400).json({ error: 'Bad status' });
+        return reply.status(400).send({ error: 'Bad status' });
       }
       fields.push('status=?');
       vals.push(status);
@@ -548,7 +548,7 @@ module.exports = async function (fastify, opts) {
       }
     }
 
-    if (!fields.length) return reply.status(400).json({ error: 'Nothing to update' });
+    if (!fields.length) return reply.status(400).send({ error: 'Nothing to update' });
 
     const [beforeRows] = await pool.query('SELECT id, scene_id FROM downtimes WHERE id IN (?)', [downtime_ids]);
     const sceneBefore = new Map(beforeRows.map(r => [r.id, r.scene_id]));
@@ -606,7 +606,7 @@ module.exports = async function (fastify, opts) {
       });
     } catch (e) {
       log.err('Fetch downtime config failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to fetch downtime config' });
+      reply.status(500).send({ error: 'Failed to fetch downtime config' });
     }
   });
 
@@ -616,16 +616,16 @@ module.exports = async function (fastify, opts) {
       const { downtime_deadline, downtime_opening, project_deadline, downtime_active_phase, downtime_mass_release_mode, downtime_mass_release_date } = req.body || {};
 
       if (downtime_deadline && isNaN(new Date(downtime_deadline).getTime())) {
-        return reply.status(400).json({ error: 'Invalid downtime_deadline date' });
+        return reply.status(400).send({ error: 'Invalid downtime_deadline date' });
       }
       if (downtime_opening && isNaN(new Date(downtime_opening).getTime())) {
-        return reply.status(400).json({ error: 'Invalid downtime_opening date' });
+        return reply.status(400).send({ error: 'Invalid downtime_opening date' });
       }
       if (project_deadline && isNaN(new Date(project_deadline).getTime())) {
-        return reply.status(400).json({ error: 'Invalid project_deadline date' });
+        return reply.status(400).send({ error: 'Invalid project_deadline date' });
       }
       if (downtime_mass_release_date && isNaN(new Date(downtime_mass_release_date).getTime())) {
-        return reply.status(400).json({ error: 'Invalid downtime_mass_release_date date' });
+        return reply.status(400).send({ error: 'Invalid downtime_mass_release_date date' });
       }
 
       if (typeof downtime_deadline !== 'undefined') await setSetting('downtime_deadline', downtime_deadline || '');
@@ -691,7 +691,7 @@ module.exports = async function (fastify, opts) {
       });
     } catch (e) {
       log.err('Update downtime config failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to update downtime config' });
+      reply.status(500).send({ error: 'Failed to update downtime config' });
     }
   });
 
@@ -703,7 +703,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ success: true, count: result.affectedRows });
     } catch (e) {
       log.err('Failed to clean downtimes', { error: e.message });
-      reply.status(500).json({ success: false, error: 'Internal Server Error' });
+      reply.status(500).send({ success: false, error: 'Internal Server Error' });
     }
   });
 
@@ -714,7 +714,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ cycles });
     } catch (e) {
       log.err('Fetch downtime cycles failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to fetch downtime cycles' });
+      reply.status(500).send({ error: 'Failed to fetch downtime cycles' });
     }
   });
 
@@ -742,7 +742,7 @@ module.exports = async function (fastify, opts) {
       });
     } catch (e) {
       log.err('Fetch last-cycle downtime submitters failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to fetch downtime submitters' });
+      reply.status(500).send({ error: 'Failed to fetch downtime submitters' });
     }
   });
 
@@ -764,7 +764,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true, cycles: validCycles });
     } catch (e) {
       log.err('Save downtime cycles failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to save downtime cycles' });
+      reply.status(500).send({ error: 'Failed to save downtime cycles' });
     }
   });
 
@@ -891,7 +891,7 @@ module.exports = async function (fastify, opts) {
       });
     } catch (e) {
       log.err('Fetch owing downtime characters failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to fetch characters owing downtimes' });
+      reply.status(500).send({ error: 'Failed to fetch characters owing downtimes' });
     }
   });
 
@@ -910,18 +910,18 @@ module.exports = async function (fastify, opts) {
       } = req.body || {};
 
       if (!character_id) {
-        return reply.status(400).json({ error: 'Character is required' });
+        return reply.status(400).send({ error: 'Character is required' });
       }
       if (!title || !String(title).trim()) {
-        return reply.status(400).json({ error: 'Title is required' });
+        return reply.status(400).send({ error: 'Title is required' });
       }
       if (!body || !String(body).trim()) {
-        return reply.status(400).json({ error: 'Body is required' });
+        return reply.status(400).send({ error: 'Body is required' });
       }
 
       const [[ch]] = await pool.query('SELECT * FROM characters WHERE id = ?', [character_id]);
       if (!ch) {
-        return reply.status(404).json({ error: 'Character not found' });
+        return reply.status(404).send({ error: 'Character not found' });
       }
 
       const cycles = await readCycles();
@@ -1012,7 +1012,7 @@ module.exports = async function (fastify, opts) {
       });
     } catch (e) {
       log.err('Force submit downtime failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to record late downtime' });
+      reply.status(500).send({ error: 'Failed to record late downtime' });
     }
   });
 };

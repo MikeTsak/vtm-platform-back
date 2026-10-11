@@ -251,7 +251,7 @@ module.exports = async function (fastify, opts) {
     const members = Array.isArray(body.members) ? body.members : [];
 
     if (!isAdmin(req.user) && !members.some((m) => Number(m.user_id) === Number(req.user.id))) {
-      return reply.status(403).json({ error: 'You must include yourself in the coterie' });
+      return reply.status(403).send({ error: 'You must include yourself in the coterie' });
     }
 
     // Only an ST may create a coterie that bypasses the point rules.
@@ -259,7 +259,7 @@ module.exports = async function (fastify, opts) {
 
     const { rows: memberRows, missing } = await resolveMembers(members);
     if (missing.length) {
-      return reply.status(400).json({
+      return reply.status(400).send({
         error: 'Every member needs a character sheet before joining a coterie.',
         missing_user_ids: missing,
       });
@@ -278,7 +278,7 @@ module.exports = async function (fastify, opts) {
       rulesOverride,
     });
     if (check.errors.length) {
-      return reply.status(400).json({ error: check.errors[0], errors: check.errors });
+      return reply.status(400).send({ error: check.errors[0], errors: check.errors });
     }
 
     const conn = await pool.getConnection();
@@ -296,11 +296,11 @@ module.exports = async function (fastify, opts) {
         );
         if (!ch) {
           await conn.rollback();
-          return reply.status(400).json({ error: 'You need a character sheet to contribute advantage dots to a coterie.' });
+          return reply.status(400).send({ error: 'You need a character sheet to contribute advantage dots to a coterie.' });
         }
         if ((Number(ch.xp) || 0) < bonusCost) {
           await conn.rollback();
-          return reply.status(400).json({
+          return reply.status(400).send({
             error: `Not enough personal XP to contribute ${bonusPoints} dots (need ${bonusCost}, have ${ch.xp || 0}).`,
           });
         }
@@ -384,7 +384,7 @@ module.exports = async function (fastify, opts) {
           title: 'New Coterie', tags: 'shield', priority: 'default',
         });
       }
-      reply.status(201).json({
+      reply.status(201).send({
         coterie: presentCoterie(row, memberList),
         members: memberList,
         warnings: check.warnings,
@@ -392,7 +392,7 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       await conn.rollback();
       log.err('Create coterie failed', { message: e.message, stack: e.stack });
-      reply.status(500).json({ error: 'Failed to create coterie' });
+      reply.status(500).send({ error: 'Failed to create coterie' });
     } finally {
       conn.release();
     }
@@ -446,7 +446,7 @@ module.exports = async function (fastify, opts) {
       });
     } catch (e) {
       log.err('Load public coteries failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to load public coteries' });
+      reply.status(500).send({ error: 'Failed to load public coteries' });
     }
   });
 
@@ -486,7 +486,7 @@ module.exports = async function (fastify, opts) {
       });
     } catch (e) {
       log.err('List coteries failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to load coteries' });
+      reply.status(500).send({ error: 'Failed to load coteries' });
     }
   });
 
@@ -494,10 +494,10 @@ module.exports = async function (fastify, opts) {
     try {
       const id = Number(req.params.id);
       const [[row]] = await pool.query('SELECT * FROM coteries WHERE id=?', [id]);
-      if (!row) return reply.status(404).json({ error: 'Not found' });
+      if (!row) return reply.status(404).send({ error: 'Not found' });
 
       const { allowed } = await access(req, id);
-      if (!allowed) return reply.status(403).json({ error: 'Not allowed' });
+      if (!allowed) return reply.status(403).send({ error: 'Not allowed' });
 
       const members = await loadMembers(null, id);
       const [xpLog] = await pool.query(
@@ -515,7 +515,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ coterie: presentCoterie(row, members), members, xp_log: xpLog, retainers });
     } catch (e) {
       log.err('Read coterie failed', { message: e.message, stack: e.stack });
-      reply.status(500).json({ error: 'Failed to load coterie' });
+      reply.status(500).send({ error: 'Failed to load coterie' });
     }
   });
 
@@ -526,7 +526,7 @@ module.exports = async function (fastify, opts) {
   fastify.put('/api/coteries/:id', { preHandler: [authRequired] }, async (req, reply) => {
     const id = Number(req.params.id);
     const { allowed, admin } = await access(req, id);
-    if (!allowed) return reply.status(403).json({ error: 'Not allowed' });
+    if (!allowed) return reply.status(403).send({ error: 'Not allowed' });
 
     const conn = await pool.getConnection();
     try {
@@ -535,7 +535,7 @@ module.exports = async function (fastify, opts) {
       const [[existing]] = await conn.query('SELECT * FROM coteries WHERE id=? FOR UPDATE', [id]);
       if (!existing) {
         await conn.rollback();
-        return reply.status(404).json({ error: 'Not found' });
+        return reply.status(404).send({ error: 'Not found' });
       }
 
       const body = req.body || {};
@@ -555,7 +555,7 @@ module.exports = async function (fastify, opts) {
 
       if (deltaBonus < 0 && !rulesOverride) {
         await conn.rollback();
-        return reply.status(400).json({ error: 'Contributed advantage dots cannot be reduced without Storyteller override.' });
+        return reply.status(400).send({ error: 'Contributed advantage dots cannot be reduced without Storyteller override.' });
       }
 
       let editorChar = null;
@@ -566,11 +566,11 @@ module.exports = async function (fastify, opts) {
         );
         if (!ch) {
           await conn.rollback();
-          return reply.status(400).json({ error: 'You need a character sheet to contribute advantage dots to a coterie.' });
+          return reply.status(400).send({ error: 'You need a character sheet to contribute advantage dots to a coterie.' });
         }
         if ((Number(ch.xp) || 0) < deltaCost) {
           await conn.rollback();
-          return reply.status(400).json({
+          return reply.status(400).send({
             error: `Not enough personal XP to contribute ${deltaBonus} more dots (need ${deltaCost}, have ${ch.xp || 0}).`,
           });
         }
@@ -601,7 +601,7 @@ module.exports = async function (fastify, opts) {
       const check = rules.validateCoterie(merged);
       if (check.errors.length) {
         await conn.rollback();
-        return reply.status(400).json({ error: check.errors[0], errors: check.errors });
+        return reply.status(400).send({ error: check.errors[0], errors: check.errors });
       }
 
       const fields = [
@@ -692,7 +692,7 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       await conn.rollback().catch(() => {});
       log.err('Update coterie failed', { message: e.message, stack: e.stack });
-      reply.status(500).json({ error: 'Failed to update coterie' });
+      reply.status(500).send({ error: 'Failed to update coterie' });
     } finally {
       conn.release();
     }
@@ -706,22 +706,22 @@ module.exports = async function (fastify, opts) {
     try {
       const id = Number(req.params.id);
       const { allowed, admin } = await access(req, id);
-      if (!allowed) return reply.status(403).json({ error: 'Not allowed' });
+      if (!allowed) return reply.status(403).send({ error: 'Not allowed' });
 
       const members = Array.isArray((req.body || {}).members) ? req.body.members : [];
       if (!admin && !members.some((m) => Number(m.user_id) === Number(req.user.id))) {
-        return reply.status(403).json({ error: 'You must include yourself in the coterie' });
+        return reply.status(403).send({ error: 'You must include yourself in the coterie' });
       }
 
       const { rows, missing } = await resolveMembers(members);
       if (missing.length) {
-        return reply.status(400).json({
+        return reply.status(400).send({
           error: 'Every member needs a character sheet before joining a coterie.',
           missing_user_ids: missing,
         });
       }
       if (rows.length < rules.MIN_MEMBERS) {
-        return reply.status(400).json({ error: `At least ${rules.MIN_MEMBERS} members are required` });
+        return reply.status(400).send({ error: `At least ${rules.MIN_MEMBERS} members are required` });
       }
 
       const before = await loadMembers(null, id);
@@ -757,7 +757,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ members: after });
     } catch (e) {
       log.err('Set coterie members failed', { message: e.message, stack: e.stack });
-      reply.status(500).json({ error: 'Failed to set members' });
+      reply.status(500).send({ error: 'Failed to set members' });
     }
   });
 
@@ -769,10 +769,10 @@ module.exports = async function (fastify, opts) {
     try {
       const id = Number(req.params.id);
       const delta = Math.trunc(Number((req.body || {}).delta) || 0);
-      if (!delta) return reply.status(400).json({ error: 'delta must be a non-zero integer' });
+      if (!delta) return reply.status(400).send({ error: 'delta must be a non-zero integer' });
 
       const [[row]] = await pool.query('SELECT coterie_xp FROM coteries WHERE id=?', [id]);
-      if (!row) return reply.status(404).json({ error: 'Not found' });
+      if (!row) return reply.status(404).send({ error: 'Not found' });
 
       const before = Number(row.coterie_xp) || 0;
       const after = Math.max(0, before + delta);
@@ -790,7 +790,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ coterie_xp: after });
     } catch (e) {
       log.err('Adjust coterie XP failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to adjust XP' });
+      reply.status(500).send({ error: 'Failed to adjust XP' });
     }
   });
 
@@ -822,32 +822,32 @@ module.exports = async function (fastify, opts) {
     const toDots = Math.trunc(Number(body.to_dots));
 
     const { allowed } = await access(req, id);
-    if (!allowed) return reply.status(403).json({ error: 'Not allowed' });
+    if (!allowed) return reply.status(403).send({ error: 'Not allowed' });
 
     if (!['domain', 'background', 'merit'].includes(kind)) {
-      return reply.status(400).json({ error: 'target.kind must be domain, background or merit' });
+      return reply.status(400).send({ error: 'target.kind must be domain, background or merit' });
     }
     if (!Number.isFinite(toDots) || toDots < 0 || toDots > rules.MAX_DOTS) {
-      return reply.status(400).json({ error: `to_dots must be between 0 and ${rules.MAX_DOTS}` });
+      return reply.status(400).send({ error: `to_dots must be between 0 and ${rules.MAX_DOTS}` });
     }
 
     const catalog = kind === 'domain' ? null
       : kind === 'background' ? rules.COTERIE_BACKGROUNDS
       : rules.COTERIE_MERITS;
     if (kind === 'domain' && key === 'chasse') {
-      return reply.status(400).json({ error: 'Chasse is determined by the domain and cannot be purchased with XP' });
+      return reply.status(400).send({ error: 'Chasse is determined by the domain and cannot be purchased with XP' });
     }
     if (kind === 'domain' && !rules.DOMAIN_TRAITS.includes(key)) {
-      return reply.status(400).json({ error: 'Unknown domain trait' });
+      return reply.status(400).send({ error: 'Unknown domain trait' });
     }
     if (kind === 'merit' && CHASSE_MERIT_KEYS.has(key)) {
-      return reply.status(400).json({ error: 'Chasse merits are fixed features of the domain and cannot be purchased' });
+      return reply.status(400).send({ error: 'Chasse merits are fixed features of the domain and cannot be purchased' });
     }
     if (catalog && !catalog[key]) {
-      return reply.status(400).json({ error: `Unknown coterie ${kind}: ${key}` });
+      return reply.status(400).send({ error: `Unknown coterie ${kind}: ${key}` });
     }
     if (kind === 'background' && catalog[key].flaw) {
-      return reply.status(400).json({ error: `${catalog[key].name} is a Flaw: it grants dots, it is not bought with XP` });
+      return reply.status(400).send({ error: `${catalog[key].name} is a Flaw: it grants dots, it is not bought with XP` });
     }
 
     const conn = await pool.getConnection();
@@ -855,7 +855,7 @@ module.exports = async function (fastify, opts) {
       await conn.beginTransaction();
 
       const [[row]] = await conn.query('SELECT * FROM coteries WHERE id=? FOR UPDATE', [id]);
-      if (!row) { await conn.rollback(); return reply.status(404).json({ error: 'Not found' }); }
+      if (!row) { await conn.rollback(); return reply.status(404).send({ error: 'Not found' }); }
 
       const traits = {
         chasse: Number(row.chasse) || 0,
@@ -872,7 +872,7 @@ module.exports = async function (fastify, opts) {
 
       if (toDots <= fromDots) {
         await conn.rollback();
-        return reply.status(400).json({
+        return reply.status(400).send({
           error: 'XP buys new dots only. Drop a rating with the builder instead — V5 gives no refund.',
         });
       }
@@ -883,7 +883,7 @@ module.exports = async function (fastify, opts) {
       const fromPersonal = Math.max(0, Math.trunc(Number(body.from_personal) || 0));
       if (fromBank + fromPersonal !== cost) {
         await conn.rollback();
-        return reply.status(400).json({
+        return reply.status(400).send({
           error: `Funding must total the cost of ${cost} XP (got ${fromBank + fromPersonal}).`,
           cost,
         });
@@ -892,7 +892,7 @@ module.exports = async function (fastify, opts) {
       const bank = Number(row.coterie_xp) || 0;
       if (fromBank > bank) {
         await conn.rollback();
-        return reply.status(400).json({
+        return reply.status(400).send({
           error: `The coterie bank holds ${bank} XP, cannot draw ${fromBank}.`, cost,
         });
       }
@@ -906,11 +906,11 @@ module.exports = async function (fastify, opts) {
         );
         if (!ch) {
           await conn.rollback();
-          return reply.status(400).json({ error: 'You need a character sheet to contribute personal XP.' });
+          return reply.status(400).send({ error: 'You need a character sheet to contribute personal XP.' });
         }
         if ((Number(ch.xp) || 0) < fromPersonal) {
           await conn.rollback();
-          return reply.status(400).json({
+          return reply.status(400).send({
             error: `Not enough personal XP (need ${fromPersonal}, have ${ch.xp || 0}).`, cost,
           });
         }
@@ -947,7 +947,7 @@ module.exports = async function (fastify, opts) {
       });
       if (check.errors.length) {
         await conn.rollback();
-        return reply.status(400).json({ error: check.errors[0], errors: check.errors });
+        return reply.status(400).send({ error: check.errors[0], errors: check.errors });
       }
 
       await conn.query(
@@ -1010,7 +1010,7 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       await conn.rollback();
       log.err('Coterie purchase failed', { message: e.message, stack: e.stack });
-      reply.status(500).json({ error: 'Failed to complete the purchase' });
+      reply.status(500).send({ error: 'Failed to complete the purchase' });
     } finally {
       conn.release();
     }
@@ -1026,11 +1026,11 @@ module.exports = async function (fastify, opts) {
     const id = Number(req.params.id);
     const amount = Number((req.body || {}).amount);
     if (!Number.isInteger(amount) || amount < 1) {
-      return reply.status(400).json({ error: 'amount must be a positive whole number of XP' });
+      return reply.status(400).send({ error: 'amount must be a positive whole number of XP' });
     }
 
     const { member } = await access(req, id);
-    if (!member) return reply.status(403).json({ error: 'Only a member can deposit into this coterie' });
+    if (!member) return reply.status(403).send({ error: 'Only a member can deposit into this coterie' });
 
     const conn = await pool.getConnection();
     try {
@@ -1041,14 +1041,14 @@ module.exports = async function (fastify, opts) {
       );
       if (!ch) {
         await conn.rollback();
-        return reply.status(400).json({ error: 'You need a character sheet to deposit XP.' });
+        return reply.status(400).send({ error: 'You need a character sheet to deposit XP.' });
       }
       if ((Number(ch.xp) || 0) < amount) {
         await conn.rollback();
-        return reply.status(400).json({ error: `Not enough personal XP (need ${amount}, have ${ch.xp || 0}).` });
+        return reply.status(400).send({ error: `Not enough personal XP (need ${amount}, have ${ch.xp || 0}).` });
       }
       const [[row]] = await conn.query('SELECT name, coterie_xp FROM coteries WHERE id=? FOR UPDATE', [id]);
-      if (!row) { await conn.rollback(); return reply.status(404).json({ error: 'Not found' }); }
+      if (!row) { await conn.rollback(); return reply.status(404).send({ error: 'Not found' }); }
 
       await conn.query('UPDATE characters SET xp = xp - ? WHERE id=?', [amount, ch.id]);
       await conn.query('UPDATE coteries SET coterie_xp = coterie_xp + ? WHERE id=?', [amount, id]);
@@ -1070,7 +1070,7 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       await conn.rollback();
       log.err('Coterie deposit failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to deposit XP' });
+      reply.status(500).send({ error: 'Failed to deposit XP' });
     } finally {
       conn.release();
     }
@@ -1095,10 +1095,10 @@ module.exports = async function (fastify, opts) {
     const entryId = String((req.body || {}).character_entry_id || '');
 
     const { member } = await access(req, id);
-    if (!member) return reply.status(403).json({ error: 'Only a member can contribute to this coterie' });
+    if (!member) return reply.status(403).send({ error: 'Only a member can contribute to this coterie' });
 
     const key = rules.CONTRIBUTABLE_BACKGROUNDS[entryId];
-    if (!key) return reply.status(400).json({ error: 'That merit has no coterie-shared equivalent.' });
+    if (!key) return reply.status(400).send({ error: 'That merit has no coterie-shared equivalent.' });
     const def = rules.COTERIE_BACKGROUNDS[key];
 
     const conn = await pool.getConnection();
@@ -1111,7 +1111,7 @@ module.exports = async function (fastify, opts) {
       );
       if (!ch) {
         await conn.rollback();
-        return reply.status(400).json({ error: 'You need a character sheet to contribute.' });
+        return reply.status(400).send({ error: 'You need a character sheet to contribute.' });
       }
 
       const sheet = parseSheet(ch.sheet);
@@ -1125,13 +1125,13 @@ module.exports = async function (fastify, opts) {
       }
       if (!arr) {
         await conn.rollback();
-        return reply.status(400).json({ error: `Your character has no ${def.name} to contribute.` });
+        return reply.status(400).send({ error: `Your character has no ${def.name} to contribute.` });
       }
       const [entry] = arr.splice(idx, 1);
       const givenDots = Number(entry.dots) || 0;
 
       const [[row]] = await conn.query('SELECT * FROM coteries WHERE id=? FOR UPDATE', [id]);
-      if (!row) { await conn.rollback(); return reply.status(404).json({ error: 'Not found' }); }
+      if (!row) { await conn.rollback(); return reply.status(404).send({ error: 'Not found' }); }
 
       const backgrounds = safeParse(row.backgrounds_json, []);
       const existing = backgrounds.find((b) => b && b.key === key);
@@ -1139,7 +1139,7 @@ module.exports = async function (fastify, opts) {
       const toDots = fromDots + givenDots;
       if (toDots > def.max) {
         await conn.rollback();
-        return reply.status(400).json({
+        return reply.status(400).send({
           error: `The coterie holds ${def.name} ${fromDots}; adding your ${givenDots} would pass the maximum of ${def.max}.`,
         });
       }
@@ -1163,7 +1163,7 @@ module.exports = async function (fastify, opts) {
       });
       if (check.errors.length) {
         await conn.rollback();
-        return reply.status(400).json({ error: check.errors[0], errors: check.errors });
+        return reply.status(400).send({ error: check.errors[0], errors: check.errors });
       }
 
       await conn.query('UPDATE coteries SET backgrounds_json=?, advancement_dots = advancement_dots + ? WHERE id=?', [
@@ -1198,7 +1198,7 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       await conn.rollback();
       log.err('Coterie contribute failed', { message: e.message, stack: e.stack });
-      reply.status(500).json({ error: 'Failed to contribute the background' });
+      reply.status(500).send({ error: 'Failed to contribute the background' });
     } finally {
       conn.release();
     }
@@ -1279,7 +1279,7 @@ module.exports = async function (fastify, opts) {
     try {
       const charId = Number(req.params.id);
       if (!isAdmin(req.user) && !(await userOwnsCharacter(pool, req.user.id, charId))) {
-        return reply.status(403).json({ error: 'Unauthorized' });
+        return reply.status(403).send({ error: 'Unauthorized' });
       }
       const [coteries] = await pool.query(
         `SELECT c.id, c.name, c.backgrounds_json
@@ -1311,25 +1311,25 @@ module.exports = async function (fastify, opts) {
       reply.send(out);
     } catch (e) {
       log.err('Failed to get coterie retainers', { message: e.message, character_id: req.params.id });
-      reply.status(500).json({ error: 'Failed to fetch coterie retainers' });
+      reply.status(500).send({ error: 'Failed to fetch coterie retainers' });
     }
   });
 
   fastify.post('/api/coteries/:id/retainers', { preHandler: [authRequired] }, async (req, reply) => {
     const id = Number(req.params.id);
     const acc = await access(req, id);
-    if (!acc.allowed) return reply.status(403).json({ error: 'Not a member of this coterie' });
+    if (!acc.allowed) return reply.status(403).send({ error: 'Not a member of this coterie' });
     const input = retainerInput(req.body);
-    if (!input.name) return reply.status(400).json({ error: 'The retainer needs a name.' });
+    if (!input.name) return reply.status(400).send({ error: 'The retainer needs a name.' });
 
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
       const budget = await retainerBudget(conn, id);
-      if (!budget) { await conn.rollback(); return reply.status(404).json({ error: 'Not found' }); }
+      if (!budget) { await conn.rollback(); return reply.status(404).send({ error: 'Not found' }); }
       const err = await checkCoterieRetainer(conn, id, input, budget)
         || await ghoulGuard(conn, id, req, acc.admin, { newDomitorId: input.domitorId });
-      if (err) { await conn.rollback(); return reply.status(400).json({ error: err }); }
+      if (err) { await conn.rollback(); return reply.status(400).send({ error: err }); }
 
       const [r] = await conn.query(
         'INSERT INTO retainers (coterie_id, domitor_character_id, name, tier, sheet, xp) VALUES (?,?,?,?,?,0)',
@@ -1343,7 +1343,7 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       await conn.rollback();
       log.err('Create coterie retainer failed', { message: e.message, coterie_id: id });
-      reply.status(500).json({ error: 'Failed to create retainer' });
+      reply.status(500).send({ error: 'Failed to create retainer' });
     } finally {
       conn.release();
     }
@@ -1355,7 +1355,7 @@ module.exports = async function (fastify, opts) {
     const id = Number(req.params.id);
     const rid = Number(req.params.rid);
     const acc = await access(req, id);
-    if (!acc.allowed) return reply.status(403).json({ error: 'Not a member of this coterie' });
+    if (!acc.allowed) return reply.status(403).send({ error: 'Not a member of this coterie' });
     const input = retainerInput(req.body);
 
     const conn = await pool.getConnection();
@@ -1363,13 +1363,13 @@ module.exports = async function (fastify, opts) {
       await conn.beginTransaction();
       const budget = await retainerBudget(conn, id, rid);
       const [[old]] = await conn.query('SELECT * FROM retainers WHERE id=? AND coterie_id=? FOR UPDATE', [rid, id]);
-      if (!budget || !old) { await conn.rollback(); return reply.status(404).json({ error: 'Retainer not found' }); }
+      if (!budget || !old) { await conn.rollback(); return reply.status(404).send({ error: 'Retainer not found' }); }
       input.name = input.name || old.name;
       const err = await ghoulGuard(conn, id, req, acc.admin, {
         oldDomitorId: old.domitor_character_id, newDomitorId: input.domitorId,
       }) || await checkCoterieRetainer(conn, id, input, budget)
         || bloodCarryOver(parseSheet(old.sheet), input);
-      if (err) { await conn.rollback(); return reply.status(400).json({ error: err }); }
+      if (err) { await conn.rollback(); return reply.status(400).send({ error: err }); }
 
       await conn.query(
         'UPDATE retainers SET name=?, tier=?, sheet=?, domitor_character_id=? WHERE id=?',
@@ -1383,7 +1383,7 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       await conn.rollback();
       log.err('Update coterie retainer failed', { message: e.message, retainer_id: rid });
-      reply.status(500).json({ error: 'Failed to update retainer' });
+      reply.status(500).send({ error: 'Failed to update retainer' });
     } finally {
       conn.release();
     }
@@ -1420,7 +1420,7 @@ module.exports = async function (fastify, opts) {
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
-      const fail = async (status, error) => { await conn.rollback(); return reply.status(status).json({ error }); };
+      const fail = async (status, error) => { await conn.rollback(); return reply.status(status).send({ error }); };
 
       const [[ret]] = await conn.query('SELECT * FROM retainers WHERE id=? AND coterie_id=? FOR UPDATE', [rid, id]);
       if (!ret) return fail(404, 'Retainer not found');
@@ -1458,7 +1458,7 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       await conn.rollback();
       log.err('Give blood to coterie ghoul failed', { message: e.message, retainer_id: rid });
-      reply.status(500).json({ error: 'Failed to give blood' });
+      reply.status(500).send({ error: 'Failed to give blood' });
     } finally {
       conn.release();
     }
@@ -1470,12 +1470,12 @@ module.exports = async function (fastify, opts) {
     const rid = Number(req.params.rid);
     const discipline = String(req.params.discipline || '');
     const acc = await access(req, id);
-    if (!acc.allowed) return reply.status(403).json({ error: 'Not a member of this coterie' });
+    if (!acc.allowed) return reply.status(403).send({ error: 'Not a member of this coterie' });
 
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
-      const fail = async (status, error) => { await conn.rollback(); return reply.status(status).json({ error }); };
+      const fail = async (status, error) => { await conn.rollback(); return reply.status(status).send({ error }); };
 
       const [[ret]] = await conn.query('SELECT * FROM retainers WHERE id=? AND coterie_id=? FOR UPDATE', [rid, id]);
       if (!ret) return fail(404, 'Retainer not found');
@@ -1501,7 +1501,7 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       await conn.rollback();
       log.err('Withdraw blood from coterie ghoul failed', { message: e.message, retainer_id: rid });
-      reply.status(500).json({ error: 'Failed to withdraw blood' });
+      reply.status(500).send({ error: 'Failed to withdraw blood' });
     } finally {
       conn.release();
     }
@@ -1511,18 +1511,18 @@ module.exports = async function (fastify, opts) {
     const id = Number(req.params.id);
     const rid = Number(req.params.rid);
     const acc = await access(req, id);
-    if (!acc.allowed) return reply.status(403).json({ error: 'Not a member of this coterie' });
+    if (!acc.allowed) return reply.status(403).send({ error: 'Not a member of this coterie' });
     try {
       const [[old]] = await pool.query('SELECT name, tier, domitor_character_id FROM retainers WHERE id=? AND coterie_id=?', [rid, id]);
-      if (!old) return reply.status(404).json({ error: 'Retainer not found' });
+      if (!old) return reply.status(404).send({ error: 'Retainer not found' });
       const err = await ghoulGuard(null, id, req, acc.admin, { oldDomitorId: old.domitor_character_id });
-      if (err) return reply.status(403).json({ error: err });
+      if (err) return reply.status(403).send({ error: err });
       await pool.query('DELETE FROM retainers WHERE id=?', [rid]);
       log.adm('Coterie retainer released', { coterie_id: id, retainer_id: rid, name: old.name, tier: old.tier, by_user_id: req.user.id });
       reply.send({ ok: true });
     } catch (e) {
       log.err('Delete coterie retainer failed', { message: e.message, retainer_id: rid });
-      reply.status(500).json({ error: 'Failed to release retainer' });
+      reply.status(500).send({ error: 'Failed to release retainer' });
     }
   });
 
@@ -1533,7 +1533,7 @@ module.exports = async function (fastify, opts) {
     const id = Number(req.params.id);
     const rid = Number(req.body && req.body.retainer_id);
     const acc = await access(req, id);
-    if (!acc.allowed) return reply.status(403).json({ error: 'Not a member of this coterie' });
+    if (!acc.allowed) return reply.status(403).send({ error: 'Not a member of this coterie' });
 
     const conn = await pool.getConnection();
     try {
@@ -1546,11 +1546,11 @@ module.exports = async function (fastify, opts) {
       );
       if (!budget || !ret || (!acc.admin && Number(ret.user_id) !== Number(req.user.id))) {
         await conn.rollback();
-        return reply.status(404).json({ error: 'Retainer not found' });
+        return reply.status(404).send({ error: 'Retainer not found' });
       }
       if (ret.tier > budget.free) {
         await conn.rollback();
-        return reply.status(400).json({
+        return reply.status(400).send({
           error: `The coterie has ${Math.max(0, budget.free)} unassigned Retainers dot(s); ${ret.name} is Tier ${ret.tier}.`,
         });
       }
@@ -1565,7 +1565,7 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       await conn.rollback();
       log.err('Transfer retainer to coterie failed', { message: e.message, retainer_id: rid });
-      reply.status(500).json({ error: 'Failed to transfer retainer' });
+      reply.status(500).send({ error: 'Failed to transfer retainer' });
     } finally {
       conn.release();
     }
@@ -1583,7 +1583,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true });
     } catch (e) {
       log.err('Delete coterie failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to delete coterie' });
+      reply.status(500).send({ error: 'Failed to delete coterie' });
     }
   });
 };

@@ -17,7 +17,7 @@ module.exports = async function (fastify, opts) {
       try { if (rows[0].ntfy_subscribed_npcs) npcPrefs = typeof rows[0].ntfy_subscribed_npcs === 'string' ? JSON.parse(rows[0].ntfy_subscribed_npcs) : rows[0].ntfy_subscribed_npcs; } catch (e) { }
       reply.send({ topic: rows[0].ntfy_topic, subscribed_npcs: npcPrefs, subscribe_errors: !!rows[0].ntfy_subscribe_errors, subscribe_downtimes: !!rows[0].ntfy_subscribe_downtimes });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to fetch Ntfy topic' });
+      reply.status(500).send({ error: 'Failed to fetch Ntfy topic' });
     }
   });
 
@@ -64,7 +64,7 @@ module.exports = async function (fastify, opts) {
 
       reply.send({ success: true, subscribed_npcs: cleanIds, subscribe_errors: !!subscribe_errors, subscribe_downtimes: !!subscribe_downtimes });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to save Ntfy preferences' });
+      reply.status(500).send({ error: 'Failed to save Ntfy preferences' });
     }
   });
 

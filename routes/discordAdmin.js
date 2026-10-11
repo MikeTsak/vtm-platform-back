@@ -108,7 +108,7 @@ module.exports = async function (fastify, opts) {
       });
     } catch (e) {
       log.err('Get discord config failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to fetch settings' });
+      reply.status(500).send({ error: 'Failed to fetch settings' });
     }
   });
 
@@ -129,7 +129,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ success: true, discord_emoji_ids: merged, count: Object.keys(discovered).length });
     } catch (e) {
       log.err('Sync discord emojis failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to sync emojis from Discord' });
+      reply.status(500).send({ error: 'Failed to sync emojis from Discord' });
     }
   });
 
@@ -146,7 +146,7 @@ module.exports = async function (fastify, opts) {
 
       if (discord_schedule_time !== undefined) {
         if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(discord_schedule_time)) {
-          return reply.status(400).json({ error: 'Invalid time format. Use HH:MM (24h).' });
+          return reply.status(400).send({ error: 'Invalid time format. Use HH:MM (24h).' });
         }
         await setSetting('discord_schedule_time', String(discord_schedule_time));
       }
@@ -167,7 +167,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true });
     } catch (e) {
       log.err('Update discord config failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to save settings' });
+      reply.status(500).send({ error: 'Failed to save settings' });
     }
   });
 
@@ -178,7 +178,7 @@ module.exports = async function (fastify, opts) {
       const channelId = await getSetting('discord_channel_id', null);
 
       if (!process.env.DISCORD_BOT_TOKEN) {
-        return reply.status(503).json({ error: 'Discord bot token is not configured on the server.' });
+        return reply.status(503).send({ error: 'Discord bot token is not configured on the server.' });
       }
 
       if (type === 'mail') {
@@ -187,7 +187,7 @@ module.exports = async function (fastify, opts) {
       }
 
       if (type === 'news') {
-        if (!channelId) return reply.status(400).json({ error: 'No channel configured.' });
+        if (!channelId) return reply.status(400).send({ error: 'No channel configured.' });
         await sendDiscordChannelMessage(channelId, "📰 **TEST BROADCAST** 📰\n\nThis is a test of the Erebus News Network emergency broadcast system.");
         return reply.send({ ok: true, message: 'News test broadcast sent.' });
       }
@@ -195,16 +195,16 @@ module.exports = async function (fastify, opts) {
       if (type === 'premonition') {
         const [[adminRow]] = await pool.query('SELECT discord_id FROM users WHERE id=?', [req.user.id]);
         if (!adminRow?.discord_id) {
-          return reply.status(400).json({ error: 'You must link your Discord ID in the Users tab to receive a test premonition.' });
+          return reply.status(400).send({ error: 'You must link your Discord ID in the Users tab to receive a test premonition.' });
         }
         await sendDiscordDM(adminRow.discord_id, "🧠 **TEST VISION**\n\nThe shadows whisper to you: *The system is functioning perfectly.*");
         return reply.send({ ok: true, message: 'Test premonition sent to your DMs.' });
       }
 
-      reply.status(400).json({ error: 'Unknown test type.' });
+      reply.status(400).send({ error: 'Unknown test type.' });
     } catch (e) {
       log.err('Manual Discord test failed', { message: e.message });
-      reply.status(500).json({ error: 'Test failed: ' + e.message });
+      reply.status(500).send({ error: 'Test failed: ' + e.message });
     }
   });
 
@@ -220,11 +220,11 @@ module.exports = async function (fastify, opts) {
       } else if (process.env.DISCORD_BOT_TOKEN) {
         reply.send({ ok: true, message: "Bot token is active and operational via REST." });
       } else {
-        reply.status(400).json({ error: "Bot is not configured." });
+        reply.status(400).send({ error: "Bot is not configured." });
       }
     } catch (e) {
       log.err('Bot restart failed', { error: e.message });
-      reply.status(500).json({ error: 'Failed to restart bot.' });
+      reply.status(500).send({ error: 'Failed to restart bot.' });
     }
   });
 
@@ -233,17 +233,17 @@ module.exports = async function (fastify, opts) {
     try {
       const { user_id, message } = req.body;
       if (!user_id || !message) {
-        return reply.status(400).json({ error: 'User and message are required.' });
+        return reply.status(400).send({ error: 'User and message are required.' });
       }
 
       if (!process.env.DISCORD_BOT_TOKEN) {
-        return reply.status(503).json({ error: 'Discord bot token is not configured on the server.' });
+        return reply.status(503).send({ error: 'Discord bot token is not configured on the server.' });
       }
 
       // Lookup the user's Discord ID
       const [[user]] = await pool.query('SELECT discord_id, display_name FROM users WHERE id=?', [user_id]);
       if (!user || !user.discord_id) {
-        return reply.status(400).json({ error: `${user?.display_name || 'User'} has not linked their Discord ID yet.` });
+        return reply.status(400).send({ error: `${user?.display_name || 'User'} has not linked their Discord ID yet.` });
       }
 
       // Send the DM via unified helper
@@ -254,11 +254,11 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       log.err('Failed to send custom Discord DM', { error: e.message, response: e.response?.data });
       if (e.code === 50007 || e.response?.data?.code === 50007) {
-        return reply.status(400).json({
+        return reply.status(400).send({
           error: 'Cannot send DM: This player has direct messages disabled in their Discord privacy settings or does not share a mutual server with the bot.'
         });
       }
-      reply.status(500).json({ error: e.response?.data?.message || e.message || 'Failed to send DM.' });
+      reply.status(500).send({ error: e.response?.data?.message || e.message || 'Failed to send DM.' });
     }
   });
 };

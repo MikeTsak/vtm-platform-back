@@ -220,7 +220,7 @@ module.exports = async function (fastify, opts) {
     try {
       const fileData = await req.file();
       if (!fileData) {
-        return reply.status(400).json({ error: 'No image file provided.' });
+        return reply.status(400).send({ error: 'No image file provided.' });
       }
       const rawBuffer = await fileData.toBuffer();
 
@@ -263,7 +263,7 @@ module.exports = async function (fastify, opts) {
       // safe to surface — it's what actually lets an admin tell a bad image
       // file apart from a CDN outage apart from a DB/schema problem without
       // needing to go pull server logs for every failed upload.
-      reply.status(500).json({ error: `Error processing or saving avatar: ${err.message}` });
+      reply.status(500).send({ error: `Error processing or saving avatar: ${err.message}` });
     }
   });
 

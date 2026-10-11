@@ -47,7 +47,7 @@ module.exports = async function (fastify, opts) {
         now: new Date().toISOString(),
       });
     } catch (e) {
-      return reply.status(500).json({
+      return reply.status(500).send({
         ok: false,
         db: false,
         error: e.message,
@@ -71,7 +71,7 @@ module.exports = async function (fastify, opts) {
         steps
       });
     } catch (e) {
-      reply.status(500).json({ ok: false, error: e.message });
+      reply.status(500).send({ ok: false, error: e.message });
     }
   });
 

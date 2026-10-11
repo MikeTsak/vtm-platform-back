@@ -14,7 +14,7 @@ const validateRequest = (schema, property = 'body') => (req, res, next) => {
   } catch (error) {
     if (error instanceof z.ZodError) {
       log.warn(`Validation error on ${property}`, { errors: error.errors });
-      return res.status(400).json({
+      return res.status(400).send({
         error: 'Validation Error',
         details: error.errors.map(e => ({
           path: e.path.join('.'),

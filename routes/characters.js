@@ -147,19 +147,19 @@ module.exports = async function (fastify, opts) {
     const { name, clan, sheet } = req.body;
     if (!name || !clan) {
       log.warn('Create character missing fields', { user_id: req.user.id });
-      return reply.status(400).json({ error: 'Name and clan are required' });
+      return reply.status(400).send({ error: 'Name and clan are required' });
     }
 
     if (await isClanDisabled(clan)) {
       log.warn('Create character disabled clan', { user_id: req.user.id, clan });
-      return reply.status(400).json({ error: `${clan} is not currently available for character creation` });
+      return reply.status(400).send({ error: `${clan} is not currently available for character creation` });
     }
 
     try {
       const [exists] = await pool.query('SELECT id FROM characters WHERE user_id=?', [req.user.id]);
       if (exists.length) {
         log.warn('Create character already exists', { user_id: req.user.id });
-        return reply.status(409).json({ error: 'Character already exists' });
+        return reply.status(409).send({ error: 'Character already exists' });
       }
 
       let sheetObj = parseSheet(sheet);
@@ -179,7 +179,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ character: ch });
     } catch (e) {
       log.err('Failed to create character', e);
-      reply.status(500).json({ error: 'Failed to create character' });
+      reply.status(500).send({ error: 'Failed to create character' });
     }
   });
 
@@ -262,7 +262,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ character: ch });
     } catch (e) {
       log.err('Failed to fetch character by ID', e);
-      reply.status(500).json({ error: 'Failed to fetch character' });
+      reply.status(500).send({ error: 'Failed to fetch character' });
     }
   });
 
@@ -273,7 +273,7 @@ module.exports = async function (fastify, opts) {
 
     const [rows] = await pool.query('SELECT id FROM characters WHERE id=?', [charId]);
     if (!rows.length) {
-      return reply.status(404).json({ error: 'No character found' });
+      return reply.status(404).send({ error: 'No character found' });
     }
 
     const fields = [], vals = [];
@@ -282,7 +282,7 @@ module.exports = async function (fastify, opts) {
     if (sheet !== undefined) { fields.push('sheet=?'); vals.push(sheet ? JSON.stringify(sheet) : null); }
 
     if (!fields.length) {
-      return reply.status(400).json({ error: 'Nothing to update' });
+      return reply.status(400).send({ error: 'Nothing to update' });
     }
 
     vals.push(charId);
@@ -351,7 +351,7 @@ module.exports = async function (fastify, opts) {
     try {
       const charId = Number(req.params.id);
       if (!isAdmin(req.user) && !(await userOwnsCharacter(pool, req.user.id, charId))) {
-        return reply.status(403).json({ error: 'Unauthorized' });
+        return reply.status(403).send({ error: 'Unauthorized' });
       }
 
       const [items] = await pool.query(
@@ -361,7 +361,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ items });
     } catch (e) {
       log.err('Failed to fetch inventory', { message: e.message });
-      reply.status(500).json({ error: 'Failed to fetch inventory' });
+      reply.status(500).send({ error: 'Failed to fetch inventory' });
     }
   });
 
@@ -370,14 +370,14 @@ module.exports = async function (fastify, opts) {
     const charId = Number(req.params.id);
     const { name, item_type, description, mechanic_notes, quantity, image, researched } = req.body;
 
-    if (!name) return reply.status(400).json({ error: 'Item name is required' });
+    if (!name) return reply.status(400).send({ error: 'Item name is required' });
     if (item_type && !ITEM_TYPES.includes(item_type)) {
-      return reply.status(400).json({ error: `Invalid item type. Expected one of: ${ITEM_TYPES.join(', ')}` });
+      return reply.status(400).send({ error: `Invalid item type. Expected one of: ${ITEM_TYPES.join(', ')}` });
     }
 
     try {
       if (!isAdmin(req.user) && !(await userOwnsCharacter(pool, req.user.id, charId))) {
-        return reply.status(403).json({ error: 'Unauthorized' });
+        return reply.status(403).send({ error: 'Unauthorized' });
       }
 
       const finalImage = await resolveItemImage(image, charId);
@@ -389,10 +389,10 @@ module.exports = async function (fastify, opts) {
       );
 
       const [[newItem]] = await pool.query('SELECT * FROM inventory_items WHERE id = ?', [r.insertId]);
-      reply.status(201).json({ item: newItem });
+      reply.status(201).send({ item: newItem });
     } catch (e) {
       log.err('Failed to add inventory item', { message: e.message });
-      reply.status(500).json({ error: 'Failed to add item' });
+      reply.status(500).send({ error: 'Failed to add item' });
     }
   });
 
@@ -402,14 +402,14 @@ module.exports = async function (fastify, opts) {
     const itemId = Number(req.params.itemId);
     const { name, item_type, description, mechanic_notes, quantity, image, researched } = req.body;
 
-    if (!name) return reply.status(400).json({ error: 'Item name is required' });
+    if (!name) return reply.status(400).send({ error: 'Item name is required' });
     if (item_type && !ITEM_TYPES.includes(item_type)) {
-      return reply.status(400).json({ error: `Invalid item type. Expected one of: ${ITEM_TYPES.join(', ')}` });
+      return reply.status(400).send({ error: `Invalid item type. Expected one of: ${ITEM_TYPES.join(', ')}` });
     }
 
     try {
       if (!isAdmin(req.user) && !(await userOwnsCharacter(pool, req.user.id, charId))) {
-        return reply.status(403).json({ error: 'Unauthorized' });
+        return reply.status(403).send({ error: 'Unauthorized' });
       }
 
       // An absent `image` key means 'leave the picture alone'; an explicit
@@ -418,7 +418,7 @@ module.exports = async function (fastify, opts) {
       let finalImage;
       if (!Object.prototype.hasOwnProperty.call(req.body || {}, 'image')) {
         const [[current]] = await pool.query('SELECT image FROM inventory_items WHERE id=? AND character_id=?', [itemId, charId]);
-        if (!current) return reply.status(404).json({ error: 'Item not found' });
+        if (!current) return reply.status(404).send({ error: 'Item not found' });
         finalImage = current.image;
       } else {
         finalImage = await resolveItemImage(image, charId);
@@ -433,13 +433,13 @@ module.exports = async function (fastify, opts) {
 
       // affectedRows 0 means the id/character pair matched nothing — a wrong
       // id used to answer 200, so the client believed a lost edit had saved.
-      if (!result.affectedRows) return reply.status(404).json({ error: 'Item not found' });
+      if (!result.affectedRows) return reply.status(404).send({ error: 'Item not found' });
 
       const [[updated]] = await pool.query('SELECT * FROM inventory_items WHERE id = ?', [itemId]);
       reply.send({ success: true, item: updated });
     } catch (e) {
       log.err('Failed to update inventory item', { message: e.message });
-      reply.status(500).json({ error: 'Failed to update item' });
+      reply.status(500).send({ error: 'Failed to update item' });
     }
   });
 
@@ -450,15 +450,15 @@ module.exports = async function (fastify, opts) {
 
     try {
       if (!isAdmin(req.user) && !(await userOwnsCharacter(pool, req.user.id, charId))) {
-        return reply.status(403).json({ error: 'Unauthorized' });
+        return reply.status(403).send({ error: 'Unauthorized' });
       }
 
       const [result] = await pool.query('DELETE FROM inventory_items WHERE id=? AND character_id=?', [itemId, charId]);
-      if (!result.affectedRows) return reply.status(404).json({ error: 'Item not found' });
+      if (!result.affectedRows) return reply.status(404).send({ error: 'Item not found' });
       reply.send({ success: true });
     } catch (e) {
       log.err('Failed to delete inventory item', { message: e.message });
-      reply.status(500).json({ error: 'Failed to delete item' });
+      reply.status(500).send({ error: 'Failed to delete item' });
     }
   });
 
@@ -470,7 +470,7 @@ module.exports = async function (fastify, opts) {
     try {
       const charId = Number(req.params.id);
       if (!isAdmin(req.user) && !(await userOwnsCharacter(pool, req.user.id, charId))) {
-        return reply.status(403).json({ error: 'Unauthorized' });
+        return reply.status(403).send({ error: 'Unauthorized' });
       }
 
       const [rows] = await pool.query('SELECT id, character_id, name, tier, sheet, xp, created_at, is_favorite FROM retainers WHERE character_id=?', [charId]);
@@ -486,7 +486,7 @@ module.exports = async function (fastify, opts) {
           .send(payload);
     } catch (e) {
       log.err('Failed to get retainers', { message: e.message, character_id: req.params.id });
-      reply.status(500).json({ error: 'Failed to fetch retainers' });
+      reply.status(500).send({ error: 'Failed to fetch retainers' });
     }
   });
   
@@ -532,20 +532,20 @@ module.exports = async function (fastify, opts) {
     try {
       const charId = Number(req.params.id);
       if (!isAdmin(req.user) && !(await userOwnsCharacter(pool, req.user.id, charId))) {
-        return reply.status(403).json({ error: 'Unauthorized' });
+        return reply.status(403).send({ error: 'Unauthorized' });
       }
 
       const { name, sheet } = req.body;
       const admin = isAdmin(req.user);
       const tier = Number(req.body.tier || 1);
-      if (!Number.isInteger(tier) || tier < 1 || tier > 4) return reply.status(400).json({ error: 'Tier must be 1 to 4.' });
+      if (!Number.isInteger(tier) || tier < 1 || tier > 4) return reply.status(400).send({ error: 'Tier must be 1 to 4.' });
       // A retainer's own XP is the Storyteller's to set.
       const xp = admin ? Number(req.body.xp) || 0 : 0;
 
       const isGhoul = sheet?.isGhoul === true;
       const validationError = validateRetainerSheet(tier, sheet, isGhoul);
       if (validationError) {
-        return reply.status(400).json({ error: validationError });
+        return reply.status(400).send({ error: validationError });
       }
 
       const id = await withRetainerCharge(charId, admin ? 0 : tier * RETAINER_XP_PER_TIER, `Recruit Tier ${tier} Retainer: ${name}`, async (conn) => {
@@ -560,9 +560,9 @@ module.exports = async function (fastify, opts) {
       });
       reply.send({ id, character_id: charId, name, tier, sheet, xp });
     } catch (e) {
-      if (e.status) return reply.status(e.status).json({ error: e.message });
+      if (e.status) return reply.status(e.status).send({ error: e.message });
       log.err('Failed to create retainer', { message: e.message, character_id: req.params.id });
-      reply.status(500).json({ error: 'Failed to create retainer' });
+      reply.status(500).send({ error: 'Failed to create retainer' });
     }
   });
 
@@ -574,13 +574,13 @@ module.exports = async function (fastify, opts) {
         'SELECT r.id FROM retainers r JOIN characters c ON r.character_id = c.id WHERE r.id = ? AND c.user_id = ?',
         [req.params.retainerId, req.user.id]
       );
-      if (rows.length === 0) return reply.status(403).json({ error: 'Not authorized or retainer not found' });
+      if (rows.length === 0) return reply.status(403).send({ error: 'Not authorized or retainer not found' });
       
       await pool.query('UPDATE retainers SET is_favorite = ? WHERE id = ?', [is_favorite ? 1 : 0, req.params.retainerId]);
       reply.send({ success: true, is_favorite: !!is_favorite });
     } catch (e) {
       log.err('Failed to update favorite status', { message: e.message, retainerId: req.params.retainerId });
-      reply.status(500).json({ error: 'Failed to update favorite status' });
+      reply.status(500).send({ error: 'Failed to update favorite status' });
     }
   });
 
@@ -589,26 +589,26 @@ module.exports = async function (fastify, opts) {
     try {
       const { name, sheet } = req.body;
       const tier = Number(req.body.tier);
-      if (!Number.isInteger(tier) || tier < 1 || tier > 4) return reply.status(400).json({ error: 'Tier must be 1 to 4.' });
+      if (!Number.isInteger(tier) || tier < 1 || tier > 4) return reply.status(400).send({ error: 'Tier must be 1 to 4.' });
 
       // Check ownership
       const [rows] = await pool.query(
         'SELECT r.* FROM retainers r JOIN characters c ON r.character_id = c.id WHERE r.id = ? AND c.user_id = ?',
         [req.params.retainerId, req.user.id]
       );
-      if (rows.length === 0) return reply.status(403).json({ error: 'Not authorized or retainer not found' });
+      if (rows.length === 0) return reply.status(403).send({ error: 'Not authorized or retainer not found' });
       const oldRetainer = rows[0];
 
       // Ensure tier is only going up or staying the same
       if (tier < oldRetainer.tier) {
-        return reply.status(400).json({ error: 'Cannot downgrade tier via upgrade route.' });
+        return reply.status(400).send({ error: 'Cannot downgrade tier via upgrade route.' });
       }
 
       // Strict V5 Validation
       const isGhoul = sheet?.isGhoul === true;
       const validationError = validateRetainerSheet(Number(tier), sheet, isGhoul);
       if (validationError) {
-        return reply.status(400).json({ error: validationError });
+        return reply.status(400).send({ error: validationError });
       }
 
       const priceNow = async (conn) => {
@@ -630,9 +630,9 @@ module.exports = async function (fastify, opts) {
          reply.send({ success: true });
       }
     } catch (e) {
-      if (e.status) return reply.status(e.status).json({ error: e.message });
+      if (e.status) return reply.status(e.status).send({ error: e.message });
       log.err('Failed to upgrade retainer', { message: e.message, retainer_id: req.params.retainerId });
-      reply.status(500).json({ error: 'Failed to upgrade retainer' });
+      reply.status(500).send({ error: 'Failed to upgrade retainer' });
     }
   });
 
@@ -645,7 +645,7 @@ module.exports = async function (fastify, opts) {
       const isGhoul = sheet?.isGhoul === true;
       const validationError = validateRetainerSheet(Number(tier), sheet, isGhoul);
       if (validationError) {
-        return reply.status(400).json({ error: validationError });
+        return reply.status(400).send({ error: validationError });
       }
 
       await pool.query(
@@ -663,7 +663,7 @@ module.exports = async function (fastify, opts) {
       }
     } catch (e) {
       log.err('Failed to update retainer', { message: e.message, retainer_id: req.params.retainerId });
-      reply.status(500).json({ error: 'Failed to update retainer' });
+      reply.status(500).send({ error: 'Failed to update retainer' });
     }
   });
 
@@ -673,7 +673,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ success: true });
     } catch (e) {
       log.err('Failed to delete retainer', { message: e.message, retainer_id: req.params.retainerId });
-      reply.status(500).json({ error: 'Failed to delete retainer' });
+      reply.status(500).send({ error: 'Failed to delete retainer' });
     }
   });
 
@@ -692,7 +692,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ character: rows[0] });
     } catch (e) {
       log.err('Admin reset character failed', { message: e.message, id: req.params.id });
-      reply.status(500).json({ error: 'Failed to reset character' });
+      reply.status(500).send({ error: 'Failed to reset character' });
     }
   });
 
@@ -701,25 +701,25 @@ module.exports = async function (fastify, opts) {
     const { name, clan, sheet } = req.body;
     if (!name || !clan) {
       log.warn('Rebuild character missing fields', { user_id: req.user.id });
-      return reply.status(400).json({ error: 'Name and clan are required' });
+      return reply.status(400).send({ error: 'Name and clan are required' });
     }
 
     if (await isClanDisabled(clan)) {
       log.warn('Rebuild character disabled clan', { user_id: req.user.id, clan });
-      return reply.status(400).json({ error: `${clan} is not currently available for character creation` });
+      return reply.status(400).send({ error: `${clan} is not currently available for character creation` });
     }
 
     try {
       // Find the user's existing character
       const [rows] = await pool.query('SELECT id, sheet FROM characters WHERE user_id=?', [req.user.id]);
       if (!rows.length) {
-        return reply.status(404).json({ error: 'No character found to rebuild' });
+        return reply.status(404).send({ error: 'No character found to rebuild' });
       }
       // A rebuild wipes XP history and starts over, so only when a
       // Storyteller has granted a re-roll (Admin > Characters > Allow Re-Roll).
       if (parseSheet(rows[0].sheet)?.allow_reset !== true) {
         log.warn('Rebuild refused: no re-roll granted', { user_id: req.user.id });
-        return reply.status(403).json({ error: 'Your Storyteller has not allowed a re-roll for this character.' });
+        return reply.status(403).send({ error: 'Your Storyteller has not allowed a re-roll for this character.' });
       }
 
       const charId = rows[0].id;
@@ -757,7 +757,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ character: ch });
     } catch (e) {
       log.err('Failed to rebuild character', e);
-      reply.status(500).json({ error: 'Failed to rebuild character' });
+      reply.status(500).send({ error: 'Failed to rebuild character' });
     }
   });
 

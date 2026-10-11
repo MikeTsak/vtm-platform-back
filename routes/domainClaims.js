@@ -6,6 +6,7 @@
 const { isDomainManager, requireDomainManager, listDomainManagers } = require('../services/domainManagers');
 const { transitionResidentsOnClaim } = require('./domainResidents');
 
+const guards = require('../services/guards');
 // Falls back to this whenever a division is first given an owner without an
 // explicit colour (a bare petition approval, or a Steward assign with the
 // colour field left untouched) -- a plain, readable blue rather than the old
@@ -48,7 +49,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ claims });
     } catch (err) {
       console.error('[Error] GET /api/domain-claims:', err);
-      reply.status(500).json({ error: 'Database error fetching claims', details: err.message });
+      reply.status(500).send({ error: 'Database error fetching claims', details: err.message });
     }
   });
 
@@ -57,10 +58,10 @@ module.exports = async function (fastify, opts) {
   const { division, color } = req.body;
     const hex = (color || '').trim();
     if (!Number.isInteger(division)) {
-      return reply.status(400).json({ error: 'division must be an integer' });
+      return reply.status(400).send({ error: 'division must be an integer' });
     }
     if (!/^#([0-9a-fA-F]{6})$/.test(hex)) {
-      return reply.status(400).json({ error: 'color must be a 6-digit hex like #ff0066' });
+      return reply.status(400).send({ error: 'color must be a 6-digit hex like #ff0066' });
     }
 
     // find caller’s character (optional owner_character_id)
@@ -71,7 +72,7 @@ module.exports = async function (fastify, opts) {
     // is it already claimed?
     const [exists] = await pool.query('SELECT division FROM domain_claims WHERE division=?', [division]);
     if (exists.length) {
-      return reply.status(409).json({ error: 'This division is already claimed.' });
+      return reply.status(409).send({ error: 'This division is already claimed.' });
     }
 
     await pool.query(
@@ -91,11 +92,11 @@ module.exports = async function (fastify, opts) {
    *  so only a Steward/admin can recolour those. */
   fastify.patch('/api/domain-claims/:division/color', { preHandler: [authRequired] }, async (req, reply) => {
     const division = Number(req.params.division);
-    if (!Number.isInteger(division)) return reply.status(400).json({ error: 'division must be an integer' });
+    if (!Number.isInteger(division)) return reply.status(400).send({ error: 'division must be an integer' });
 
     const hex = (req.body?.color || '').trim();
     if (!/^#([0-9a-fA-F]{6})$/.test(hex)) {
-      return reply.status(400).json({ error: 'color must be a 6-digit hex like #ff0066' });
+      return reply.status(400).send({ error: 'color must be a 6-digit hex like #ff0066' });
     }
 
     try {
@@ -104,10 +105,10 @@ module.exports = async function (fastify, opts) {
         [division]
       );
       if (!claim || (!claim.owner_character_id && !claim.owner_npc_id)) {
-        return reply.status(409).json({ error: 'Only a claimed domain has a colour to change' });
+        return reply.status(409).send({ error: 'Only a claimed domain has a colour to change' });
       }
       if (!(await resolveDomainManager(req, division))) {
-        return reply.status(403).json({ error: 'Only the domain\'s owner or a Domain Steward can change its colour' });
+        return reply.status(403).send({ error: 'Only the domain\'s owner or a Domain Steward can change its colour' });
       }
 
       await pool.query('UPDATE domain_claims SET color=? WHERE division=?', [hex, division]);
@@ -116,7 +117,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ claim: updated[0] });
     } catch (err) {
       log.err('PATCH /api/domain-claims/:division/color failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error updating colour' });
+      reply.status(500).send({ error: 'Database error updating colour' });
     }
   });
 
@@ -130,20 +131,20 @@ module.exports = async function (fastify, opts) {
 
     if (typeof owner_name === 'string' && owner_name.trim()) { fields.push('owner_name=?'); vals.push(owner_name.trim()); }
     if (typeof color === 'string') {
-      if (!/^#([0-9a-fA-F]{6})$/.test(color)) return reply.status(400).json({ error: 'color must be #RRGGBB' });
+      if (!/^#([0-9a-fA-F]{6})$/.test(color)) return reply.status(400).send({ error: 'color must be #RRGGBB' });
       fields.push('color=?'); vals.push(color);
     }
     if (owner_character_id === null) {
       fields.push('owner_character_id=NULL');
     } else if (owner_character_id !== undefined) {
-      if (!Number.isInteger(owner_character_id)) return reply.status(400).json({ error: 'owner_character_id must be integer or null' });
+      if (!Number.isInteger(owner_character_id)) return reply.status(400).send({ error: 'owner_character_id must be integer or null' });
       fields.push('owner_character_id=?'); vals.push(owner_character_id);
       fields.push('owner_npc_id=NULL'); // mutual exclusivity
     }
     if (owner_npc_id === null) {
       fields.push('owner_npc_id=NULL');
     } else if (owner_npc_id !== undefined) {
-      if (!Number.isInteger(owner_npc_id)) return reply.status(400).json({ error: 'owner_npc_id must be integer or null' });
+      if (!Number.isInteger(owner_npc_id)) return reply.status(400).send({ error: 'owner_npc_id must be integer or null' });
       fields.push('owner_npc_id=?'); vals.push(owner_npc_id);
       fields.push('owner_character_id=NULL'); // mutual exclusivity
     }
@@ -154,7 +155,7 @@ module.exports = async function (fastify, opts) {
       fields.push('assigned_by=?'); vals.push(req.user?.id || null);
     }
 
-    if (!fields.length) return reply.status(400).json({ error: 'Nothing to update' });
+    if (!fields.length) return reply.status(400).send({ error: 'Nothing to update' });
 
     // 1) Try update existing
     vals.push(division);
@@ -198,23 +199,23 @@ module.exports = async function (fastify, opts) {
       reply.send({
         managers,
         me: {
-          isAdmin: req.user.role === 'admin',
+          isAdmin: guards.isAdmin(req.user),
           canManageDomains: await isDomainManager(req.user.id, req.user.role),
         },
       });
     } catch (err) {
       log.err('GET /api/domain-claims/managers failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error fetching Domain Stewards' });
+      reply.status(500).send({ error: 'Database error fetching Domain Stewards' });
     }
   });
 
   /** Admin only: add a Domain Steward. */
   fastify.post('/api/domain-claims/managers', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const userId = Number(req.body?.user_id);
-    if (!Number.isInteger(userId)) return reply.status(400).json({ error: 'user_id (int) is required' });
+    if (!Number.isInteger(userId)) return reply.status(400).send({ error: 'user_id (int) is required' });
     try {
       const [[u]] = await pool.query('SELECT id FROM users WHERE id=?', [userId]);
-      if (!u) return reply.status(404).json({ error: 'User not found' });
+      if (!u) return reply.status(404).send({ error: 'User not found' });
       await pool.query(
         'INSERT IGNORE INTO domain_manager_grants (user_id, granted_by) VALUES (?,?)',
         [userId, req.user.id],
@@ -223,21 +224,21 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true, managers: await listDomainManagers() });
     } catch (err) {
       log.err('POST /api/domain-claims/managers failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error adding Domain Steward' });
+      reply.status(500).send({ error: 'Database error adding Domain Steward' });
     }
   });
 
   /** Admin only: remove a Domain Steward. */
   fastify.delete('/api/domain-claims/managers/:userId', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const userId = Number(req.params.userId);
-    if (!Number.isInteger(userId)) return reply.status(400).json({ error: 'bad user id' });
+    if (!Number.isInteger(userId)) return reply.status(400).send({ error: 'bad user id' });
     try {
       await pool.query('DELETE FROM domain_manager_grants WHERE user_id=?', [userId]);
       log.adm('Domain Steward removed', { user_id: userId, by: req.user.id });
       reply.send({ ok: true, managers: await listDomainManagers() });
     } catch (err) {
       log.err('DELETE /api/domain-claims/managers/:userId failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error removing Domain Steward' });
+      reply.status(500).send({ error: 'Database error removing Domain Steward' });
     }
   });
 
@@ -259,7 +260,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ requests: rows });
     } catch (err) {
       log.err('GET /api/domain-claims/requests failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error fetching requests' });
+      reply.status(500).send({ error: 'Database error fetching requests' });
     }
   });
 
@@ -267,25 +268,25 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/domain-claims/:division/request', { preHandler: [authRequired] }, async (req, reply) => {
     const division = Number(req.params.division);
     if (!Number.isInteger(division)) {
-      return reply.status(400).json({ error: 'division must be an integer' });
+      return reply.status(400).send({ error: 'division must be an integer' });
     }
 
   const { message, color } = req.body || {};
     let hex = null;
     if (typeof color === 'string' && color.trim()) {
       if (!/^#([0-9a-fA-F]{6})$/.test(color.trim())) {
-        return reply.status(400).json({ error: 'color must be a 6-digit hex like #ff0066' });
+        return reply.status(400).send({ error: 'color must be a 6-digit hex like #ff0066' });
       }
       hex = color.trim();
     }
     if (typeof message === 'string' && message.length > 500) {
-      return reply.status(400).json({ error: 'message must be 500 characters or fewer' });
+      return reply.status(400).send({ error: 'message must be 500 characters or fewer' });
     }
 
     try {
       const [chars] = await pool.query('SELECT id, name FROM characters WHERE user_id=?', [req.user.id]);
       const myChar = chars[0];
-      if (!myChar) return reply.status(400).json({ error: 'Create a character first' });
+      if (!myChar) return reply.status(400).send({ error: 'Create a character first' });
 
       const [[existingClaim]] = await pool.query(
         'SELECT owner_character_id, owner_npc_id, owner_name, is_abaton FROM domain_claims WHERE division=?',
@@ -295,14 +296,14 @@ module.exports = async function (fastify, opts) {
       // owner with no linked characters/npcs row) — that still counts as
       // claimed, same as owner_character_id/owner_npc_id/is_abaton.
       if (existingClaim && (existingClaim.owner_character_id || existingClaim.owner_npc_id || existingClaim.is_abaton || (existingClaim.owner_name && existingClaim.owner_name.trim()))) {
-        return reply.status(409).json({ error: 'This division is already claimed.' });
+        return reply.status(409).send({ error: 'This division is already claimed.' });
       }
 
       const [[dupe]] = await pool.query(
         "SELECT id FROM domain_claim_requests WHERE division=? AND user_id=? AND status='pending'",
         [division, req.user.id]
       );
-      if (dupe) return reply.status(409).json({ error: 'You already have a pending request for this division.' });
+      if (dupe) return reply.status(409).send({ error: 'You already have a pending request for this division.' });
 
       const [ins] = await pool.query(
         'INSERT INTO domain_claim_requests (division, user_id, character_id, message, color) VALUES (?,?,?,?,?)',
@@ -314,7 +315,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ request: row[0] });
     } catch (err) {
       log.err('POST /api/domain-claims/:division/request failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error creating request' });
+      reply.status(500).send({ error: 'Database error creating request' });
     }
   });
 
@@ -322,13 +323,13 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/domain-claims/requests/:requestId/:action', { preHandler: [authRequired, requireDomainManager] }, async (req, reply) => {
   const { requestId, action } = req.params;
     if (action !== 'approve' && action !== 'reject') {
-      return reply.status(400).json({ error: 'action must be approve or reject' });
+      return reply.status(400).send({ error: 'action must be approve or reject' });
     }
 
     try {
       const [[request]] = await pool.query('SELECT * FROM domain_claim_requests WHERE id=?', [requestId]);
-      if (!request) return reply.status(404).json({ error: 'Request not found' });
-      if (request.status !== 'pending') return reply.status(409).json({ error: `Request already ${request.status}` });
+      if (!request) return reply.status(404).send({ error: 'Request not found' });
+      if (request.status !== 'pending') return reply.status(409).send({ error: `Request already ${request.status}` });
 
       if (action === 'reject') {
         await pool.query(
@@ -355,7 +356,7 @@ module.exports = async function (fastify, opts) {
           "UPDATE domain_claim_requests SET status='rejected', resolved_at=NOW(), resolved_by=? WHERE id=?",
           [req.user.id, requestId]
         );
-        return reply.status(409).json({ error: 'This division was claimed before the request could be approved.' });
+        return reply.status(409).send({ error: 'This division was claimed before the request could be approved.' });
       }
 
       const [chars] = await pool.query('SELECT name FROM characters WHERE id=?', [request.character_id]);
@@ -418,7 +419,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ success: true, claim: row[0] });
     } catch (err) {
       log.err('POST /api/domain-claims/requests/:requestId/:action failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error resolving request' });
+      reply.status(500).send({ error: 'Database error resolving request' });
     }
   });
 
@@ -552,9 +553,9 @@ module.exports = async function (fastify, opts) {
     const division = Number(req.params.division);
     try {
       const [[row]] = await pool.query('SELECT * FROM domain_claims WHERE division=?', [division]);
-      if (!row) return reply.status(404).json({ error: 'Division has no claim to vacate' });
+      if (!row) return reply.status(404).send({ error: 'Division has no claim to vacate' });
       if (!row.owner_character_id && !row.owner_npc_id && !row.is_abaton && !(row.owner_name && row.owner_name.trim())) {
-        return reply.status(409).json({ error: 'Division is already unclaimed' });
+        return reply.status(409).send({ error: 'Division is already unclaimed' });
       }
 
       await pool.query(
@@ -570,7 +571,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ claim: updated[0] });
     } catch (err) {
       log.err('POST /api/admin/domain-claims/:division/vacate failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error vacating division' });
+      reply.status(500).send({ error: 'Database error vacating division' });
     }
   });
 
@@ -585,18 +586,18 @@ module.exports = async function (fastify, opts) {
       reply.send({ problems });
     } catch (err) {
       log.err('GET /api/domain-claims/:division/problems failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error fetching incident log' });
+      reply.status(500).send({ error: 'Database error fetching incident log' });
     }
   });
 
   /** Court/admin: set (or clear, via null) a division's Masquerade safety rating */
   fastify.patch('/api/domain-claims/:division/safety', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const division = Number(req.params.division);
-    if (!Number.isInteger(division)) return reply.status(400).json({ error: 'division must be an integer' });
+    if (!Number.isInteger(division)) return reply.status(400).send({ error: 'division must be an integer' });
 
   const { safety_rating } = req.body || {};
     if (safety_rating !== null && (!Number.isInteger(safety_rating) || safety_rating < 0 || safety_rating > 10)) {
-      return reply.status(400).json({ error: 'safety_rating must be an integer 0-10, or null for Unknown' });
+      return reply.status(400).send({ error: 'safety_rating must be an integer 0-10, or null for Unknown' });
     }
 
     try {
@@ -619,7 +620,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ claim: row[0] });
     } catch (err) {
       log.err('PATCH /api/domain-claims/:division/safety failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error updating safety rating' });
+      reply.status(500).send({ error: 'Database error updating safety rating' });
     }
   });
 
@@ -701,7 +702,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ guests });
     } catch (err) {
       log.err('GET /api/domain-claims/guests failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error fetching guests' });
+      reply.status(500).send({ error: 'Database error fetching guests' });
     }
   });
 
@@ -719,7 +720,7 @@ module.exports = async function (fastify, opts) {
   /** Anyone logged in can see who's being hosted in a division. */
   fastify.get('/api/domain-claims/:division/guests', { preHandler: [authRequired] }, async (req, reply) => {
     const division = Number(req.params.division);
-    if (!Number.isInteger(division)) return reply.status(400).json({ error: 'division must be an integer' });
+    if (!Number.isInteger(division)) return reply.status(400).send({ error: 'division must be an integer' });
     try {
       const [rows] = await pool.query(`
         SELECT g.id, g.division, g.note, g.created_at, g.character_id, g.npc_id,
@@ -749,24 +750,24 @@ module.exports = async function (fastify, opts) {
       reply.send({ guests, me: { canManage } });
     } catch (err) {
       log.err('GET /api/domain-claims/:division/guests failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error fetching guests' });
+      reply.status(500).send({ error: 'Database error fetching guests' });
     }
   });
 
   /** Domain owner or Steward/admin: declare a character or NPC as hosted here. */
   fastify.post('/api/domain-claims/:division/guests', { preHandler: [authRequired] }, async (req, reply) => {
     const division = Number(req.params.division);
-    if (!Number.isInteger(division)) return reply.status(400).json({ error: 'division must be an integer' });
+    if (!Number.isInteger(division)) return reply.status(400).send({ error: 'division must be an integer' });
 
     const { character_id, npc_id, note } = req.body || {};
     if (character_id != null && npc_id != null) {
-      return reply.status(400).json({ error: 'Provide character_id OR npc_id, not both' });
+      return reply.status(400).send({ error: 'Provide character_id OR npc_id, not both' });
     }
     if (character_id == null && npc_id == null) {
-      return reply.status(400).json({ error: 'Provide character_id or npc_id' });
+      return reply.status(400).send({ error: 'Provide character_id or npc_id' });
     }
     if (typeof note === 'string' && note.length > 255) {
-      return reply.status(400).json({ error: 'note must be 255 characters or fewer' });
+      return reply.status(400).send({ error: 'note must be 255 characters or fewer' });
     }
 
     try {
@@ -775,24 +776,24 @@ module.exports = async function (fastify, opts) {
         [division]
       );
       if (!claim || (!claim.owner_character_id && !claim.owner_npc_id && !claim.is_abaton)) {
-        return reply.status(409).json({ error: 'Only a claimed domain can host guests' });
+        return reply.status(409).send({ error: 'Only a claimed domain can host guests' });
       }
       if (!(await resolveDomainManager(req, division))) {
-        return reply.status(403).json({ error: 'Only the domain\'s owner or a Domain Steward can add guests' });
+        return reply.status(403).send({ error: 'Only the domain\'s owner or a Domain Steward can add guests' });
       }
 
       let charId = null, npcId = null;
       if (character_id != null) {
         const cid = Number(character_id);
-        if (!Number.isInteger(cid)) return reply.status(400).json({ error: 'character_id must be an integer' });
+        if (!Number.isInteger(cid)) return reply.status(400).send({ error: 'character_id must be an integer' });
         const [[ch]] = await pool.query('SELECT id FROM characters WHERE id=?', [cid]);
-        if (!ch) return reply.status(404).json({ error: 'Character not found' });
+        if (!ch) return reply.status(404).send({ error: 'Character not found' });
         charId = cid;
       } else {
         const nid = Number(npc_id);
-        if (!Number.isInteger(nid)) return reply.status(400).json({ error: 'npc_id must be an integer' });
+        if (!Number.isInteger(nid)) return reply.status(400).send({ error: 'npc_id must be an integer' });
         const [[npc]] = await pool.query('SELECT id FROM npcs WHERE id=?', [nid]);
-        if (!npc) return reply.status(404).json({ error: 'NPC not found' });
+        if (!npc) return reply.status(404).send({ error: 'NPC not found' });
         npcId = nid;
       }
 
@@ -807,7 +808,7 @@ module.exports = async function (fastify, opts) {
         [charId != null ? charId : npcId]
       );
       if (ownsDivision) {
-        return reply.status(409).json({ error: (charId != null ? 'This character' : 'This NPC') + ' already owns a domain and cannot be added as a guest' });
+        return reply.status(409).send({ error: (charId != null ? 'This character' : 'This NPC') + ' already owns a domain and cannot be added as a guest' });
       }
 
       // Check if already a guest in ANY domain
@@ -816,7 +817,7 @@ module.exports = async function (fastify, opts) {
         [charId, npcId]
       );
       if (dupeGuest) {
-        return reply.status(409).json({ error: (charId != null ? 'This character' : 'This NPC') + ` is already a guest in domain #${dupeGuest.division}` });
+        return reply.status(409).send({ error: (charId != null ? 'This character' : 'This NPC') + ` is already a guest in domain #${dupeGuest.division}` });
       }
 
       // Check if already a resident in ANY domain
@@ -825,7 +826,7 @@ module.exports = async function (fastify, opts) {
         [charId, npcId]
       );
       if (dupeResident) {
-        return reply.status(409).json({ error: (charId != null ? 'This character' : 'This NPC') + ` is already a resident in domain #${dupeResident.division}` });
+        return reply.status(409).send({ error: (charId != null ? 'This character' : 'This NPC') + ` is already a resident in domain #${dupeResident.division}` });
       }
 
       await pool.query(
@@ -836,7 +837,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true });
     } catch (err) {
       log.err('POST /api/domain-claims/:division/guests failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error adding guest' });
+      reply.status(500).send({ error: 'Database error adding guest' });
     }
   });
 
@@ -845,7 +846,7 @@ module.exports = async function (fastify, opts) {
     const division = Number(req.params.division);
     const guestId = Number(req.params.guestId);
     if (!Number.isInteger(division) || !Number.isInteger(guestId)) {
-      return reply.status(400).json({ error: 'bad parameters' });
+      return reply.status(400).send({ error: 'bad parameters' });
     }
     try {
       const [[guest]] = await pool.query(
@@ -854,11 +855,11 @@ module.exports = async function (fastify, opts) {
          WHERE g.id=? AND g.division=?`,
         [guestId, division]
       );
-      if (!guest) return reply.status(404).json({ error: 'Guest entry not found' });
+      if (!guest) return reply.status(404).send({ error: 'Guest entry not found' });
 
       const isSelf = guest.character_user_id != null && guest.character_user_id === req.user.id;
       if (!isSelf && !(await resolveDomainManager(req, division))) {
-        return reply.status(403).json({ error: 'Only the domain\'s owner, a Domain Steward, or the guest themself can remove this' });
+        return reply.status(403).send({ error: 'Only the domain\'s owner, a Domain Steward, or the guest themself can remove this' });
       }
 
       await pool.query('DELETE FROM domain_guests WHERE id=?', [guestId]);
@@ -866,7 +867,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true });
     } catch (err) {
       log.err('DELETE /api/domain-claims/:division/guests/:guestId failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error removing guest' });
+      reply.status(500).send({ error: 'Database error removing guest' });
     }
   });
 
@@ -888,7 +889,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ entries });
     } catch (err) {
       log.err('GET /api/domain-claims/:division/codex failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error fetching codex' });
+      reply.status(500).send({ error: 'Database error fetching codex' });
     }
   });
 
@@ -896,9 +897,9 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/domain-claims/:division/codex', { preHandler: [authRequired] }, async (req, reply) => {
     const division = Number(req.params.division);
   const { text } = req.body || {};
-    if (!Number.isInteger(division)) return reply.status(400).json({ error: 'division must be an integer' });
-    if (typeof text !== 'string' || !text.trim()) return reply.status(400).json({ error: 'text is required' });
-    if (text.length > 1000) return reply.status(400).json({ error: 'text must be 1000 characters or fewer' });
+    if (!Number.isInteger(division)) return reply.status(400).send({ error: 'division must be an integer' });
+    if (typeof text !== 'string' || !text.trim()) return reply.status(400).send({ error: 'text is required' });
+    if (text.length > 1000) return reply.status(400).send({ error: 'text must be 1000 characters or fewer' });
 
     try {
       const [chars] = await pool.query('SELECT id FROM characters WHERE user_id=?', [req.user.id]);
@@ -920,7 +921,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ entry: row[0] });
     } catch (err) {
       log.err('POST /api/domain-claims/:division/codex failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error adding codex entry' });
+      reply.status(500).send({ error: 'Database error adding codex entry' });
     }
   });
 
@@ -928,18 +929,18 @@ module.exports = async function (fastify, opts) {
   fastify.delete('/api/domain-claims/codex/:id', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const [[entry]] = await pool.query('SELECT * FROM domain_codex_entries WHERE id=?', [req.params.id]);
-      if (!entry) return reply.status(404).json({ error: 'Entry not found' });
+      if (!entry) return reply.status(404).send({ error: 'Entry not found' });
 
       const isAuthor = entry.user_id === req.user.id;
       const canModerate = await isDomainManager(req.user.id, req.user.role);
-      if (!isAuthor && !canModerate) return reply.status(403).json({ error: 'Not allowed to delete this entry' });
+      if (!isAuthor && !canModerate) return reply.status(403).send({ error: 'Not allowed to delete this entry' });
 
       await pool.query('DELETE FROM domain_codex_entries WHERE id=?', [req.params.id]);
       log.dom('Domain codex entry deleted', { entry_id: req.params.id, by: req.user.id });
       reply.send({ ok: true });
     } catch (err) {
       log.err('DELETE /api/domain-claims/codex/:id failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error deleting codex entry' });
+      reply.status(500).send({ error: 'Database error deleting codex entry' });
     }
   });
 };

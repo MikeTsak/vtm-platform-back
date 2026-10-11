@@ -7,8 +7,9 @@
 
 const pool = require('../db');
 
-// Mirrors mainCourtTitles in front/src/features/court/HierarchyView.jsx: holding
-// one of these is what makes an account a court user.
+const { isAdmin, isCourt } = require('./guards');
+// Holding one of these is what makes an account a court user. The Hierarchy page
+// gets this list from /camarilla/roster (main_court), so it is defined only here.
 const MAIN_COURT = ['Prince', 'Seneschal', 'Sheriff', 'Keeper', 'Harpy', 'Assistant Harpy', 'Hound', 'Shadow', 'Scourge'];
 
 // Which offices may do what. Admin may do everything.
@@ -45,12 +46,12 @@ async function getOffices(user) {
 
 // The permission map the frontend renders panels from.
 async function getCourtContext(user) {
-  const isAdmin = user?.role === 'admin';
-  const isCourt = isAdmin || user?.role === 'courtuser';
-  const offices = isCourt ? await getOffices(user) : [];
+  const admin = isAdmin(user);
+  const court = isCourt(user);
+  const offices = court ? await getOffices(user) : [];
   const can = {};
-  for (const [k, list] of Object.entries(CAN)) can[k] = isAdmin || (isCourt && offices.some(o => list.includes(o)));
-  return { isAdmin, isCourt, offices, can };
+  for (const [k, list] of Object.entries(CAN)) can[k] = admin || (court && offices.some(o => list.includes(o)));
+  return { isAdmin: admin, isCourt: court, offices, can };
 }
 
 // preHandler factory: 403 unless the caller is a court user holding one of the

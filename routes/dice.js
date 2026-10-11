@@ -8,7 +8,7 @@ const { rollPool, rollD10 } = require('../services/dice');
 const { traitPool, frenzyPool, parsePowerPool, insertRoll, formatRoll, trackers, NO_REROLL } = require('../services/rolls');
 const { CATALOG } = require('../utils/xpPurchase');
 const { parseSheet } = require('../utils/sheet');
-const { isAdmin } = require('../services/guards');
+const { isAdmin, isCourt } = require('../services/guards');
 
 // Storyteller roll kinds that may be logged into a session feed.
 const ST_ROLL_TYPES = new Set(['admin_roll', 'opposed_roll', 'remorse', 'npc_roll']);
@@ -23,7 +23,7 @@ module.exports = async function (fastify, opts) {
     const [[s]] = await db.query('SELECT id, session_code, status, admin_id, metadata FROM live_sessions WHERE session_code=? OR id=?', [idOrCode, idOrCode]);
     if (!s) fail(404, 'Session not found');
     if (s.status === 'ended') fail(400, 'That session has ended.');
-    if (user.role !== 'admin' && user.role !== 'courtuser') {
+    if (!isCourt(user)) {
       const [seat] = await db.query('SELECT 1 FROM live_session_participants WHERE session_id=? AND user_id=? LIMIT 1', [s.id, user.id]);
       if (!seat.length) fail(403, 'Join the session before rolling in it.');
     }
@@ -287,7 +287,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ rolls: rows });
     } catch (e) {
       log.err('Admin fetch dice rolls failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to fetch dice rolls' });
+      reply.status(500).send({ error: 'Failed to fetch dice rolls' });
     }
   });
 
@@ -299,7 +299,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ success: true, count: result.affectedRows });
     } catch (e) {
       log.err('Failed to clear dice rolls', { error: e.message });
-      reply.status(500).json({ success: false, error: 'Internal Server Error' });
+      reply.status(500).send({ success: false, error: 'Internal Server Error' });
     }
   });
 };

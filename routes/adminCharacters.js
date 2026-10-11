@@ -10,7 +10,7 @@ module.exports = async function (fastify, opts) {
   // Admin: add/remove XP to single character
   // DUP: fastify.patch('/api/admin/characters/:id/xp', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   // DUP:   const { delta } = req.body;
-  // DUP:   if (typeof delta !== 'number') return reply.status(400).json({ error: 'delta must be a number' });
+  // DUP:   if (typeof delta !== 'number') return reply.status(400).send({ error: 'delta must be a number' });
   // DUP: 
   // DUP:   await pool.query('UPDATE characters SET xp = GREATEST(0, xp + ?) WHERE id=?', [delta, req.params.id]);
   // DUP:   const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [req.params.id]);
@@ -25,7 +25,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ characters });
     } catch (e) {
       console.error('Failed to fetch all characters:', e);
-      reply.status(500).json({ error: 'Failed to fetch characters' });
+      reply.status(500).send({ error: 'Failed to fetch characters' });
     }
   });
 
@@ -74,7 +74,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ retainers: rows });
     } catch (e) {
       log.err('Failed to fetch all retainers', { message: e.message });
-      reply.status(500).json({ error: 'Failed to fetch retainers' });
+      reply.status(500).send({ error: 'Failed to fetch retainers' });
     }
   });
 
@@ -95,12 +95,12 @@ module.exports = async function (fastify, opts) {
         const obj = (typeof sheet === 'string') ? JSON.parse(sheet) : sheet;
         jsonStr = JSON.stringify(obj ?? {});
       } catch {
-        return reply.status(400).json({ error: 'sheet must be valid JSON (object or stringified object)' });
+        return reply.status(400).send({ error: 'sheet must be valid JSON (object or stringified object)' });
       }
       fields.push('sheet=?'); vals.push(jsonStr);
     }
 
-    if (!fields.length) return reply.status(400).json({ error: 'Nothing to update' });
+    if (!fields.length) return reply.status(400).send({ error: 'Nothing to update' });
 
     vals.push(id);
     await pool.query(`UPDATE characters SET ${fields.join(', ')} WHERE id=?`, vals);
@@ -127,7 +127,7 @@ module.exports = async function (fastify, opts) {
   fastify.delete('/api/admin/characters/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) {
-      return reply.status(400).json({ error: 'Invalid character id' });
+      return reply.status(400).send({ error: 'Invalid character id' });
     }
 
     const conn = await pool.getConnection();
@@ -144,14 +144,14 @@ module.exports = async function (fastify, opts) {
       const [result] = await conn.query('DELETE FROM characters WHERE id=?', [id]);
       await conn.commit();
 
-      if (result.affectedRows === 0) return reply.status(404).json({ error: 'Character not found' });
+      if (result.affectedRows === 0) return reply.status(404).send({ error: 'Character not found' });
 
       log.adm('Character deleted', { id, by_user_id: req.user.id });
       reply.send({ ok: true });
     } catch (e) {
       await conn.rollback();
       log.err('Delete character failed', { message: e.message, stack: e.stack, id });
-      reply.status(500).json({ error: 'Failed to delete character' });
+      reply.status(500).send({ error: 'Failed to delete character' });
     } finally {
       conn.release();
     }

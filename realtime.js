@@ -12,7 +12,8 @@ const pool = require('./db');
 const { log } = require('./logger');
 const { corsOrigin } = require('./config/cors');
 const { COOKIE_NAME } = require('./utils/authCookie');
-const { getTokenVersion } = require('./utils/tokenVersion');
+const { getAuthState } = require('./utils/tokenVersion');
+const { isAdmin, isCourt } = require('./services/guards');
 const { getSessionRow, emitSessionPresence } = require('./services/liveSession');
 
 function attachRealtime(fastify) {
@@ -34,12 +35,12 @@ function attachRealtime(fastify) {
       if (!token) return next(new Error('Authentication required'));
 
       const payload = jwt.verify(token, process.env.JWT_SECRET);
-      const currentVersion = await getTokenVersion(payload.id);
-      if (currentVersion === null || (payload.tv ?? 0) !== currentVersion) {
+      const state = await getAuthState(payload.id);
+      if (!state || (payload.tv ?? 0) !== state.version) {
         return next(new Error('Session revoked'));
       }
 
-      socket.user = payload;
+      socket.user = { ...payload, role: state.role };
       next();
     } catch (e) {
       next(new Error('Authentication failed'));
@@ -67,14 +68,14 @@ function attachRealtime(fastify) {
     if (uid) {
       socket.data.userId = uid; // readable on RemoteSocket (fetchSockets), unlike socket.user
       socket.join(`user_${uid}`);
-      if (socket.user.role === 'admin' || socket.user.role === 'courtuser') {
+      if (isCourt(socket.user)) {
         socket.join('admin_chat');
       }
 
       // A debug session (routes/debugLogin.js) must not show the player online.
       if (!socket.user.imp) {
         // Admins are who answer as NPCs, so clients use them for NPC presence.
-        const entry = presence.get(uid) || { count: 0, admin: socket.user.role === 'admin' };
+        const entry = presence.get(uid) || { count: 0, admin: isAdmin(socket.user) };
         entry.count += 1;
         presence.set(uid, entry);
         if (entry.count === 1) io.emit('presence:update', { userId: uid, online: true, admin: entry.admin });
@@ -123,7 +124,7 @@ function attachRealtime(fastify) {
         if (!session || session.status === 'ended') return;
 
         // STs (admin/courtuser) may join any session; everyone else must be a registered participant
-        const isStaff = socket.user.role === 'admin' || socket.user.role === 'courtuser';
+        const isStaff = isCourt(socket.user);
         if (!isStaff) {
           const [rows] = await pool.query(
             'SELECT 1 FROM live_session_participants WHERE session_id = ? AND user_id = ? LIMIT 1',

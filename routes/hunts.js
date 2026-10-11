@@ -13,7 +13,7 @@ module.exports = async function (fastify, opts) {
       const [hunts] = await pool.query('SELECT * FROM hunts ORDER BY created_at DESC');
       reply.send({ hunts });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to fetch hunts' });
+      reply.status(500).send({ error: 'Failed to fetch hunts' });
     }
   });
 
@@ -24,7 +24,7 @@ module.exports = async function (fastify, opts) {
       const [r] = await pool.query('INSERT INTO hunts (title, description) VALUES (?,?)', [title, description]);
       reply.send({ id: r.insertId });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to create hunt' });
+      reply.status(500).send({ error: 'Failed to create hunt' });
     }
   });
 
@@ -54,7 +54,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true });
     } catch (e) {
       await conn.rollback();
-      reply.status(500).json({ error: 'Failed to reorder steps.' });
+      reply.status(500).send({ error: 'Failed to reorder steps.' });
     } finally {
       conn.release();
     }
@@ -67,7 +67,7 @@ module.exports = async function (fastify, opts) {
       const userId = Number(req.params.userId);
 
       const [[progress]] = await pool.query('SELECT * FROM hunt_progress WHERE user_id=? AND hunt_id=?', [userId, huntId]);
-      if (!progress || progress.completed) return reply.status(400).json({ error: 'Player is not active or already finished.' });
+      if (!progress || progress.completed) return reply.status(400).send({ error: 'Player is not active or already finished.' });
 
       const [[currentStep]] = await pool.query('SELECT step_order FROM hunt_steps WHERE id=?', [progress.current_step_id]);
       const [[nextStep]] = await pool.query('SELECT id FROM hunt_steps WHERE hunt_id=? AND step_order > ? ORDER BY step_order ASC LIMIT 1', [huntId, currentStep.step_order]);
@@ -81,7 +81,7 @@ module.exports = async function (fastify, opts) {
       log.adm('Admin forced player advance', { admin_id: req.user.id, target_user: userId, hunt_id: huntId });
       reply.send({ ok: true });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to advance player.' });
+      reply.status(500).send({ error: 'Failed to advance player.' });
     }
   });
 
@@ -96,7 +96,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true });
     } catch (e) {
       log.err('Failed to toggle hunt', { message: e.message });
-      reply.status(500).json({ error: 'Failed to toggle hunt' });
+      reply.status(500).send({ error: 'Failed to toggle hunt' });
     }
   });
 
@@ -112,7 +112,7 @@ module.exports = async function (fastify, opts) {
         [task_type, prompt, tData, isManual, req.params.stepId]
       );
       reply.send({ success: true });
-    } catch (err) { reply.status(500).json({ error: err.message }); }
+    } catch (err) { reply.status(500).send({ error: err.message }); }
   });
 
   // Delete a step
@@ -120,7 +120,7 @@ module.exports = async function (fastify, opts) {
     try {
       await pool.query('DELETE FROM hunt_steps WHERE id=?', [req.params.stepId]);
       reply.send({ success: true });
-    } catch (err) { reply.status(500).json({ error: err.message }); }
+    } catch (err) { reply.status(500).send({ error: err.message }); }
   });
 
   // GET: List steps for a specific hunt
@@ -129,7 +129,7 @@ module.exports = async function (fastify, opts) {
       const [steps] = await pool.query('SELECT * FROM hunt_steps WHERE hunt_id=? ORDER BY step_order ASC', [req.params.id]);
       reply.send({ steps });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to fetch steps' });
+      reply.status(500).send({ error: 'Failed to fetch steps' });
     }
   });
 
@@ -170,7 +170,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ progress: formattedProgress });
     } catch (err) {
       console.error(err);
-      reply.status(500).json({ error: err.message });
+      reply.status(500).send({ error: err.message });
     }
   });
 
@@ -197,7 +197,7 @@ module.exports = async function (fastify, opts) {
     `, [req.params.huntId]);
 
       reply.send({ reviews });
-    } catch (err) { reply.status(500).json({ error: err.message }); }
+    } catch (err) { reply.status(500).send({ error: err.message }); }
   });
 
   // Approve or Reject a submission
@@ -245,7 +245,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ success: true });
     } catch (err) {
       log.err('Review action failed', { error: err.message });
-      reply.status(500).json({ error: err.message });
+      reply.status(500).send({ error: err.message });
     }
   });
 
@@ -261,7 +261,7 @@ module.exports = async function (fastify, opts) {
       );
       reply.send({ ok: true });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to add step' });
+      reply.status(500).send({ error: 'Failed to add step' });
     }
   });
 
@@ -287,7 +287,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true });
     } catch (e) {
       log.err('Failed to delete chronicle', { message: e.message });
-      reply.status(500).json({ error: 'Failed to delete chronicle' });
+      reply.status(500).send({ error: 'Failed to delete chronicle' });
     }
   });
   // --- PLAYER ROUTES ---
@@ -298,7 +298,7 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/hunts/:huntId/groups', { preHandler: [authRequired] }, async (req, reply) => {
     const huntId = Number(req.params.huntId);
   const { name } = req.body;
-    if (!name || name.trim() === '') return reply.status(400).json({ error: 'Team name is required.' });
+    if (!name || name.trim() === '') return reply.status(400).send({ error: 'Team name is required.' });
 
     const conn = await pool.getConnection();
     try {
@@ -324,7 +324,7 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       await conn.rollback();
       log.err('Failed to create hunt group', { error: e.message });
-      reply.status(500).json({ error: 'Failed to establish coterie.' });
+      reply.status(500).send({ error: 'Failed to establish coterie.' });
     } finally {
       conn.release();
     }
@@ -334,7 +334,7 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/hunts/:huntId/groups/join', { preHandler: [authRequired] }, async (req, reply) => {
     const huntId = Number(req.params.huntId);
   const { code } = req.body;
-    if (!code) return reply.status(400).json({ error: 'Invite code required.' });
+    if (!code) return reply.status(400).send({ error: 'Invite code required.' });
 
     const conn = await pool.getConnection();
     try {
@@ -344,7 +344,7 @@ module.exports = async function (fastify, opts) {
       const [[group]] = await conn.query('SELECT id FROM hunt_groups WHERE hunt_id = ? AND invite_code = ?', [huntId, code.trim().toUpperCase()]);
       if (!group) {
         await conn.rollback();
-        return reply.status(404).json({ error: 'Invalid invite code or chronicle mismatch.' });
+        return reply.status(404).send({ error: 'Invalid invite code or chronicle mismatch.' });
       }
 
       // 2. Add user to the group (IGNORE handles if they are already in it)
@@ -370,7 +370,7 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       await conn.rollback();
       log.err('Failed to join hunt group', { error: e.message });
-      reply.status(500).json({ error: 'Failed to join coterie.' });
+      reply.status(500).send({ error: 'Failed to join coterie.' });
     } finally {
       conn.release();
     }
@@ -534,7 +534,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ activeHunts: huntsWithMetadata });
     } catch (e) {
       log.err('Failed to fetch active hunts', { message: e.message });
-      reply.status(500).json({ error: 'Failed to sync chronicles' });
+      reply.status(500).send({ error: 'Failed to sync chronicles' });
     }
   });
   // POST: Submit an answer or evidence for the current step
@@ -544,11 +544,11 @@ module.exports = async function (fastify, opts) {
 
       // 1. Verify step exists and belongs to the user's current progress
       const [[step]] = await pool.query('SELECT * FROM hunt_steps WHERE id=?', [step_id]);
-      if (!step) return reply.status(404).json({ error: 'Challenge not found in the archives.' });
+      if (!step) return reply.status(404).send({ error: 'Challenge not found in the archives.' });
 
       const [[progress]] = await pool.query('SELECT * FROM hunt_progress WHERE user_id=? AND hunt_id=?', [req.user.id, step.hunt_id]);
       if (!progress || progress.current_step_id !== step.id || progress.completed) {
-        return reply.status(400).json({ error: 'Invalid submission sequence.' });
+        return reply.status(400).send({ error: 'Invalid submission sequence.' });
       }
 
       // Safely parse target data
@@ -557,16 +557,16 @@ module.exports = async function (fastify, opts) {
       // --- 2. VALIDATION BY TASK TYPE ---
       if (step.task_type === 'text') {
         if (text_answer?.toLowerCase().trim() !== target?.answer?.toLowerCase()) {
-          return reply.status(400).json({ error: 'Incorrect answer. The Court expects better.' });
+          return reply.status(400).send({ error: 'Incorrect answer. The Court expects better.' });
         }
       }
       else if (step.task_type === 'qr') {
         if (text_answer?.trim() !== target?.qr_string) {
-          return reply.status(400).json({ error: 'Invalid Sigil scanned.' });
+          return reply.status(400).send({ error: 'Invalid Sigil scanned.' });
         }
       }
       else if (step.task_type === 'gps') {
-        if (!lat || !lng) return reply.status(400).json({ error: 'Missing GPS coordinates.' });
+        if (!lat || !lng) return reply.status(400).send({ error: 'Missing GPS coordinates.' });
 
         // Haversine formula to calculate distance in meters
         const R = 6371e3; // Earth radius in metres
@@ -582,11 +582,11 @@ module.exports = async function (fastify, opts) {
 
         const allowedRadius = target.radius_meters || 50; // Default 50m allowance for GPS drift
         if (distance > allowedRadius) {
-          return reply.status(400).json({ error: `Location rejected. You are ${Math.round(distance)} meters away from the target.` });
+          return reply.status(400).send({ error: `Location rejected. You are ${Math.round(distance)} meters away from the target.` });
         }
       }
       else if (['photo', 'draw', 'audio'].includes(step.task_type)) {
-        if (!media_id) return reply.status(400).json({ error: 'Evidence file required.' });
+        if (!media_id) return reply.status(400).send({ error: 'Evidence file required.' });
 
         // Log the submission into the database for the ST to review later
         await pool.query(
@@ -635,7 +635,7 @@ module.exports = async function (fastify, opts) {
 
     } catch (e) {
       log.err('Submission logic failed', { message: e.message });
-      reply.status(500).json({ error: 'Internal server error while verifying submission.' });
+      reply.status(500).send({ error: 'Internal server error while verifying submission.' });
     }
   });
 };

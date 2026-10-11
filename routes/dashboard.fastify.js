@@ -229,7 +229,7 @@ module.exports = async function (fastify, opts) {
         .send(payload);
     } catch (error) {
       log.err('Dashboard fetch error', { error: error.message });
-      reply.status(500).json({ success: false, error: 'Failed to fetch dashboard data' });
+      reply.status(500).send({ success: false, error: 'Failed to fetch dashboard data' });
     }
   });
 
@@ -277,7 +277,7 @@ module.exports = async function (fastify, opts) {
         .send(payload);
     } catch (error) {
       log.err('Home bootstrap fetch error', { error: error.message, stack: error.stack });
-      reply.status(500).json({ success: false, error: 'Failed to bootstrap home data' });
+      reply.status(500).send({ success: false, error: 'Failed to bootstrap home data' });
     }
   });
 };

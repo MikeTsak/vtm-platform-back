@@ -21,7 +21,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ events });
     } catch (e) {
       log.err('Admin events fetch failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to fetch events' });
+      reply.status(500).send({ error: 'Failed to fetch events' });
     }
   });
 
@@ -33,7 +33,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true });
     } catch (e) {
       log.err('Admin events create failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to create event' });
+      reply.status(500).send({ error: 'Failed to create event' });
     }
   });
 
@@ -73,7 +73,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true });
     } catch (e) {
       log.err('Admin events patch failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to update event' });
+      reply.status(500).send({ error: 'Failed to update event' });
     }
   });
 
@@ -83,7 +83,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true });
     } catch (e) {
       log.err('Admin events delete failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to delete event' });
+      reply.status(500).send({ error: 'Failed to delete event' });
     }
   });
 
@@ -100,7 +100,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ config, roster: chars });
     } catch (e) {
       log.err('Admin events rsvp fetch failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to fetch rsvp configuration' });
+      reply.status(500).send({ error: 'Failed to fetch rsvp configuration' });
     }
   });
 
@@ -111,7 +111,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true });
     } catch (e) {
       log.err('Admin events rsvp save failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to save rsvp configuration' });
+      reply.status(500).send({ error: 'Failed to save rsvp configuration' });
     }
   });
 
@@ -128,7 +128,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true, sent_count: sent });
     } catch (e) {
       log.err('Admin broadcast failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to send broadcast' });
+      reply.status(500).send({ error: 'Failed to send broadcast' });
     }
   });
 
@@ -136,7 +136,7 @@ module.exports = async function (fastify, opts) {
     try {
       const charId = parseInt(req.params.charId, 10);
       const [char] = await pool.query('SELECT name, created_at FROM characters WHERE id=?', [charId]);
-      if (!char.length) return reply.status(404).json({ error: 'Character not found' });
+      if (!char.length) return reply.status(404).send({ error: 'Character not found' });
       const cname = char[0].name;
 
       const [xp] = await pool.query('SELECT id, cost, action, target, created_at FROM xp_log WHERE character_id=? ORDER BY created_at DESC LIMIT 500', [charId]);
@@ -158,7 +158,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ timeline });
     } catch (e) {
       log.err('Admin timeline failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to fetch timeline' });
+      reply.status(500).send({ error: 'Failed to fetch timeline' });
     }
   });
 
@@ -177,7 +177,7 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/admin/domains/draw-problems', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const [domains] = await pool.query('SELECT division as id FROM domain_claims');
-      if (domains.length === 0) return reply.status(400).json({ error: 'No domains exist' });
+      if (domains.length === 0) return reply.status(400).send({ error: 'No domains exist' });
 
       const shuffled = domains.sort(() => 0.5 - Math.random());
       const selected = shuffled.slice(0, 3);
@@ -232,7 +232,7 @@ module.exports = async function (fastify, opts) {
       await pool.query('INSERT INTO admin_audit_logs (admin_id, action, details) VALUES (?, ?, ?)', [req.user.id, 'DRAW_DOMAIN_PROBLEMS', `Drew monthly problems for ${selected.length} domains.`]);
       reply.send({ ok: true });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to draw problems' });
+      reply.status(500).send({ error: 'Failed to draw problems' });
     }
   });
 
@@ -246,7 +246,7 @@ module.exports = async function (fastify, opts) {
       await pool.query('UPDATE domain_claims SET safety_rating = GREATEST(safety_rating - ?, 0) WHERE division=?', [penalty, domain_id]);
       reply.send({ ok: true });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to add custom problem' });
+      reply.status(500).send({ error: 'Failed to add custom problem' });
     }
   });
 
@@ -255,7 +255,7 @@ module.exports = async function (fastify, opts) {
       await pool.query('UPDATE domain_problems SET resolved = 1, resolved_by = ?, resolved_at = NOW() WHERE id=?', [req.user.id, req.params.id]);
       reply.send({ ok: true });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to resolve problem' });
+      reply.status(500).send({ error: 'Failed to resolve problem' });
     }
   });
 
@@ -268,7 +268,7 @@ module.exports = async function (fastify, opts) {
       });
       reply.send({ web });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to fetch blood web' });
+      reply.status(500).send({ error: 'Failed to fetch blood web' });
     }
   });
 
@@ -276,7 +276,7 @@ module.exports = async function (fastify, opts) {
     try {
       const { id, hunger, bloodPotency } = req.body;
       const [[char]] = await pool.query('SELECT sheet FROM characters WHERE id = ?', [id]);
-      if (!char) return reply.status(404).json({ error: 'Character not found' });
+      if (!char) return reply.status(404).send({ error: 'Character not found' });
       const sheet = parseSheet(char.sheet);
       if (hunger !== undefined) sheet.hunger = Math.max(0, Math.min(5, Number(hunger)));
       // blood_potency is the key the sheet reads; keep the legacy camelCase copy in sync (same as liveSessions.js).
@@ -293,7 +293,7 @@ module.exports = async function (fastify, opts) {
       }
       reply.send({ ok: true });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to update character' });
+      reply.status(500).send({ error: 'Failed to update character' });
     }
   });
 
@@ -304,7 +304,7 @@ module.exports = async function (fastify, opts) {
       await pool.query('INSERT INTO admin_audit_logs (admin_id, action, details) VALUES (?, ?, ?)', [req.user.id, 'SET_MASQUERADE_THREAT', `Threat level set to ${level}`]);
       reply.send({ ok: true });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to update threat level' });
+      reply.status(500).send({ error: 'Failed to update threat level' });
     }
   });
 
@@ -321,7 +321,7 @@ module.exports = async function (fastify, opts) {
       );
       reply.send({ coteries, members });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to fetch coteries' });
+      reply.status(500).send({ error: 'Failed to fetch coteries' });
     }
   });
 
@@ -330,7 +330,7 @@ module.exports = async function (fastify, opts) {
       const [logs] = await pool.query('SELECT a.*, u.display_name as admin_name FROM admin_audit_logs a LEFT JOIN users u ON a.admin_id = u.id ORDER BY a.created_at DESC LIMIT 500');
       reply.send({ logs });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to fetch audit logs' });
+      reply.status(500).send({ error: 'Failed to fetch audit logs' });
     }
   });
 };

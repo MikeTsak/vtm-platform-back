@@ -14,20 +14,33 @@
 const pool = require('../db');
 
 const CACHE_TTL_MS = 15_000;
-const cache = new Map(); // user_id -> { version, expiresAt }
+const cache = new Map(); // user_id -> { version, role, expiresAt }
+
+/**
+ * Live auth state for a user: the same cached row serves the revocation check
+ * and the CURRENT role. The role lives in the JWT too, but that copy is frozen
+ * at login (7d), so a promotion/demotion would not take effect until the user
+ * logged in again. Callers overwrite the token's role with this one.
+ * @param {number} userId
+ * @returns {Promise<{version:number, role:string}|null>} null if the user no longer exists
+ */
+async function getAuthState(userId) {
+  const hit = cache.get(userId);
+  if (hit && hit.expiresAt > Date.now()) return hit.state;
+
+  const [rows] = await pool.query('SELECT token_version, role FROM users WHERE id = ?', [userId]);
+  const state = rows.length ? { version: rows[0].token_version || 0, role: rows[0].role } : null;
+  cache.set(userId, { state, expiresAt: Date.now() + CACHE_TTL_MS });
+  return state;
+}
 
 /**
  * @param {number} userId
  * @returns {Promise<number|null>} current token_version, or null if the user no longer exists
  */
 async function getTokenVersion(userId) {
-  const hit = cache.get(userId);
-  if (hit && hit.expiresAt > Date.now()) return hit.version;
-
-  const [rows] = await pool.query('SELECT token_version FROM users WHERE id = ?', [userId]);
-  const version = rows.length ? (rows[0].token_version || 0) : null;
-  cache.set(userId, { version, expiresAt: Date.now() + CACHE_TTL_MS });
-  return version;
+  const state = await getAuthState(userId);
+  return state ? state.version : null;
 }
 
 /**
@@ -44,4 +57,4 @@ function clearTokenVersionCache(userId) {
   else cache.delete(userId);
 }
 
-module.exports = { getTokenVersion, bumpTokenVersion, clearTokenVersionCache };
+module.exports = { getAuthState, getTokenVersion, bumpTokenVersion, clearTokenVersionCache };

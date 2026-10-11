@@ -47,7 +47,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ conversations: rows });
     } catch (e) {
       log.err('Failed to fetch NPC conversations', { npcId, message: e.message });
-      reply.status(500).json({ error: 'Failed to fetch NPC conversations' });
+      reply.status(500).send({ error: 'Failed to fetch NPC conversations' });
     }
   });
 
@@ -76,7 +76,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ messages, has_more: w.hasMore(messages), settings });
     } catch (e) {
       log.err('Admin fetch NPC chat history failed', { message: e.message, stack: e.stack });
-      reply.status(500).json({ error: 'Failed to fetch chat history' });
+      reply.status(500).send({ error: 'Failed to fetch chat history' });
     }
   });
 
@@ -87,7 +87,7 @@ module.exports = async function (fastify, opts) {
     const fromMessageId = req.body?.fromMessageId ? Number(req.body.fromMessageId) : null;
 
     if (!Number.isInteger(npcId) || npcId <= 0 || !Number.isInteger(userId) || userId <= 0) {
-      return reply.status(400).json({ error: 'Valid npcId and userId are required' });
+      return reply.status(400).send({ error: 'Valid npcId and userId are required' });
     }
 
     try {
@@ -134,7 +134,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true, unread_count: unreadCount });
     } catch (e) {
       log.err('Failed to mark NPC conversation unread', { npcId, userId, message: e.message });
-      reply.status(500).json({ error: 'Failed to mark conversation unread' });
+      reply.status(500).send({ error: 'Failed to mark conversation unread' });
     }
   });
 
@@ -145,18 +145,18 @@ module.exports = async function (fastify, opts) {
   const { body } = req.body;
 
     if (!body || body.trim().length === 0) {
-      return reply.status(400).json({ error: 'Message body is required' });
+      return reply.status(400).send({ error: 'Message body is required' });
     }
 
     try {
       // Basic validation (NPC/User existence, assuming tables/data models)
       const [npcRows] = await pool.query('SELECT id FROM npcs WHERE id=?', [npcId]);
       if (npcRows.length === 0) {
-        return reply.status(404).json({ error: 'NPC not found' });
+        return reply.status(404).send({ error: 'NPC not found' });
       }
       const [userRows] = await pool.query('SELECT id FROM users WHERE id=?', [userId]);
       if (userRows.length === 0) {
-        return reply.status(404).json({ error: 'Target user not found' });
+        return reply.status(404).send({ error: 'Target user not found' });
       }
 
       // Insert message into the NPC chat table, sent from the 'npc' side
@@ -175,7 +175,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true, message: 'Message sent as NPC' });
     } catch (e) {
       log.err('Admin reply as NPC failed', { message: e.message, stack: e.stack });
-      reply.status(500).json({ error: 'Failed to send message as NPC' });
+      reply.status(500).send({ error: 'Failed to send message as NPC' });
     }
   });
 
@@ -204,7 +204,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ messages: rows, has_more: w.hasMore(rows), settings });
     } catch (e) {
       log.err('Failed to get NPC chat history', { message: e.message });
-      reply.status(500).json({ error: 'Failed to get history' });
+      reply.status(500).send({ error: 'Failed to get history' });
     }
   });
 
@@ -215,12 +215,12 @@ module.exports = async function (fastify, opts) {
       const { npc_id, body, attachment_id, reply_to_id } = req.body || {};
 
       if (!npc_id || (!attachment_id && (!body || !body.trim()))) {
-        return reply.status(400).json({ error: 'NPC and content required' });
+        return reply.status(400).send({ error: 'NPC and content required' });
       }
 
       const [npcRows] = await pool.query('SELECT is_disabled FROM npcs WHERE id=?', [Number(npc_id)]);
       if (!npcRows.length || npcRows[0].is_disabled) {
-        return reply.status(403).json({ error: 'Cannot send message to this NPC at this time.' });
+        return reply.status(403).send({ error: 'Cannot send message to this NPC at this time.' });
       }
 
       const replyTo = await validReplyTo(reply_to_id, npc_id, userId, false);
@@ -289,10 +289,10 @@ module.exports = async function (fastify, opts) {
         fastify.io.to(`user_${userId}`).emit('chat:refresh', { type: 'npc', partnerId: Number(npc_id) });
       }
 
-      reply.status(201).json({ message });
+      reply.status(201).send({ message });
     } catch (e) {
       log.err('NPC send failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed' });
+      reply.status(500).send({ error: 'Failed' });
     }
   });
   // --- Admin: reply as NPC to a specific player ---
@@ -300,7 +300,7 @@ module.exports = async function (fastify, opts) {
     try {
       const npcId = Number(req.query.npc_id);
       const userId = Number(req.query.user_id);
-      if (!npcId || !userId) return reply.status(400).json({ error: 'npc_id and user_id are required' });
+      if (!npcId || !userId) return reply.status(400).send({ error: 'npc_id and user_id are required' });
 
       const [rows] = await pool.query(
         `SELECT id, npc_id, user_id, from_side, body, created_at, attachment_id, status, edited, read_at
@@ -313,20 +313,20 @@ module.exports = async function (fastify, opts) {
       reply.send({ messages: rows });
     } catch (e) {
       log.err('Admin: NPC history failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to get history' });
+      reply.status(500).send({ error: 'Failed to get history' });
     }
   });
 
   fastify.post('/api/admin/chat/summarize', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     // AI generation has been disabled entirely for memory optimization
-    reply.status(501).json({ error: 'AI features have been disabled to optimize server memory.' });
+    reply.status(501).send({ error: 'AI features have been disabled to optimize server memory.' });
   });
 
   fastify.post('/api/admin/chat/npc/messages', { preHandler: [authRequired, requireAdmin, idempotencyCheck], onSend: [idempotencySave] }, async (req, reply) => {
     try {
       const { npc_id, user_id, body, attachment_id, queue, reply_to_id } = req.body || {};
       if (!npc_id || !user_id || (!attachment_id && (!body || !body.trim()))) {
-        return reply.status(400).json({ error: 'Missing fields' });
+        return reply.status(400).send({ error: 'Missing fields' });
       }
 
       const status = queue ? 'queued' : 'sent';
@@ -377,9 +377,9 @@ module.exports = async function (fastify, opts) {
         fastify.io.to('admin_chat').emit('chat:refresh', { type: 'npc', partnerId: Number(npc_id), userId: Number(user_id), queued: true });
       }
 
-      reply.status(201).json({ message });
+      reply.status(201).send({ message });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed' });
+      reply.status(500).send({ error: 'Failed' });
     }
   });
 
@@ -399,7 +399,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ queued: rows });
     } catch (e) {
       log.err('Admin fetch queued NPC messages failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to fetch queued messages' });
+      reply.status(500).send({ error: 'Failed to fetch queued messages' });
     }
   });
 
@@ -407,13 +407,13 @@ module.exports = async function (fastify, opts) {
   fastify.delete('/api/admin/chat/npc/queued/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const [result] = await pool.query(`DELETE FROM npc_messages WHERE id=? AND status='queued'`, [req.params.id]);
-      if (!result.affectedRows) return reply.status(404).json({ error: 'Queued message not found' });
+      if (!result.affectedRows) return reply.status(404).send({ error: 'Queued message not found' });
 
       if (fastify.io) fastify.io.to('admin_chat').emit('chat:refresh', { type: 'npc_queue_cancelled' });
       reply.send({ ok: true });
     } catch (e) {
       log.err('Admin cancel queued NPC message failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to cancel queued message' });
+      reply.status(500).send({ error: 'Failed to cancel queued message' });
     }
   });
 
@@ -429,7 +429,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ messages: rows });
     } catch (e) {
       log.err('Admin fetch ALL NPC messages failed', { message: e.message, stack: e.stack });
-      reply.status(500).json({ error: 'Failed to fetch NPC messages' });
+      reply.status(500).send({ error: 'Failed to fetch NPC messages' });
     }
   });
 
@@ -446,7 +446,7 @@ module.exports = async function (fastify, opts) {
     `);
       reply.send({ messages: rows });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to fetch NPC messages' });
+      reply.status(500).send({ error: 'Failed to fetch NPC messages' });
     }
   });
 };

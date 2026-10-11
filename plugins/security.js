@@ -69,7 +69,7 @@ module.exports = fp(async function security(fastify) {
   // This is a synchronous onSend hook (see utils/compression.js), NOT
   // `@fastify/compress` in global mode. That plugin's global hook makes
   // reply.send() resolve asynchronously, and ~490 handlers here end with a
-  // bare `reply.send(x)` / `reply.status(n).json(x)` instead of
+  // bare `reply.send(x)` / `reply.status(n).send(x)` instead of
   // `return reply.send(x)` — their promises then settle as `undefined` mid-
   // flight and Fastify ships a second, empty response (Content-Encoding set,
   // Content-Length 0, no body). That footgun is why compression sat disabled.

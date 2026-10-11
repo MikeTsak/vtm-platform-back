@@ -19,7 +19,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ identities: rows });
     } catch (e) {
       log.err('Admin list identities failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed' });
+      reply.status(500).send({ error: 'Failed' });
     }
   });
 
@@ -27,10 +27,10 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/admin/emails/identities', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const { email_address, display_name } = req.body;
-      if (!display_name || !email_address) return reply.status(400).json({ error: 'Missing fields' });
+      if (!display_name || !email_address) return reply.status(400).send({ error: 'Missing fields' });
 
       const email = email_address.trim().toLowerCase();
-      if (!email.includes('@')) return reply.status(400).json({ error: 'Invalid email format' });
+      if (!email.includes('@')) return reply.status(400).send({ error: 'Invalid email format' });
 
       await pool.query(`
       INSERT INTO email_identities (email_address, display_name)
@@ -40,9 +40,9 @@ module.exports = async function (fastify, opts) {
       log.adm('Created human email identity', { admin: req.user.id, email });
       reply.send({ ok: true });
     } catch (e) {
-      if (e.code === 'ER_DUP_ENTRY') return reply.status(409).json({ error: 'Email already exists' });
+      if (e.code === 'ER_DUP_ENTRY') return reply.status(409).send({ error: 'Email already exists' });
       log.err('Create identity failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to create identity' });
+      reply.status(500).send({ error: 'Failed to create identity' });
     }
   });
 
@@ -52,7 +52,7 @@ module.exports = async function (fastify, opts) {
       await pool.query('DELETE FROM email_identities WHERE id=?', [req.params.id]);
       reply.send({ ok: true });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed' });
+      reply.status(500).send({ error: 'Failed' });
     }
   });
 
@@ -79,7 +79,7 @@ module.exports = async function (fastify, opts) {
     `);
       reply.send({ threads });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to fetch threads' });
+      reply.status(500).send({ error: 'Failed to fetch threads' });
     }
   });
 
@@ -98,7 +98,7 @@ module.exports = async function (fastify, opts) {
 
       reply.send({ messages });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed' });
+      reply.status(500).send({ error: 'Failed' });
     }
   });
 
@@ -106,7 +106,7 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/admin/emails/reply', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const { thread_id, body, queue } = req.body;
-      if (!body || !thread_id) return reply.status(400).json({ error: 'Missing body' });
+      if (!body || !thread_id) return reply.status(400).send({ error: 'Missing body' });
 
       const status = queue ? 'queued' : 'sent';
       await pool.query(`INSERT INTO email_messages (thread_id, sender_type, body, is_read, status) VALUES (?, 'identity', ?, 0, ?)`, [thread_id, body, status]);
@@ -130,7 +130,7 @@ module.exports = async function (fastify, opts) {
 
       reply.send({ ok: true, status });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to reply' });
+      reply.status(500).send({ error: 'Failed to reply' });
     }
   });
 
@@ -152,7 +152,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ count: Number(row.count) });
     } catch (e) {
       log.err('Failed to count unread emails', { message: e.message });
-      reply.status(500).json({ error: 'Failed to count unread' });
+      reply.status(500).send({ error: 'Failed to count unread' });
     }
   });
 
@@ -189,7 +189,7 @@ module.exports = async function (fastify, opts) {
     `, [req.user.id]);
       reply.send({ threads });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to load inbox' });
+      reply.status(500).send({ error: 'Failed to load inbox' });
     }
   });
 
@@ -197,7 +197,7 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/emails/thread/:id', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const [check] = await pool.query('SELECT 1 FROM email_threads WHERE id=? AND user_id=?', [req.params.id, req.user.id]);
-      if (!check.length) return reply.status(403).json({ error: 'Forbidden' });
+      if (!check.length) return reply.status(403).send({ error: 'Forbidden' });
 
       const [messages] = await pool.query(`
       SELECT * FROM email_messages WHERE thread_id=? AND status='sent' ORDER BY created_at ASC
@@ -208,7 +208,7 @@ module.exports = async function (fastify, opts) {
 
       reply.send({ messages });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to load email' });
+      reply.status(500).send({ error: 'Failed to load email' });
     }
   });
 
@@ -224,18 +224,18 @@ module.exports = async function (fastify, opts) {
       if (thread_id) {
         // REPLY to existing thread
         const [check] = await conn.query('SELECT identity_id FROM email_threads WHERE id=? AND user_id=?', [thread_id, req.user.id]);
-        if (!check.length) return reply.status(403).json({ error: 'Thread not found' });
+        if (!check.length) return reply.status(403).send({ error: 'Thread not found' });
         identityId = check[0].identity_id;
 
         await conn.query(`INSERT INTO email_messages (thread_id, sender_type, body, is_read) VALUES (?, 'user', ?, 0)`, [thread_id, body]);
         await conn.query(`UPDATE email_threads SET updated_at=NOW() WHERE id=?`, [thread_id]);
       } else {
         // NEW THREAD
-        if (!to_email || !subject || !body) return reply.status(400).json({ error: 'Missing fields' });
+        if (!to_email || !subject || !body) return reply.status(400).send({ error: 'Missing fields' });
         const emailLower = to_email.trim().toLowerCase();
         const [identity] = await conn.query('SELECT id, display_name FROM email_identities WHERE email_address = ?', [emailLower]);
 
-        if (identity.length === 0) return reply.status(404).json({ error: 'Delivery Status Notification (Failure): Address not found.' });
+        if (identity.length === 0) return reply.status(404).send({ error: 'Delivery Status Notification (Failure): Address not found.' });
         identityId = identity[0].id;
         identityName = identity[0].display_name;
 
@@ -267,7 +267,7 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       await conn.rollback();
       log.err('Email send failed', { message: e.message });
-      reply.status(500).json({ error: 'Send failed' });
+      reply.status(500).send({ error: 'Send failed' });
     } finally {
       conn.release();
     }
@@ -281,7 +281,7 @@ module.exports = async function (fastify, opts) {
       const [messages] = await pool.query(`SELECT * FROM email_messages WHERE status = 'sent'`);
       reply.send({ messages });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to fetch email messages' });
+      reply.status(500).send({ error: 'Failed to fetch email messages' });
     }
   });
 
@@ -291,16 +291,16 @@ module.exports = async function (fastify, opts) {
     try {
       const { email_address, display_name, user_id, subject, body, queue } = req.body;
       if (!email_address || !display_name || !user_id || !subject || !body) {
-        return reply.status(400).json({ error: 'Missing required fields' });
+        return reply.status(400).send({ error: 'Missing required fields' });
       }
       const status = queue ? 'queued' : 'sent';
 
       const email = email_address.trim().toLowerCase();
-      if (!email.includes('@')) return reply.status(400).json({ error: 'Invalid email format' });
+      if (!email.includes('@')) return reply.status(400).send({ error: 'Invalid email format' });
 
       // Verify the target player exists
       const [[targetUser]] = await conn.query('SELECT id, display_name FROM users WHERE id=?', [user_id]);
-      if (!targetUser) return reply.status(404).json({ error: 'Target player not found' });
+      if (!targetUser) return reply.status(404).send({ error: 'Target player not found' });
 
       await conn.beginTransaction();
 
@@ -342,7 +342,7 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       await conn.rollback();
       log.err('Admin DM failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to create DM' });
+      reply.status(500).send({ error: 'Failed to create DM' });
     } finally {
       conn.release();
     }
@@ -366,7 +366,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ queued: rows });
     } catch (e) {
       log.err('Admin fetch queued emails failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to fetch queued emails' });
+      reply.status(500).send({ error: 'Failed to fetch queued emails' });
     }
   });
 
@@ -374,7 +374,7 @@ module.exports = async function (fastify, opts) {
   fastify.delete('/api/admin/emails/queued/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const [[msg]] = await pool.query(`SELECT thread_id FROM email_messages WHERE id=? AND status='queued'`, [req.params.id]);
-      if (!msg) return reply.status(404).json({ error: 'Queued message not found' });
+      if (!msg) return reply.status(404).send({ error: 'Queued message not found' });
 
       await pool.query(`DELETE FROM email_messages WHERE id=?`, [req.params.id]);
 
@@ -388,7 +388,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true });
     } catch (e) {
       log.err('Admin cancel queued email failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to cancel queued email' });
+      reply.status(500).send({ error: 'Failed to cancel queued email' });
     }
   });
 };

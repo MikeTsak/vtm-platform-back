@@ -1,3 +1,4 @@
+const guards = require('../services/guards');
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, optionalAuth, requireAdmin, imageClient } = opts;
 
@@ -8,7 +9,7 @@ module.exports = async function (fastify, opts) {
     try {
       // Determine if caller is admin (token optional — anonymous is fine here)
       await optionalAuth(req);
-      const isAdmin = req.user?.role === 'admin';
+      const isAdmin = guards.isAdmin(req.user);
 
       const statusFilter = isAdmin ? `a.status IN ('published','private')` : `a.status = 'published'`;
       const [rows] = await pool.query(
@@ -38,7 +39,7 @@ module.exports = async function (fastify, opts) {
       if (article.status === 'private') {
         const user = await optionalAuth(req);
         if (!user) return reply.status(401).send({ error: 'Unauthorized' });
-        if (user.role !== 'admin') return reply.status(403).send({ error: 'Forbidden' });
+        if (!guards.isAdmin(user)) return reply.status(403).send({ error: 'Forbidden' });
       }
 
       const [tagRows] = await pool.query(
@@ -152,7 +153,7 @@ module.exports = async function (fastify, opts) {
     const { id, title, slug, content, status, category_id, edit_summary, tags } = req.body;
     
     // Only admins can publish private articles
-    if (status === 'private' && req.user.role !== 'admin') {
+    if (status === 'private' && !guards.isAdmin(req.user)) {
       return reply.status(403).send({ error: 'Only admins can create private articles' });
     }
 
@@ -261,7 +262,7 @@ module.exports = async function (fastify, opts) {
     const { slug } = req.params;
     const { version_id } = req.body;
     
-    if (req.user.role !== 'admin') return reply.status(403).send({ error: 'Only admins can rollback articles' });
+    if (!guards.isAdmin(req.user)) return reply.status(403).send({ error: 'Only admins can rollback articles' });
 
     try {
       const [artRows] = await pool.query('SELECT id FROM wiki_articles WHERE slug=?', [slug]);
@@ -333,11 +334,11 @@ module.exports = async function (fastify, opts) {
   
   fastify.get('/api/wiki/boards', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      const query = req.user.role === 'admin' 
+      const query = guards.isAdmin(req.user) 
         ? 'SELECT * FROM wiki_boards'
         : 'SELECT b.* FROM wiki_boards b LEFT JOIN wiki_board_members m ON b.id = m.board_id WHERE b.visibility = "public" OR b.owner_id = ? OR (b.visibility = "shared" AND m.user_id = ?)';
       
-      const params = req.user.role === 'admin' ? [] : [req.user.id, req.user.id];
+      const params = guards.isAdmin(req.user) ? [] : [req.user.id, req.user.id];
       const [rows] = await pool.query(query, params);
       reply.send({ boards: rows });
     } catch (e) {

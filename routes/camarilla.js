@@ -2,7 +2,7 @@
 //
 // The Camarilla hierarchy roster — public view and the Storyteller editor.
 
-const { MAIN_COURT, parseTitles } = require('../services/courtOffices');
+const { MAIN_COURT, parseTitles, getCourtContext } = require('../services/courtOffices');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin } = opts;
@@ -46,10 +46,10 @@ module.exports = async function (fastify, opts) {
         return (a.name || '').localeCompare(b.name || '');
       });
 
-      reply.send({ roster: combined });
+      reply.send({ roster: combined, main_court: MAIN_COURT });
     } catch (e) {
       log.err('Admin roster fetch failed', { message: e.message });
-      reply.status(500).json({ error: e.message });
+      reply.status(500).send({ error: e.message });
     }
   });
 
@@ -97,47 +97,23 @@ module.exports = async function (fastify, opts) {
 
       const isHarpy = await isHarpyOrAdmin(req.user);
 
-      reply.send({ roster: combined, is_harpy: isHarpy, can_manage_status: isHarpy });
+      reply.send({ roster: combined, main_court: MAIN_COURT, is_harpy: isHarpy, can_manage_status: isHarpy });
     } catch (e) {
       log.err('Public roster fetch failed', { message: e.message });
-      reply.status(500).json({ error: "Failed to load the Court hierarchy." });
+      reply.status(500).send({ error: "Failed to load the Court hierarchy." });
     }
   });
 
+  // Same rule as every other court power (services/courtOffices.js CAN.harpy): a court
+  // user holding the Harpy or Assistant Harpy office, or an admin. A title alone no
+  // longer counts; the account must be a court user, like for every other office.
   async function isHarpyOrAdmin(user) {
-    if (!user) return false;
-    if (user.role === 'admin' || user.role === 'courtuser') return true;
-    try {
-      const [chars] = await pool.query('SELECT camarilla_titles FROM characters WHERE user_id = ?', [user.id]);
-      if (!chars.length) return false;
-      const raw = chars[0].camarilla_titles;
-      let titles = [];
-      if (Array.isArray(raw)) {
-        titles = raw;
-      } else if (typeof raw === 'string' && raw.trim()) {
-        try {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) titles = parsed;
-          else if (typeof parsed === 'string') titles = [parsed];
-        } catch {
-          titles = raw.split(',').map(s => s.trim()).filter(Boolean);
-        }
-      }
-      return titles.some(t => typeof t === 'string' && t.toLowerCase().includes('harpy'));
-    } catch {
-      return false;
-    }
+    return !!user && (await getCourtContext(user)).can.harpy;
   }
 
   // 2. Update status, titles, image_url, or modifiers (Admin only)
   fastify.patch('/api/admin/camarilla/update', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const { id, type, field, value } = req.body || {};
-    const isAdminUser = req.user && req.user.role === 'admin';
-
-    if (!isAdminUser) {
-      return reply.status(403).json({ error: 'Admin clearance required' });
-    }
-
     const table = type === 'player' ? 'characters' : 'npcs';
 
     let dbField, dbValue;
@@ -171,7 +147,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true, court_access });
     } catch (e) {
       log.err('Camarilla update failed', { message: e.message });
-      reply.status(500).json({ error: "Database update failed" });
+      reply.status(500).send({ error: "Database update failed" });
     }
   });
 
@@ -181,13 +157,13 @@ module.exports = async function (fastify, opts) {
       const allowed = await isHarpyOrAdmin(req.user);
       if (!allowed) {
         log.warn('Status update denied: user is not a Harpy', { user_id: req.user?.id, role: req.user?.role });
-        return reply.status(403).json({ error: 'Harpy clearance required' });
+        return reply.status(403).send({ error: 'Harpy clearance required' });
       }
 
       const { id, type, status, delta, value } = req.body || {};
       const numId = parseInt(id, 10);
       if (!numId || (type !== 'player' && type !== 'npc')) {
-        return reply.status(400).json({ error: 'Invalid kindred identifier or type' });
+        return reply.status(400).send({ error: 'Invalid kindred identifier or type' });
       }
 
       const table = type === 'player' ? 'characters' : 'npcs';
@@ -197,21 +173,21 @@ module.exports = async function (fastify, opts) {
         const raw = status !== undefined ? status : value;
         targetStatus = parseInt(raw, 10);
         if (Number.isNaN(targetStatus)) {
-          return reply.status(400).json({ error: 'Status must be a number' });
+          return reply.status(400).send({ error: 'Status must be a number' });
         }
       } else if (delta !== undefined) {
         const numDelta = parseInt(delta, 10);
         if (Number.isNaN(numDelta)) {
-          return reply.status(400).json({ error: 'Delta must be a number' });
+          return reply.status(400).send({ error: 'Delta must be a number' });
         }
         const [rows] = await pool.query(`SELECT status FROM ${table} WHERE id = ?`, [numId]);
         if (!rows.length) {
-          return reply.status(404).json({ error: 'Kindred record not found' });
+          return reply.status(404).send({ error: 'Kindred record not found' });
         }
         const current = rows[0].status ?? 1;
         targetStatus = current + numDelta;
       } else {
-        return reply.status(400).json({ error: 'Status or delta required' });
+        return reply.status(400).send({ error: 'Status or delta required' });
       }
 
       // Clamp status between 0 and 5
@@ -223,7 +199,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true, id: numId, type, status: clampedStatus });
     } catch (e) {
       log.err('Status update failed', { message: e.message });
-      reply.status(500).json({ error: 'Database update failed' });
+      reply.status(500).send({ error: 'Database update failed' });
     }
   });
 

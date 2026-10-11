@@ -14,12 +14,12 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/push/subscribe', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       // Upserting by endpoint would move the admin's own device onto this player.
-      if (req.user.imp) return reply.status(403).json({ error: 'Push subscriptions are disabled in a debug session' });
+      if (req.user.imp) return reply.status(403).send({ error: 'Push subscriptions are disabled in a debug session' });
       const { subscription } = req.body || {};
 
       // Validate that we actually received a proper subscription object
       if (!subscription || !subscription.endpoint) {
-        return reply.status(400).json({ error: 'Valid subscription with endpoint is required' });
+        return reply.status(400).send({ error: 'Valid subscription with endpoint is required' });
       }
 
       const endpoint = subscription.endpoint;
@@ -34,10 +34,10 @@ module.exports = async function (fastify, opts) {
       );
 
       log.ok('Push subscription upserted', { user_id: req.user.id });
-      reply.status(201).json({ ok: true });
+      reply.status(201).send({ ok: true });
     } catch (e) {
       log.err('Push subscribe failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to save subscription' });
+      reply.status(500).send({ error: 'Failed to save subscription' });
     }
   });
 
@@ -45,14 +45,14 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/push/unsubscribe', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const { endpoint } = req.body || {};
-      if (!endpoint) return reply.status(400).json({ error: 'endpoint is required' });
+      if (!endpoint) return reply.status(400).send({ error: 'endpoint is required' });
 
       await pool.query('DELETE FROM push_subscriptions WHERE user_id=? AND endpoint=?', [req.user.id, endpoint]);
       log.ok('Push subscription removed', { user_id: req.user.id });
       reply.send({ ok: true });
     } catch (e) {
       log.err('Push unsubscribe failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to remove subscription' });
+      reply.status(500).send({ error: 'Failed to remove subscription' });
     }
   });
 
@@ -69,7 +69,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true });
     } catch (e) {
       log.err('Push test failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to send test push' });
+      reply.status(500).send({ error: 'Failed to send test push' });
     }
   });
 
@@ -96,7 +96,7 @@ module.exports = async function (fastify, opts) {
       }
       reply.send(settings);
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to fetch settings' });
+      reply.status(500).send({ error: 'Failed to fetch settings' });
     }
   });
 
@@ -125,17 +125,17 @@ module.exports = async function (fastify, opts) {
       await pool.query('UPDATE users SET push_settings=? WHERE id=?', [JSON.stringify(newSettings), req.user.id]);
       reply.send({ ok: true });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to save settings' });
+      reply.status(500).send({ error: 'Failed to save settings' });
     }
   });
 
   // PWA Web Push Subscription (auth required)
   fastify.post('/api/push/web-subscribe', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      if (req.user.imp) return reply.status(403).json({ error: 'Push subscriptions are disabled in a debug session' });
+      if (req.user.imp) return reply.status(403).send({ error: 'Push subscriptions are disabled in a debug session' });
       const { subscription } = req.body || {};
       if (!subscription || !subscription.endpoint) {
-        return reply.status(400).json({ error: 'Valid subscription required' });
+        return reply.status(400).send({ error: 'Valid subscription required' });
       }
 
       await pool.query(
@@ -145,10 +145,10 @@ module.exports = async function (fastify, opts) {
         [req.user.id, subscription.endpoint, subscription.keys.p256dh, subscription.keys.auth]
       );
 
-      reply.status(201).json({ ok: true });
+      reply.status(201).send({ ok: true });
     } catch (e) {
       log.err('Web Push subscribe failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to save subscription' });
+      reply.status(500).send({ error: 'Failed to save subscription' });
     }
   });
 };

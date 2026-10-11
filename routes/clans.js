@@ -19,7 +19,7 @@ module.exports = async function (fastify, opts) {
       try { disabledClans = JSON.parse(raw); } catch { disabledClans = DEFAULT_DISABLED_CLANS; }
       reply.send({ disabledClans });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to fetch clan config' });
+      reply.status(500).send({ error: 'Failed to fetch clan config' });
     }
   });
 
@@ -28,7 +28,7 @@ module.exports = async function (fastify, opts) {
     try {
       const { disabledClans } = req.body;
       if (!Array.isArray(disabledClans) || !disabledClans.every(c => typeof c === 'string' && isValidClanName(c))) {
-        return reply.status(400).json({ error: 'disabledClans must be an array of valid clan names' });
+        return reply.status(400).send({ error: 'disabledClans must be an array of valid clan names' });
       }
 
       await setSetting('disabled_clans', JSON.stringify(disabledClans));
@@ -36,7 +36,7 @@ module.exports = async function (fastify, opts) {
 
       reply.send({ ok: true, disabledClans });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to update clan config' });
+      reply.status(500).send({ error: 'Failed to update clan config' });
     }
   });
 };

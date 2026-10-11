@@ -4,7 +4,7 @@
 //
 // Why this is hand-rolled instead of `@fastify/compress` in global mode:
 // almost every handler in this codebase ends with a bare `reply.send(x)`
-// (or `reply.status(n).json(x)`) rather than `return reply.send(x)` — ~490
+// (or `reply.status(n).send(x)`) rather than `return reply.send(x)` — ~490
 // call sites. `@fastify/compress`'s global hook makes `reply.send()` resolve
 // asynchronously, so those handlers' promises settle as `undefined` while the
 // reply is still in flight and Fastify ships a second, empty response — the

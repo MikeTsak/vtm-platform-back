@@ -4,6 +4,7 @@
 // the admin grant directory.
 const { DOMAIN_OVERLAY_KEYS, resolveOverlayAccess } = require('../services/domainOverlays');
 
+const guards = require('../services/guards');
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired } = opts;
 
@@ -104,7 +105,7 @@ module.exports = async function (fastify, opts) {
       return reply.status(400).send({ error: 'bad parameters' });
     }
     try {
-      if (req.user.role !== 'admin') {
+      if (!guards.isAdmin(req.user)) {
         const [[row]] = await pool.query(
           'SELECT granted_by FROM domain_overlay_grants WHERE user_id=? AND overlay_key=?',
           [userId, overlayKey],

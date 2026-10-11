@@ -7,6 +7,7 @@ const { sanitizeRichText } = require('../utils/sanitize');
 const { isVideoUrl, resolveMediaUrl } = require('../services/news');
 const { parseSheet } = require('../utils/sheet');
 
+const guards = require('../services/guards');
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, broadcastNtfyAlert } = opts;
 
@@ -29,7 +30,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ items: rows.map(r => ({ ...r, theme: 'RUMOR', type: 'news' })) });
     } catch (e) {
       log.err('Fetch rumors failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to load rumors' });
+      reply.status(500).send({ error: 'Failed to load rumors' });
     }
   });
 
@@ -37,10 +38,10 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/rumors/:id', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const [rows] = await pool.query('SELECT * FROM rumors WHERE id = ?', [req.params.id]);
-      if (!rows.length) return reply.status(404).json({ error: 'Rumor not found' });
+      if (!rows.length) return reply.status(404).send({ error: 'Rumor not found' });
       reply.send(rows[0]);
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to fetch rumor' });
+      reply.status(500).send({ error: 'Failed to fetch rumor' });
     }
   });
 
@@ -49,7 +50,7 @@ module.exports = async function (fastify, opts) {
     try {
       const { title, body, media_url, discord_prefix } = req.body;
 
-      if (req.user.role !== 'admin' && req.user.role !== 'courtuser') {
+      if (!guards.isCourt(req.user)) {
         const [chars] = await pool.query('SELECT id, sheet FROM characters WHERE user_id = ?', [req.user.id]);
         let isActive = false;
         if (chars.length > 0) {
@@ -57,11 +58,11 @@ module.exports = async function (fastify, opts) {
           if (sheetData && sheetData.is_active) isActive = true;
         }
         if (!isActive) {
-          return reply.status(403).json({ error: 'You must have an active character to post rumors.' });
+          return reply.status(403).send({ error: 'You must have an active character to post rumors.' });
         }
       }
 
-      if (!title || !body) return reply.status(400).json({ error: 'Title and Body are required' });
+      if (!title || !body) return reply.status(400).send({ error: 'Title and Body are required' });
 
       const safeBody = sanitizeRichText(body); // strip active markup before persisting (XSS)
 
@@ -124,7 +125,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true });
     } catch (e) {
       log.err('Create rumor failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to post' });
+      reply.status(500).send({ error: 'Failed to post' });
     }
   });
 
@@ -199,7 +200,7 @@ module.exports = async function (fastify, opts) {
       await pool.query('DELETE FROM rumors WHERE id=?', [req.params.id]);
       reply.send({ ok: true });
     } catch (e) {
-      reply.status(500).json({ error: 'Delete failed' });
+      reply.status(500).send({ error: 'Delete failed' });
     }
   });
 };

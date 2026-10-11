@@ -28,7 +28,7 @@ module.exports = async function (fastify, opts) {
         masquerade_threat_level: parseInt(threat, 10)
       });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to fetch banner config' });
+      reply.status(500).send({ error: 'Failed to fetch banner config' });
     }
   });
 
@@ -84,9 +84,10 @@ module.exports = async function (fastify, opts) {
     try {
       const { banner_enabled, banner_message, banner_countdown } = req.body;
 
-      await setSetting('banner_enabled', String(banner_enabled));
-      await setSetting('banner_message', sanitizeRichText(banner_message || ''));
-      await setSetting('banner_countdown', banner_countdown || '');
+      // Partial save: the Banner editor sends all three, the Calendar only the countdown.
+      if (banner_enabled !== undefined) await setSetting('banner_enabled', String(banner_enabled));
+      if (banner_message !== undefined) await setSetting('banner_message', sanitizeRichText(banner_message || ''));
+      if (banner_countdown !== undefined) await setSetting('banner_countdown', banner_countdown || '');
 
       log.adm('Global banner updated', { admin_id: req.user.id });
 
@@ -95,7 +96,7 @@ module.exports = async function (fastify, opts) {
 
       reply.send({ ok: true });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to update banner config' });
+      reply.status(500).send({ error: 'Failed to update banner config' });
     }
   });
 };

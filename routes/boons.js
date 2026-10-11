@@ -57,7 +57,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ entities: [...players, ...nonPlayers] });
     } catch (e) {
       log.err('Failed to get boon entities', { message: e.message });
-      reply.status(500).json({ error: 'Failed to fetch entities' });
+      reply.status(500).send({ error: 'Failed to fetch entities' });
     }
   });
 
@@ -74,7 +74,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ boons });
     } catch (e) {
       log.err('Failed to get boons', { message: e.message });
-      reply.status(500).json({ error: 'Failed to fetch boons' });
+      reply.status(500).send({ error: 'Failed to fetch boons' });
     }
   });
 
@@ -84,7 +84,7 @@ module.exports = async function (fastify, opts) {
       const { from_name, to_name, level, status, description } = req.body;
 
       if (!from_name || !to_name || !level || !status) {
-        return reply.status(400).json({ error: 'From, To, Level, and Status are required' });
+        return reply.status(400).send({ error: 'From, To, Level, and Status are required' });
       }
 
       const [r] = await pool.query(
@@ -95,7 +95,7 @@ module.exports = async function (fastify, opts) {
 
       const [[boon]] = await pool.query(`${BOON_SELECT_SQL} WHERE b.id=?`, [r.insertId]);
       log.adm('Boon created', { id: r.insertId, by_user_id: req.user.id });
-      reply.status(201).json({ boon });
+      reply.status(201).send({ boon });
 
     } catch (e) {
       log.err('Failed to create boon', { message: e.message, stack: e.stack });
@@ -111,7 +111,7 @@ module.exports = async function (fastify, opts) {
         errorMessage = `Server Error: ${e.message}`;
       }
 
-      reply.status(500).json({ error: errorMessage });
+      reply.status(500).send({ error: errorMessage });
     }
   });
 
@@ -140,7 +140,7 @@ module.exports = async function (fastify, opts) {
       if (description !== undefined) { fields.push('description=?'); vals.push(description); }
 
       if (!fields.length) {
-        return reply.status(400).json({ error: 'Nothing to update' });
+        return reply.status(400).send({ error: 'Nothing to update' });
       }
 
       vals.push(id);
@@ -152,7 +152,7 @@ module.exports = async function (fastify, opts) {
 
     } catch (e) {
       log.err('Failed to update boon', { message: e.message });
-      reply.status(500).json({ error: `Failed to update boon: ${e.message}` });
+      reply.status(500).send({ error: `Failed to update boon: ${e.message}` });
     }
   });
 
@@ -165,7 +165,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true });
     } catch (e) {
       log.err('Failed to delete boon', { message: e.message });
-      reply.status(500).json({ error: 'Failed to delete boon' });
+      reply.status(500).send({ error: 'Failed to delete boon' });
     }
   });
 
@@ -176,7 +176,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ boons });
     } catch (e) {
       log.err('Admin boons fetch failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to fetch boons' });
+      reply.status(500).send({ error: 'Failed to fetch boons' });
     }
   });
 };

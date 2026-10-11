@@ -74,7 +74,7 @@ module.exports = async function (fastify, opts) {
       });
     } catch (e) {
       log.err('Admin list premonitions failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to load premonitions' });
+      reply.status(500).send({ error: 'Failed to load premonitions' });
     }
   });
 
@@ -106,7 +106,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ malkavians: rows });
     } catch (e) {
       log.err('Failed to get Malkavian list', { message: e.message });
-      reply.status(500).json({ error: 'Failed to get Malkavians' });
+      reply.status(500).send({ error: 'Failed to get Malkavians' });
     }
   });
 
@@ -164,7 +164,7 @@ module.exports = async function (fastify, opts) {
       const sendToAllMalks = user_ids.includes('all_malkavians');
 
       if (!content_type || (!content_text && !content_url)) {
-        return reply.status(400).json({ error: 'Type and content (text or URL) are required' });
+        return reply.status(400).send({ error: 'Type and content (text or URL) are required' });
       }
 
       let normalizedWarnings = [];
@@ -274,12 +274,12 @@ module.exports = async function (fastify, opts) {
       }
 
       log.adm('Admin sent premonition', { id: premonitionId, by_user_id: req.user.id, targets: sendToAllMalks ? 'all_malks' : targetUserIds });
-      reply.status(201).json({ ok: true, premonition_id: premonitionId, count: targetUserIds.length });
+      reply.status(201).send({ ok: true, premonition_id: premonitionId, count: targetUserIds.length });
 
 
     } catch (e) {
       log.err('Failed to send premonition', { message: e.message, stack: e.stack });
-      reply.status(500).json({ error: 'Failed to send premonition' });
+      reply.status(500).send({ error: 'Failed to send premonition' });
     }
   });
 
@@ -316,7 +316,7 @@ module.exports = async function (fastify, opts) {
 
       // Cache control
       reply.header('Cache-Control', 'no-store');
-      reply.status(200).json({
+      reply.status(200).send({
         premonitions: rows.map(r => ({
           ...r,
           warnings: parseWarnings(r.warnings)
@@ -324,7 +324,7 @@ module.exports = async function (fastify, opts) {
       });
     } catch (e) {
       log.err('Failed to get my premonitions', { message: e.message });
-      reply.status(500).json({ error: 'Failed to load premonitions' });
+      reply.status(500).send({ error: 'Failed to load premonitions' });
     }
   });
 
@@ -416,7 +416,7 @@ module.exports = async function (fastify, opts) {
       reply.send(data); // send raw blob
     } catch (e) {
       log.err('Failed to stream media', { message: e.message });
-      reply.status(500).json({ error: 'Failed to stream media' });
+      reply.status(500).send({ error: 'Failed to stream media' });
     }
   });
 };

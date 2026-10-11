@@ -219,3 +219,20 @@ describe('POST /api/auth/reset — token revocation', () => {
     expect(meRes.statusCode).toBe(200);
   });
 });
+
+describe('role is read live, not from the login-time JWT', () => {
+  it('an existing session sees a role change through the admin PATCH without logging in again', async () => {
+    const admin = await registerUser(app);
+    await pool.query("UPDATE users SET role='admin' WHERE id=?", [admin.user.id]);
+    const adminLogin = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: admin.email, password: admin.password } });
+    const adminCookie = extractSessionCookie(adminLogin);
+
+    const player = await registerUser(app); // cookie minted while still a plain user
+    const roleOf = async () => JSON.parse((await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: player.cookie } })).body).user.role;
+    expect(await roleOf()).toBe('user');
+
+    const patch = await app.inject({ method: 'PATCH', url: `/api/admin/users/${player.user.id}`, headers: { cookie: adminCookie }, payload: { role: 'courtuser' } });
+    expect(patch.statusCode).toBe(200);
+    expect(await roleOf()).toBe('courtuser'); // same cookie, no re-login
+  });
+});

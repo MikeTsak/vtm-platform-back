@@ -16,7 +16,7 @@ module.exports = async function (fastify, opts) {
   // id. Admins can always see everything (moderation).
   async function canAccessChatMedia(mediaId, user) {
     if (!mediaId || !user) return false;
-    if (user.role === 'admin') return true;
+    if (checkIsAdmin(user)) return true;
 
     const [rows] = await pool.query(
       `SELECT 1 FROM chat_media WHERE id = ? AND uploader_id = ?
@@ -60,7 +60,7 @@ module.exports = async function (fastify, opts) {
   // Any current member (or a global admin) may rename a group, change its
   // icon, or add/kick members — this isn't creator-only.
   async function isMemberOrAdmin(groupId, user) {
-    if (user.role === 'admin') return true;
+    if (checkIsAdmin(user)) return true;
     const [rows] = await pool.query('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?', [groupId, user.id]);
     return rows.length > 0;
   }
@@ -187,7 +187,7 @@ module.exports = async function (fastify, opts) {
       }
       reply.send({ conversations: uniqueConvos });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to load recent chats' });
+      reply.status(500).send({ error: 'Failed to load recent chats' });
     }
   });
 
@@ -288,7 +288,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ count: Number(row.dms) + Number(row.grp) + Number(row.npc) });
     } catch (e) {
       log.err('Failed to count unread chat', { message: e.message });
-      reply.status(500).json({ error: 'Failed to count unread' });
+      reply.status(500).send({ error: 'Failed to count unread' });
     }
   });
 
@@ -325,7 +325,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ groups: rows });
     } catch (e) {
       log.err('Failed to get chat groups', { message: e.message });
-      reply.status(500).json({ error: 'Failed to get groups' });
+      reply.status(500).send({ error: 'Failed to get groups' });
     }
   });
 
@@ -340,7 +340,7 @@ module.exports = async function (fastify, opts) {
       if (fastify.io) fastify.io.to(`user_${req.user.id}`).emit('chat:refresh', { type: 'read', groupId });
       reply.send({ ok: true });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to mark group as read' });
+      reply.status(500).send({ error: 'Failed to mark group as read' });
     }
   });
 
@@ -350,7 +350,7 @@ module.exports = async function (fastify, opts) {
     try {
       const { name, members = [], icon } = req.body; // members is array of user_ids
       if (!name || !members.length) {
-        return reply.status(400).json({ error: 'Name and at least one other member required' });
+        return reply.status(400).send({ error: 'Name and at least one other member required' });
       }
       // icon: a literal emoji character, or a ':Clan_Name:' crest token
       // (same convention as chat_message_reactions.emoji) — capped the same
@@ -374,12 +374,12 @@ module.exports = async function (fastify, opts) {
       // Fetch and return the new group object
       const [rows] = await pool.query('SELECT * FROM chat_groups WHERE id=?', [groupId]);
       log.ok('Group created', { user_id: req.user.id, group_id: groupId, name });
-      reply.status(201).json({ group: rows[0] });
+      reply.status(201).send({ group: rows[0] });
 
     } catch (e) {
       await conn.rollback();
       log.err('Failed to create group', { message: e.message });
-      reply.status(500).json({ error: 'Failed to create group' });
+      reply.status(500).send({ error: 'Failed to create group' });
     } finally {
       conn.release();
     }
@@ -393,7 +393,7 @@ module.exports = async function (fastify, opts) {
 
       // 1. Verify Membership
       const [m] = await pool.query('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?', [groupId, userId]);
-      if (!m.length) return reply.status(403).json({ error: 'Not a member of this group' });
+      if (!m.length) return reply.status(403).send({ error: 'Not a member of this group' });
 
       // 2. Fetch Messages
       const w = await historyWindow(pool, 'chat_group_messages', 'm', req.query);
@@ -420,7 +420,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ messages, has_more: w.hasMore(messages), settings });
     } catch (e) {
       log.err('Failed to get group history', { message: e.message });
-      reply.status(500).json({ error: 'Failed to get history' });
+      reply.status(500).send({ error: 'Failed to get history' });
     }
   });
 
@@ -431,7 +431,7 @@ module.exports = async function (fastify, opts) {
 
       // Check if user is in group or is admin
       const [m] = await pool.query('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?', [groupId, req.user.id]);
-      if (!m.length && req.user.role !== 'admin') return reply.status(403).json({ error: 'Not a member' });
+      if (!m.length && !checkIsAdmin(req.user)) return reply.status(403).send({ error: 'Not a member' });
 
       const [members] = await pool.query(`
       SELECT u.id, u.display_name, c.name as char_name, c.clan,
@@ -444,7 +444,7 @@ module.exports = async function (fastify, opts) {
     `, [groupId]);
       reply.send({ members: members.map(({ titles, court_status, is_hidden, ...m }) => ({ ...m, ...courtStanding({ titles, court_status, is_hidden }) })) });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to get members' });
+      reply.status(500).send({ error: 'Failed to get members' });
     }
   });
 
@@ -454,14 +454,14 @@ module.exports = async function (fastify, opts) {
     try {
       const groupId = Number(req.params.id);
       const { members } = req.body;
-      if (!members || !members.length) return reply.status(400).json({ error: 'No members provided' });
+      if (!members || !members.length) return reply.status(400).send({ error: 'No members provided' });
 
       const [g] = await pool.query('SELECT created_by FROM chat_groups WHERE id=?', [groupId]);
-      if (!g.length) return reply.status(404).json({ error: 'Group not found' });
-      if (!(await isMemberOrAdmin(groupId, req.user))) return reply.status(403).json({ error: 'Not a member of this group' });
+      if (!g.length) return reply.status(404).send({ error: 'Group not found' });
+      if (!(await isMemberOrAdmin(groupId, req.user))) return reply.status(403).send({ error: 'Not a member of this group' });
 
       const requestedIds = members.map(Number).filter(v => !isNaN(v));
-      if (!requestedIds.length) return reply.status(400).json({ error: 'No members provided' });
+      if (!requestedIds.length) return reply.status(400).send({ error: 'No members provided' });
 
       // Only the ids that weren't already members get a system line — an
       // INSERT IGNORE on an existing member is a silent no-op and shouldn't
@@ -486,7 +486,7 @@ module.exports = async function (fastify, opts) {
 
       reply.send({ ok: true });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to add members' });
+      reply.status(500).send({ error: 'Failed to add members' });
     }
   });
 
@@ -499,11 +499,11 @@ module.exports = async function (fastify, opts) {
       const targetUserId = Number(req.params.userId);
 
       const [g] = await pool.query('SELECT created_by FROM chat_groups WHERE id=?', [groupId]);
-      if (!g.length) return reply.status(404).json({ error: 'Group not found' });
+      if (!g.length) return reply.status(404).send({ error: 'Group not found' });
 
-      if (!(await isMemberOrAdmin(groupId, req.user))) return reply.status(403).json({ error: 'Not a member of this group' });
+      if (!(await isMemberOrAdmin(groupId, req.user))) return reply.status(403).send({ error: 'Not a member of this group' });
 
-      if (g[0].created_by === targetUserId) return reply.status(400).json({ error: 'Cannot remove creator' });
+      if (g[0].created_by === targetUserId) return reply.status(400).send({ error: 'Cannot remove creator' });
 
       await pool.query('DELETE FROM chat_group_members WHERE group_id=? AND user_id=?', [groupId, targetUserId]);
 
@@ -515,7 +515,7 @@ module.exports = async function (fastify, opts) {
 
       reply.send({ ok: true });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to remove member' });
+      reply.status(500).send({ error: 'Failed to remove member' });
     }
   });
 
@@ -524,14 +524,14 @@ module.exports = async function (fastify, opts) {
     try {
       const groupId = Number(req.params.id);
       const [g] = await pool.query('SELECT created_by FROM chat_groups WHERE id=?', [groupId]);
-      if (!g.length) return reply.status(404).json({ error: 'Group not found' });
-      if (!isOwnerOrAdmin(req.user, g[0].created_by)) return reply.status(403).json({ error: 'Only the creator can delete this group' });
+      if (!g.length) return reply.status(404).send({ error: 'Group not found' });
+      if (!isOwnerOrAdmin(req.user, g[0].created_by)) return reply.status(403).send({ error: 'Only the creator can delete this group' });
 
       // ON DELETE CASCADE will automatically wipe the chat_group_members and chat_group_messages
       await pool.query('DELETE FROM chat_groups WHERE id=?', [groupId]);
       reply.send({ ok: true });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to delete group' });
+      reply.status(500).send({ error: 'Failed to delete group' });
     }
   });
 
@@ -544,8 +544,8 @@ module.exports = async function (fastify, opts) {
       const groupIcon = typeof icon === 'string' && icon.trim() && icon.length <= 32 ? icon.trim() : null;
 
       const [g] = await pool.query('SELECT created_by FROM chat_groups WHERE id=?', [groupId]);
-      if (!g.length) return reply.status(404).json({ error: 'Group not found' });
-      if (!(await isMemberOrAdmin(groupId, req.user))) return reply.status(403).json({ error: 'Not a member of this group' });
+      if (!g.length) return reply.status(404).send({ error: 'Group not found' });
+      if (!(await isMemberOrAdmin(groupId, req.user))) return reply.status(403).send({ error: 'Not a member of this group' });
 
       await pool.query('UPDATE chat_groups SET icon=? WHERE id=?', [groupIcon, groupId]);
 
@@ -557,7 +557,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true, icon: groupIcon });
     } catch (e) {
       log.err('Failed to update group icon', { message: e.message });
-      reply.status(500).json({ error: 'Failed to update group picture' });
+      reply.status(500).send({ error: 'Failed to update group picture' });
     }
   });
 
@@ -567,11 +567,11 @@ module.exports = async function (fastify, opts) {
       const groupId = Number(req.params.id);
       const { name } = req.body || {};
       const newName = typeof name === 'string' ? name.trim() : '';
-      if (!newName || newName.length > 100) return reply.status(400).json({ error: 'Name must be 1-100 characters' });
+      if (!newName || newName.length > 100) return reply.status(400).send({ error: 'Name must be 1-100 characters' });
 
       const [g] = await pool.query('SELECT created_by, name FROM chat_groups WHERE id=?', [groupId]);
-      if (!g.length) return reply.status(404).json({ error: 'Group not found' });
-      if (!(await isMemberOrAdmin(groupId, req.user))) return reply.status(403).json({ error: 'Not a member of this group' });
+      if (!g.length) return reply.status(404).send({ error: 'Group not found' });
+      if (!(await isMemberOrAdmin(groupId, req.user))) return reply.status(403).send({ error: 'Not a member of this group' });
 
       const oldName = g[0].name;
       if (newName === oldName) return reply.send({ ok: true, name: newName });
@@ -584,7 +584,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true, name: newName });
     } catch (e) {
       log.err('Failed to rename group', { message: e.message });
-      reply.status(500).json({ error: 'Failed to rename group' });
+      reply.status(500).send({ error: 'Failed to rename group' });
     }
   });
 
@@ -596,9 +596,9 @@ module.exports = async function (fastify, opts) {
 
       // Verify membership ... (keep existing check)
       const [m] = await pool.query('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?', [groupId, req.user.id]);
-      if (!m.length) return reply.status(403).json({ error: 'Not a member' });
+      if (!m.length) return reply.status(403).send({ error: 'Not a member' });
 
-      if (!attachment_id && (!body || !body.trim())) return reply.status(400).json({ error: 'Content required' });
+      if (!attachment_id && (!body || !body.trim())) return reply.status(400).send({ error: 'Content required' });
 
       const replyTo = await validReplyTo(reply_to_id,
         "SELECT id FROM chat_group_messages WHERE id=? AND group_id=? AND type != 'system'", [groupId]);
@@ -665,10 +665,10 @@ module.exports = async function (fastify, opts) {
         fastify.io.to(`user_${req.user.id}`).emit('chat:refresh', { type: 'group', groupId });
       }
 
-      reply.status(201).json({ message });
+      reply.status(201).send({ message });
     } catch (e) {
       log.err('Group send failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed' });
+      reply.status(500).send({ error: 'Failed' });
     }
   });
 
@@ -695,7 +695,7 @@ module.exports = async function (fastify, opts) {
     `);
       reply.send({ groups });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed' });
+      reply.status(500).send({ error: 'Failed' });
     }
   });
 
@@ -705,7 +705,7 @@ module.exports = async function (fastify, opts) {
       const [messages] = await pool.query('SELECT * FROM chat_group_messages');
       reply.send({ messages });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to fetch group messages' });
+      reply.status(500).send({ error: 'Failed to fetch group messages' });
     }
   });
 
@@ -726,7 +726,7 @@ module.exports = async function (fastify, opts) {
 
       reply.send({ messages });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed' });
+      reply.status(500).send({ error: 'Failed' });
     }
   });
 
@@ -788,7 +788,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ users });
     } catch (e) {
       log.err('Failed to get chat users', { message: e.message, stack: e.stack });
-      reply.status(500).json({ error: 'Failed to get users' });
+      reply.status(500).send({ error: 'Failed to get users' });
     }
   });
 
@@ -838,7 +838,7 @@ module.exports = async function (fastify, opts) {
       const [rows] = await pool.query(query, params);
       reply.send({ npcs: rows.map(({ titles, court_status, is_hidden, ...n }) => ({ ...n, ...courtStanding({ titles, court_status, is_hidden }) })) });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to list NPCs' });
+      reply.status(500).send({ error: 'Failed to list NPCs' });
     }
   });
 
@@ -872,7 +872,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ messages, has_more: w.hasMore(messages), settings });
     } catch (e) {
       log.err('Failed to get chat history', { message: e.message });
-      reply.status(500).json({ error: 'Failed to get history' });
+      reply.status(500).send({ error: 'Failed to get history' });
     }
   });
 
@@ -1145,7 +1145,7 @@ module.exports = async function (fastify, opts) {
 
   // POST /api/chat/upload
   // DUP: fastify.post('/api/chat/upload', { preHandler: [authRequired, async (req, reply) => { /* TODO: Implement multipart parsing here */ }] }, async (req, reply) => {
-  // DUP:   if (!req.file) return reply.status(400).json({ error: 'No file uploaded' });
+  // DUP:   if (!req.file) return reply.status(400).send({ error: 'No file uploaded' });
   // DUP:   try {
   // DUP:     const fileBlob = new Blob([req.file.buffer], { type: req.file.mimetype });
   // DUP:     const ext = req.file.originalname ? req.file.originalname.split('.').pop() : 'bin';
@@ -1162,7 +1162,7 @@ module.exports = async function (fastify, opts) {
   // DUP:     reply.send({ id: ins.insertId, url: uploadRes.url, mime: req.file.mimetype });
   // DUP:   } catch (e) {
   // DUP:     log.err('Chat upload failed', { message: e.message });
-  // DUP:     reply.status(500).json({ error: 'Upload failed' });
+  // DUP:     reply.status(500).send({ error: 'Upload failed' });
   // DUP:   }
   // DUP: });
 
@@ -1182,7 +1182,7 @@ module.exports = async function (fastify, opts) {
 
       reply.send({ url: url || null, mime: rows[0].mime });
     } catch (e) {
-      reply.status(500).json({ error: 'Error fetching media info' });
+      reply.status(500).send({ error: 'Error fetching media info' });
     }
   });
 
@@ -1202,7 +1202,7 @@ module.exports = async function (fastify, opts) {
   // DUP:     if (rows[0].mime) reply.header('Content-Type', rows[0].mime);
   // DUP:     reply.send(rows[0].data);
   // DUP:   } catch (e) {
-  // DUP:     reply.status(500).json({ error: 'Error fetching media' });
+  // DUP:     reply.status(500).send({ error: 'Error fetching media' });
   // DUP:   }
   // DUP: });
 
@@ -1279,19 +1279,19 @@ module.exports = async function (fastify, opts) {
   fastify.put('/api/chat/messages/:id', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const { body, table } = req.body || {};
-      if (!body || !body.trim()) return reply.status(400).json({ error: 'Message body cannot be empty.' });
+      if (!body || !body.trim()) return reply.status(400).send({ error: 'Message body cannot be empty.' });
 
       const { msg, isAdmin, status, error } = await loadOwnMessage(req, table, 'edit');
-      if (error) return reply.status(status).json({ error });
+      if (error) return reply.status(status).send({ error });
       if (!isAdmin && await hasBeenAnsweredSince(table, msg)) {
-        return reply.status(403).json({ error: 'This message has already been answered and can no longer be edited.' });
+        return reply.status(403).send({ error: 'This message has already been answered and can no longer be edited.' });
       }
 
       await pool.query(`UPDATE ${table} SET body = ?, edited = 1 WHERE id = ?`, [body.trim(), msg.id]);
       emitMessageChanged(await messageRooms(table, msg.id).catch(() => []), table, msg.id, 'edit');
       return reply.send({ ok: true, edited: true });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to edit message.' });
+      reply.status(500).send({ error: 'Failed to edit message.' });
     }
   });
 
@@ -1300,14 +1300,14 @@ module.exports = async function (fastify, opts) {
     try {
       const table = req.query.table;
       const { msg, status, error } = await loadOwnMessage(req, table, 'delete');
-      if (error) return reply.status(status).json({ error });
+      if (error) return reply.status(status).send({ error });
 
       const rooms = await messageRooms(table, msg.id).catch(() => []);
       await pool.query(`DELETE FROM ${table} WHERE id = ?`, [msg.id]);
       emitMessageChanged(rooms, table, msg.id, 'delete');
       return reply.send({ ok: true });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to delete message.' });
+      reply.status(500).send({ error: 'Failed to delete message.' });
     }
   });
 
@@ -1315,7 +1315,7 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/chat/delivered', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const { sender_id } = req.body;
-      if (!sender_id) return reply.status(400).json({ error: 'sender_id is required' });
+      if (!sender_id) return reply.status(400).send({ error: 'sender_id is required' });
 
       await pool.query(
         'UPDATE chat_messages SET delivered_at = NOW() WHERE sender_id = ? AND recipient_id = ? AND delivered_at IS NULL',
@@ -1324,7 +1324,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true });
     } catch (e) {
       log.err('Failed to mark messages as delivered', { message: e.message });
-      reply.status(500).json({ error: 'Failed' });
+      reply.status(500).send({ error: 'Failed' });
     }
   });
 
@@ -1365,7 +1365,7 @@ module.exports = async function (fastify, opts) {
 
       reply.send({ ok: true });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to mark as read' });
+      reply.status(500).send({ error: 'Failed to mark as read' });
     }
   });
 
@@ -1420,18 +1420,18 @@ module.exports = async function (fastify, opts) {
     try {
       const { kind, id, user_id } = req.body || {};
       const conv = await resolveConversation(req, kind, id, user_id);
-      if (conv.error) return reply.status(conv.error).json({ error: 'Conversation not found' });
+      if (conv.error) return reply.status(conv.error).send({ error: 'Conversation not found' });
 
       const current = await loadConvSettings(pool, conv.key);
       const next = { ...current };
       if ('theme' in req.body) {
         const theme = req.body.theme || null;
-        if (theme !== null && !THEME_RE.test(theme)) return reply.status(400).json({ error: 'Invalid theme' });
+        if (theme !== null && !THEME_RE.test(theme)) return reply.status(400).send({ error: 'Invalid theme' });
         next.theme = theme;
       }
       if ('emoji' in req.body) {
         const emoji = req.body.emoji ? String(req.body.emoji).trim() : null;
-        if (emoji !== null && (!emoji || emoji.length > 32)) return reply.status(400).json({ error: 'Invalid emoji' });
+        if (emoji !== null && (!emoji || emoji.length > 32)) return reply.status(400).send({ error: 'Invalid emoji' });
         next.emoji = emoji;
       }
 
@@ -1455,7 +1455,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ settings: next });
     } catch (e) {
       log.err('Failed to save chat settings', { message: e.message });
-      reply.status(500).json({ error: 'Failed to save settings' });
+      reply.status(500).send({ error: 'Failed to save settings' });
     }
   });
 
@@ -1467,7 +1467,7 @@ module.exports = async function (fastify, opts) {
       const q = String(req.query.q || '').trim();
       if (q.length < 2) return reply.send({ results: [] });
       const conv = await resolveConversation(req, kind, id, user_id);
-      if (conv.error) return reply.status(conv.error).json({ error: 'Conversation not found' });
+      if (conv.error) return reply.status(conv.error).send({ error: 'Conversation not found' });
 
       const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
       const [results] = await pool.query(
@@ -1481,7 +1481,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ results });
     } catch (e) {
       log.err('Chat search failed', { message: e.message });
-      reply.status(500).json({ error: 'Search failed' });
+      reply.status(500).send({ error: 'Search failed' });
     }
   });
 
@@ -1490,7 +1490,7 @@ module.exports = async function (fastify, opts) {
     try {
       const { kind, id, user_id, before } = req.query;
       const conv = await resolveConversation(req, kind, id, user_id);
-      if (conv.error) return reply.status(conv.error).json({ error: 'Conversation not found' });
+      if (conv.error) return reply.status(conv.error).send({ error: 'Conversation not found' });
 
       const LIMIT = 30;
       const [media] = await pool.query(
@@ -1504,7 +1504,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ media, has_more: media.length === LIMIT });
     } catch (e) {
       log.err('Chat media list failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to load media' });
+      reply.status(500).send({ error: 'Failed to load media' });
     }
   });
 
@@ -1530,7 +1530,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ messages });
     } catch (e) {
       log.err('Failed to get all chat messages for admin', { message: e.message });
-      reply.status(500).json({ error: 'Failed to fetch messages' });
+      reply.status(500).send({ error: 'Failed to fetch messages' });
     }
   });
 };

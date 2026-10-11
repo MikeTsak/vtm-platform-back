@@ -6,11 +6,12 @@ const { insertRoll, formatRoll } = require('../services/rolls');
 const { rollD10 } = require('../services/dice');
 const { getSessionInternalId, getSessionRow, emitSessionRefresh, closeSession, onlineUserIds, removeUserSockets } = require('../services/liveSession');
 
+const guards = require('../services/guards');
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, moderateLimiter } = opts;
 
   // Same staff notion as the socket join_session handler.
-  const isStaff = (u) => u?.role === 'admin' || u?.role === 'courtuser';
+  const isStaff = guards.isCourt;
 
   // Everything a session exposes is for its participants and staff only: the
   // 8-character code (DDMMYY##) is guessable, so it is not an access secret.
@@ -52,7 +53,7 @@ module.exports = async function (fastify, opts) {
       log.adm('Started new Live Session', { code: sessionCode, admin: req.user.id });
       reply.send({ id: sessionCode, internal_id: r.insertId, name, session_code: sessionCode });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to create session' });
+      reply.status(500).send({ error: 'Failed to create session' });
     }
   });
 
@@ -60,14 +61,14 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/live-session/:id/end', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const [rows] = await pool.query('SELECT id, session_code, created_at, status FROM live_sessions WHERE session_code=? OR id=?', [req.params.id, req.params.id]);
-      if (!rows.length) return reply.status(404).json({ error: 'Session not found' });
+      if (!rows.length) return reply.status(404).send({ error: 'Session not found' });
       if (rows[0].status === 'ended') return reply.send({ ok: true, message: 'Already ended' });
 
       const duration = await closeSession(fastify.io, rows[0], req.user?.id || null);
       log.adm('Live Session Ended', { session: req.params.id, duration_seconds: duration });
       reply.send({ ok: true, duration_seconds: duration });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to end session' });
+      reply.status(500).send({ error: 'Failed to end session' });
     }
   });
 
@@ -88,7 +89,7 @@ module.exports = async function (fastify, opts) {
     `);
       reply.send({ sessions });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to fetch sessions' });
+      reply.status(500).send({ error: 'Failed to fetch sessions' });
     }
   });
 
@@ -109,10 +110,10 @@ module.exports = async function (fastify, opts) {
       'SELECT s.*, u.display_name as admin_name FROM live_sessions s LEFT JOIN users u ON s.admin_id = u.id WHERE s.session_code=? OR s.id=?',
       [req.params.id, req.params.id]
     );
-    if (!rows.length) return reply.status(404).json({ error: 'Session not found' });
+    if (!rows.length) return reply.status(404).send({ error: 'Session not found' });
     const s = rows[0];
     if (!isStaff(req.user)) {
-      if (!(await isParticipant(req, s.id))) return reply.status(403).json({ error: 'Not a participant in this session' });
+      if (!(await isParticipant(req, s.id))) return reply.status(403).send({ error: 'Not a participant in this session' });
       if (s.status === 'ended') return reply.send({ session: { id: s.id, session_code: s.session_code, status: 'ended' } });
     }
     try { s.metadata = typeof s.metadata === 'string' ? JSON.parse(s.metadata) : (s.metadata || {}); } catch (e) { s.metadata = {}; }
@@ -140,8 +141,8 @@ module.exports = async function (fastify, opts) {
   // Join a session
   fastify.post('/api/live-session/:id/join', { preHandler: [authRequired] }, async (req, reply) => {
     const session = await getSessionRow(req.params.id);
-    if (!session) return reply.status(404).json({ error: 'Session not found' });
-    if (session.status === 'ended') return reply.status(400).json({ error: 'That session has ended.' });
+    if (!session) return reply.status(404).send({ error: 'Session not found' });
+    if (session.status === 'ended') return reply.status(400).send({ error: 'That session has ended.' });
     const internalId = session.id;
 
     let { characterId } = req.body || {};
@@ -168,7 +169,7 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/live-session/:id/rolls', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const session = await getSessionRow(req.params.id);
-      if (!(await canRead(req, session))) return reply.status(403).json({ error: 'Not a participant in this session' });
+      if (!(await canRead(req, session))) return reply.status(403).send({ error: 'Not a participant in this session' });
       const internalId = session.id;
       const [rows] = await pool.query(
         `SELECT r.*, COALESCE(r.character_name, c.name) AS character_name
@@ -182,7 +183,7 @@ module.exports = async function (fastify, opts) {
       );
       reply.send({ rolls: rows.map(formatRoll) });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to fetch rolls' });
+      reply.status(500).send({ error: 'Failed to fetch rolls' });
     }
   });
 
@@ -191,12 +192,12 @@ module.exports = async function (fastify, opts) {
   const FEED_EVENTS = new Set(['discipline_activation', 'discipline_deactivation']);
   fastify.post('/api/live-session/:id/rolls', { preHandler: [authRequired] }, async (req, reply) => {
     const session = await getSessionRow(req.params.id);
-    if (!session) return reply.status(404).json({ error: 'Session not found' });
+    if (!session) return reply.status(404).send({ error: 'Session not found' });
     const internalId = session.id;
     const { roll_type, note, is_hidden, disc, power_name } = req.body || {};
-    if (!FEED_EVENTS.has(roll_type)) return reply.status(400).json({ error: 'Dice are rolled by the server: use POST /api/dice/roll.' });
-    if (session.status === 'ended') return reply.status(400).json({ error: 'That session has ended.' });
-    if (!(await canRead(req, session))) return reply.status(403).json({ error: 'Not a participant in this session' });
+    if (!FEED_EVENTS.has(roll_type)) return reply.status(400).send({ error: 'Dice are rolled by the server: use POST /api/dice/roll.' });
+    if (session.status === 'ended') return reply.status(400).send({ error: 'That session has ended.' });
+    if (!(await canRead(req, session))) return reply.status(403).send({ error: 'Not a participant in this session' });
 
     try {
       const [[ch]] = await pool.query('SELECT id, name FROM characters WHERE user_id=? LIMIT 1', [req.user.id]);
@@ -209,14 +210,14 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true });
     } catch (e) {
       log.err('Failed to log live session event', { message: e.message });
-      reply.status(500).json({ error: 'Failed to log event' });
+      reply.status(500).send({ error: 'Failed to log event' });
     }
   });
 
   fastify.get('/api/live-session/:id/players', { preHandler: [authRequired] }, async (req, reply) => {
     const session = await getSessionRow(req.params.id);
-    if (!session) return reply.status(404).json({ error: 'Session not found' });
-    if (!(await canRead(req, session))) return reply.status(403).json({ error: 'Not a participant in this session' });
+    if (!session) return reply.status(404).send({ error: 'Session not found' });
+    if (!(await canRead(req, session))) return reply.status(403).send({ error: 'Not a participant in this session' });
     const internalId = session.id;
     const [players] = await pool.query(`
       SELECT 
@@ -246,7 +247,7 @@ module.exports = async function (fastify, opts) {
   // the code if the removal was a mistake.
   fastify.delete('/api/live-session/:id/participants/:userId', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const session = await getSessionRow(req.params.id);
-    if (!session) return reply.status(404).json({ error: 'Session not found' });
+    if (!session) return reply.status(404).send({ error: 'Session not found' });
     await pool.query('DELETE FROM live_session_participants WHERE session_id=? AND user_id=?', [session.id, req.params.userId]);
     await removeUserSockets(fastify.io, session, req.params.userId);
     await emitSessionRefresh(fastify.io, session.id);
@@ -265,7 +266,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true });
     } catch (e) {
       console.error(e);
-      reply.status(500).json({ error: 'Failed to update metadata' });
+      reply.status(500).send({ error: 'Failed to update metadata' });
     }
   });
 
@@ -284,13 +285,13 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/live-session/:id/signal', { preHandler: [authRequired, moderateLimiter] }, async (req, reply) => {
     try {
       const session = await getSessionRow(req.params.id);
-      if (!session) return reply.status(404).json({ error: 'Session not found' });
-      if (session.status === 'ended') return reply.status(400).json({ error: 'That session has ended.' });
+      if (!session) return reply.status(404).send({ error: 'Session not found' });
+      if (session.status === 'ended') return reply.status(400).send({ error: 'That session has ended.' });
       const internalId = session.id;
 
       const type = String(req.body?.type || '');
       const builder = SIGNAL_MESSAGES[type];
-      if (!builder) return reply.status(400).json({ error: 'Unknown signal type' });
+      if (!builder) return reply.status(400).send({ error: 'Unknown signal type' });
 
       // Only participants (or the running ST) may signal into a session.
       const [seat] = await pool.query(
@@ -298,7 +299,7 @@ module.exports = async function (fastify, opts) {
          UNION SELECT 1 FROM live_sessions WHERE id=? AND admin_id=?`,
         [internalId, req.user.id, internalId, req.user.id]
       );
-      if (!seat.length) return reply.status(403).json({ error: 'Not a participant in this session' });
+      if (!seat.length) return reply.status(403).send({ error: 'Not a participant in this session' });
 
       const rawName = typeof req.body?.characterName === 'string' ? req.body.characterName.trim() : '';
       const name = (rawName || req.user.display_name || 'A player').slice(0, 60);
@@ -311,7 +312,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true });
     } catch (e) {
       log.err('Live session signal failed', { error: e.message });
-      reply.status(500).json({ error: 'Failed to send signal' });
+      reply.status(500).send({ error: 'Failed to send signal' });
     }
   });
 
@@ -329,7 +330,7 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/live-session/:id/broadcast', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const session = await getSessionRow(req.params.id);
-      if (!(await canRead(req, session))) return reply.status(403).json({ error: 'Not a participant in this session' });
+      if (!(await canRead(req, session))) return reply.status(403).send({ error: 'Not a participant in this session' });
       const internalId = session.id;
       const [rows] = await pool.query(
         `SELECT b.*
@@ -348,7 +349,7 @@ module.exports = async function (fastify, opts) {
       );
       reply.send({ broadcasts: rows });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to fetch broadcasts' });
+      reply.status(500).send({ error: 'Failed to fetch broadcasts' });
     }
   });
 
@@ -359,13 +360,13 @@ module.exports = async function (fastify, opts) {
       const { hungerDelta, healthSupDelta, healthAggDelta, wpSupDelta, wpAggDelta, humanityDelta, stainsDelta, frenzyState, forceRouseCheck, damage, bloodPotencyDelta, bloodPotency } = req.body;
 
       const [rows] = await pool.query('SELECT sheet FROM characters WHERE id=?', [charId]);
-      if (!rows.length) return reply.status(404).json({ error: 'Char not found' });
+      if (!rows.length) return reply.status(404).send({ error: 'Char not found' });
 
       let sheet = {};
       try {
         sheet = typeof rows[0].sheet === 'string' ? JSON.parse(rows[0].sheet || '{}') : (rows[0].sheet || {});
       } catch (e) {
-        return reply.status(500).json({ error: 'Failed to parse existing character sheet data.' });
+        return reply.status(500).send({ error: 'Failed to parse existing character sheet data.' });
       }
 
       if (hungerDelta !== undefined) sheet.hunger = Math.max(0, Math.min(5, Number(sheet.hunger || 0) + Number(hungerDelta)));
@@ -459,7 +460,7 @@ module.exports = async function (fastify, opts) {
 
       reply.send({ ok: true });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to update player' });
+      reply.status(500).send({ error: 'Failed to update player' });
     }
   });
 };

@@ -5,6 +5,7 @@
 const { setAuthCookie } = require('../utils/authCookie');
 const { issueToken } = require('../services/token');
 const { parseSheet } = require('../utils/sheet');
+const { clearTokenVersionCache } = require('../utils/tokenVersion');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin } = opts;
@@ -37,7 +38,7 @@ module.exports = async function (fastify, opts) {
     try {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) {
-        return reply.status(400).json({ error: 'Invalid user id' });
+        return reply.status(400).send({ error: 'Invalid user id' });
       }
 
       const { display_name, email, role, discord_id } = req.body || {};
@@ -50,7 +51,7 @@ module.exports = async function (fastify, opts) {
       if (role !== undefined) {
         const r = String(role);
         if (!validRoles.has(r)) {
-          return reply.status(400).json({ error: 'Invalid role' });
+          return reply.status(400).send({ error: 'Invalid role' });
         }
         fields.push('role=?'); // FIXED: Ensure this is single =
         vals.push(r);
@@ -61,7 +62,7 @@ module.exports = async function (fastify, opts) {
       let nameChanged = false;
       if (display_name !== undefined) {
         const name = String(display_name).trim();
-        if (!name) return reply.status(400).json({ error: 'Display name cannot be empty' });
+        if (!name) return reply.status(400).send({ error: 'Display name cannot be empty' });
         fields.push('display_name=?');
         vals.push(name);
         nameChanged = true;
@@ -72,11 +73,11 @@ module.exports = async function (fastify, opts) {
       if (email !== undefined) {
         const normEmail = String(email).trim().toLowerCase();
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normEmail)) {
-          return reply.status(400).json({ error: 'Invalid email' });
+          return reply.status(400).send({ error: 'Invalid email' });
         }
         // Check for duplicates
         const [dup] = await pool.query('SELECT id FROM users WHERE email=? AND id<>?', [normEmail, id]);
-        if (dup.length) return reply.status(409).json({ error: 'Email already in use' });
+        if (dup.length) return reply.status(409).send({ error: 'Email already in use' });
 
         fields.push('email=?');
         vals.push(normEmail);
@@ -90,11 +91,13 @@ module.exports = async function (fastify, opts) {
         vals.push(did);
       }
 
-      if (!fields.length) return reply.status(400).json({ error: 'Nothing to update' });
+      if (!fields.length) return reply.status(400).send({ error: 'Nothing to update' });
 
       // Perform Update
       vals.push(id);
       await pool.query(`UPDATE users SET ${fields.join(', ')} WHERE id=?`, vals);
+      // authRequired reads the live role through this cache; drop it so a role change is felt now, not in 15s.
+      clearTokenVersionCache(id);
 
       // Return updated row (Include discord_id in select)
       const [[row]] = await pool.query(
@@ -106,7 +109,7 @@ module.exports = async function (fastify, opts) {
         [id]
       );
 
-      if (!row) return reply.status(404).json({ error: 'User not found after update' });
+      if (!row) return reply.status(404).send({ error: 'User not found after update' });
 
       // Refresh token if self-edit — the admin's existing cookie still carries
       // the OLD role/name/email claims, so re-mint it with the new ones.
@@ -128,7 +131,7 @@ module.exports = async function (fastify, opts) {
 
     } catch (e) {
       log.err('Admin update user failed', { message: e.message, stack: e.stack });
-      reply.status(500).json({ error: 'Failed to update user' });
+      reply.status(500).send({ error: 'Failed to update user' });
     }
   });
 
@@ -139,7 +142,7 @@ module.exports = async function (fastify, opts) {
         'SELECT id, email, display_name, role, token_version FROM users WHERE id=?',
         [req.user.id]
       );
-      if (!u) return reply.status(404).json({ error: 'User not found' });
+      if (!u) return reply.status(404).send({ error: 'User not found' });
       // A debug session (routes/debugLogin.js) keeps its own short-lived token:
       // re-minting here would drop `imp` and turn it into a normal 7d login.
       if (req.user.imp) return reply.send({ user: u });
@@ -147,7 +150,7 @@ module.exports = async function (fastify, opts) {
       setAuthCookie(req, reply, token);
       reply.send({ user: u });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to refresh token' });
+      reply.status(500).send({ error: 'Failed to refresh token' });
     }
   });
 };

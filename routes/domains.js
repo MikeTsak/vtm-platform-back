@@ -33,7 +33,7 @@ module.exports = async function (fastify, opts) {
   // Admin: manage domains
   fastify.post('/api/admin/domains', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   const { name, description } = req.body;
-    if (!name) return reply.status(400).json({ error: 'name required' });
+    if (!name) return reply.status(400).send({ error: 'name required' });
     const [r] = await pool.query('INSERT INTO domains (name, description) VALUES (?,?)', [name, description || null]);
     const [rows] = await pool.query('SELECT * FROM domains WHERE id=?', [r.insertId]);
     log.adm('Domain created', { id: r.insertId, name });
@@ -48,7 +48,7 @@ module.exports = async function (fastify, opts) {
 
   fastify.post('/api/admin/domains/:id/members', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   const { character_id } = req.body;
-    if (!character_id) return reply.status(400).json({ error: 'character_id required' });
+    if (!character_id) return reply.status(400).send({ error: 'character_id required' });
     await pool.query('INSERT IGNORE INTO domain_members (domain_id, character_id) VALUES (?,?)', [req.params.id, character_id]);
     log.adm('Domain member added', { domain_id: req.params.id, character_id });
     reply.send({ ok: true });

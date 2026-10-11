@@ -35,13 +35,6 @@ function buildApp(overrides = {}) {
 
   fastify.decorate('db', pool);
 
-  // Route handlers across the app call `reply.status(x).json(y)` — an
-  // Express-ism inherited from the pre-Fastify server. This shim keeps those
-  // call sites working; without it every one of them throws.
-  fastify.decorateReply('json', function (payload) {
-    return this.send(payload);
-  });
-
   fastify.register(require('./plugins/observability'));
   fastify.register(require('./plugins/security'));
   fastify.register(require('./plugins/docs'));

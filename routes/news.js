@@ -9,6 +9,7 @@ const { getSetting } = require('../utils/settings');
 const { sanitizeRichText } = require('../utils/sanitize');
 const { xmlEscape, getAuthorSignature, isVideoUrl, resolveMediaUrl, NEWS_AUTHOR_COLUMNS, NEWS_AUTHOR_JOINS } = require('../services/news');
 
+const guards = require('../services/guards');
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, optionalAuth, requireAdmin, imageClient } = opts;
 
@@ -28,7 +29,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ items: rows });
     } catch (e) {
       log.err('Fetch public news failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to load public news' });
+      reply.status(500).send({ error: 'Failed to load public news' });
     }
   });
 
@@ -42,13 +43,13 @@ module.exports = async function (fastify, opts) {
     `, [req.params.id]);
 
       if (rows.length === 0) {
-        return reply.status(404).json({ error: 'Article not found' });
+        return reply.status(404).send({ error: 'Article not found' });
       }
 
       // Public page, but remember logged-in readers. Admins (and admins
       // impersonating a player) are skipped so previewing doesn't pollute it.
       await optionalAuth(req);
-      if (req.user && req.user.role !== 'admin' && !req.user.imp) {
+      if (req.user && !guards.isAdmin(req.user) && !req.user.imp) {
         pool.query(
           `INSERT INTO news_reads (news_id, user_id) VALUES (?, ?)
            ON DUPLICATE KEY UPDATE open_count = open_count + 1, last_read_at = NOW()`,
@@ -59,7 +60,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ item: rows[0] });
     } catch (e) {
       log.err('Fetch public article failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to load article' });
+      reply.status(500).send({ error: 'Failed to load article' });
     }
   });
 
@@ -103,7 +104,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ items: rows });
     } catch (e) {
       log.err('Fetch news failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to load news' });
+      reply.status(500).send({ error: 'Failed to load news' });
     }
   });
 
@@ -122,7 +123,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ news: rows });
     } catch (e) {
       log.err('Fetch recent news headlines failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to load headlines' });
+      reply.status(500).send({ error: 'Failed to load headlines' });
     }
   });
 
@@ -131,7 +132,7 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/news/upload', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       // Check permissions: Admin or Court or has any news permission
-      if (req.user.role !== 'admin' && req.user.role !== 'courtuser') {
+      if (!guards.isCourt(req.user)) {
         const [perms] = await pool.query('SELECT id FROM user_news_permissions WHERE user_id=? LIMIT 1', [req.user.id]);
         if (perms.length === 0) {
           return reply.status(403).send({ error: 'Forbidden' });
@@ -231,7 +232,7 @@ module.exports = async function (fastify, opts) {
   // User fetching their allowed themes
   fastify.get('/api/news/my-themes', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      if (req.user.role === 'admin') {
+      if (guards.isAdmin(req.user)) {
         return reply.send({ all: true });
       }
       const [rows] = await pool.query(`
@@ -292,7 +293,7 @@ module.exports = async function (fastify, opts) {
 
       // --- PERMISSION CHECK ---
       if (type === 'news') {
-        if (req.user.role !== 'admin') {
+        if (!guards.isAdmin(req.user)) {
           // Check if user has permission for the requested theme
           const [perms] = await pool.query('SELECT id FROM user_news_permissions WHERE user_id=? AND theme=?', [req.user.id, theme]);
           if (perms.length === 0) {
@@ -300,7 +301,7 @@ module.exports = async function (fastify, opts) {
           }
         }
       } else if (type === 'announcement') {
-        if (req.user.role !== 'admin' && req.user.role !== 'courtuser') {
+        if (!guards.isCourt(req.user)) {
           return reply.status(403).send({ error: 'Only Court/Admin can post Announcements' });
         }
       } else {
@@ -313,7 +314,7 @@ module.exports = async function (fastify, opts) {
       // name, titles and portrait; author_id still records the real poster).
       let npcId = null;
       if (req.body.npc_id != null && req.body.npc_id !== '') {
-        if (type !== 'announcement' || req.user.role !== 'admin') {
+        if (type !== 'announcement' || !guards.isAdmin(req.user)) {
           return reply.status(403).send({ error: 'Only admins can issue decrees as an NPC' });
         }
         const [[npc]] = await pool.query('SELECT id FROM npcs WHERE id = ?', [Number(req.body.npc_id)]);
@@ -423,7 +424,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true, id: insertResult.insertId });
     } catch (e) {
       log.err('Create news failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to post' });
+      reply.status(500).send({ error: 'Failed to post' });
     }
   });
 
@@ -544,7 +545,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ success: true, message: 'Published successfully' });
     } catch (e) {
       log.err('Publish news failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to publish news' });
+      reply.status(500).send({ error: 'Failed to publish news' });
     }
   });
 
@@ -563,7 +564,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ items: rows });
     } catch (e) {
       log.err('Fetch admin news failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to load admin news' });
+      reply.status(500).send({ error: 'Failed to load admin news' });
     }
   });
 
@@ -583,7 +584,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ readers: rows });
     } catch (e) {
       log.err('Fetch news readers failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to load readers' });
+      reply.status(500).send({ error: 'Failed to load readers' });
     }
   });
 
@@ -593,7 +594,7 @@ module.exports = async function (fastify, opts) {
       await pool.query('DELETE FROM news_entries WHERE id=?', [req.params.id]);
       reply.send({ ok: true });
     } catch (e) {
-      reply.status(500).json({ error: 'Delete failed' });
+      reply.status(500).send({ error: 'Delete failed' });
     }
   });
 

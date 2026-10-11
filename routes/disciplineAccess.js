@@ -50,7 +50,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ access: rows });
     } catch (err) {
       log.err('GET /api/characters/discipline-access failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error fetching discipline access' });
+      reply.status(500).send({ error: 'Database error fetching discipline access' });
     }
   });
 
@@ -67,7 +67,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ requests: rows });
     } catch (err) {
       log.err('GET /api/characters/discipline-requests failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error fetching requests' });
+      reply.status(500).send({ error: 'Database error fetching requests' });
     }
   });
 
@@ -77,25 +77,25 @@ module.exports = async function (fastify, opts) {
     const requestedLevel = cleanLevel(req.body?.requestedLevel);
     const message = cleanMessage(req.body?.message);
 
-    if (!discipline) return reply.status(400).json({ error: 'discipline is required' });
-    if (!requestedLevel) return reply.status(400).json({ error: `requestedLevel must be 1-${MAX_DISCIPLINE_LEVEL}` });
+    if (!discipline) return reply.status(400).send({ error: 'discipline is required' });
+    if (!requestedLevel) return reply.status(400).send({ error: `requestedLevel must be 1-${MAX_DISCIPLINE_LEVEL}` });
 
     try {
       const [[ch]] = await pool.query('SELECT id, name FROM characters WHERE user_id=?', [req.user.id]);
-      if (!ch) return reply.status(400).json({ error: 'Create a character first' });
+      if (!ch) return reply.status(400).send({ error: 'Create a character first' });
 
       const [[dupe]] = await pool.query(
         "SELECT id FROM discipline_requests WHERE character_id=? AND discipline=? AND status='pending'",
         [ch.id, discipline]
       );
-      if (dupe) return reply.status(409).json({ error: `You already have a pending request for ${discipline}.` });
+      if (dupe) return reply.status(409).send({ error: `You already have a pending request for ${discipline}.` });
 
       const [[existing]] = await pool.query(
         'SELECT max_level FROM discipline_access WHERE character_id=? AND discipline=?',
         [ch.id, discipline]
       );
       if (existing && existing.max_level >= requestedLevel) {
-        return reply.status(409).json({ error: `You already have access to ${discipline} up to level ${existing.max_level}.` });
+        return reply.status(409).send({ error: `You already have access to ${discipline} up to level ${existing.max_level}.` });
       }
 
       const [ins] = await pool.query(
@@ -112,7 +112,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ request: row });
     } catch (err) {
       log.err('POST /api/characters/discipline-requests failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error creating request' });
+      reply.status(500).send({ error: 'Database error creating request' });
     }
   });
 
@@ -153,7 +153,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ access, requests });
     } catch (err) {
       log.err('GET /api/admin/discipline-access failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error fetching discipline access' });
+      reply.status(500).send({ error: 'Database error fetching discipline access' });
     }
   });
 
@@ -164,13 +164,13 @@ module.exports = async function (fastify, opts) {
     const maxLevel = cleanLevel(req.body?.maxLevel);
     const note = cleanMessage(req.body?.note);
 
-    if (!Number.isInteger(characterId) || characterId <= 0) return reply.status(400).json({ error: 'Invalid character id' });
-    if (!discipline) return reply.status(400).json({ error: 'discipline is required' });
-    if (!maxLevel) return reply.status(400).json({ error: `maxLevel must be 1-${MAX_DISCIPLINE_LEVEL}` });
+    if (!Number.isInteger(characterId) || characterId <= 0) return reply.status(400).send({ error: 'Invalid character id' });
+    if (!discipline) return reply.status(400).send({ error: 'discipline is required' });
+    if (!maxLevel) return reply.status(400).send({ error: `maxLevel must be 1-${MAX_DISCIPLINE_LEVEL}` });
 
     try {
       const [[ch]] = await pool.query('SELECT id, name, user_id FROM characters WHERE id=?', [characterId]);
-      if (!ch) return reply.status(404).json({ error: 'Character not found' });
+      if (!ch) return reply.status(404).send({ error: 'Character not found' });
 
       await pool.query(
         `INSERT INTO discipline_access (character_id, discipline, max_level, note, granted_by)
@@ -195,7 +195,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ access: row });
     } catch (err) {
       log.err('POST /api/admin/characters/:id/discipline-access failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error granting discipline access' });
+      reply.status(500).send({ error: 'Database error granting discipline access' });
     }
   });
 
@@ -204,21 +204,21 @@ module.exports = async function (fastify, opts) {
     const characterId = Number(req.params.id);
     const discipline = decodeURIComponent(req.params.discipline || '');
 
-    if (!Number.isInteger(characterId) || characterId <= 0) return reply.status(400).json({ error: 'Invalid character id' });
-    if (!discipline) return reply.status(400).json({ error: 'discipline is required' });
+    if (!Number.isInteger(characterId) || characterId <= 0) return reply.status(400).send({ error: 'Invalid character id' });
+    if (!discipline) return reply.status(400).send({ error: 'discipline is required' });
 
     try {
       const [result] = await pool.query(
         'DELETE FROM discipline_access WHERE character_id=? AND discipline=?',
         [characterId, discipline]
       );
-      if (!result.affectedRows) return reply.status(404).json({ error: 'No such grant' });
+      if (!result.affectedRows) return reply.status(404).send({ error: 'No such grant' });
 
       log.adm('Discipline access revoked', { admin: req.user.id, character_id: characterId, discipline });
       reply.send({ ok: true });
     } catch (err) {
       log.err('DELETE /api/admin/characters/:id/discipline-access/:discipline failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error revoking discipline access' });
+      reply.status(500).send({ error: 'Database error revoking discipline access' });
     }
   });
 
@@ -226,14 +226,14 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/admin/discipline-requests/:requestId/:action', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const { requestId, action } = req.params;
     if (action !== 'approve' && action !== 'reject') {
-      return reply.status(400).json({ error: 'action must be approve or reject' });
+      return reply.status(400).send({ error: 'action must be approve or reject' });
     }
     const adminNote = cleanMessage(req.body?.adminNote);
 
     try {
       const [[request]] = await pool.query('SELECT * FROM discipline_requests WHERE id=?', [requestId]);
-      if (!request) return reply.status(404).json({ error: 'Request not found' });
-      if (request.status !== 'pending') return reply.status(409).json({ error: `Request already ${request.status}` });
+      if (!request) return reply.status(404).send({ error: 'Request not found' });
+      if (request.status !== 'pending') return reply.status(409).send({ error: `Request already ${request.status}` });
 
       const [[ch]] = await pool.query('SELECT id, name, user_id FROM characters WHERE id=?', [request.character_id]);
 
@@ -282,7 +282,7 @@ module.exports = async function (fastify, opts) {
       reply.send({ ok: true, access });
     } catch (err) {
       log.err('POST /api/admin/discipline-requests/:requestId/:action failed', { error: err.message });
-      reply.status(500).json({ error: 'Database error resolving request' });
+      reply.status(500).send({ error: 'Database error resolving request' });
     }
   });
 };

@@ -37,7 +37,7 @@ module.exports = async function (fastify, opts) {
   /* -------------------- Admin add/remove XP -------------------- */
   fastify.patch('/api/admin/characters/:id/xp', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   const { delta } = req.body;
-    if (typeof delta !== 'number') return reply.status(400).json({ error: 'delta must be a number' });
+    if (typeof delta !== 'number') return reply.status(400).send({ error: 'delta must be a number' });
 
     await pool.query('UPDATE characters SET xp = GREATEST(0, xp + ?) WHERE id=?', [delta, req.params.id]);
     const [out] = await pool.query('SELECT * FROM characters WHERE id=?', [req.params.id]);
@@ -62,11 +62,11 @@ module.exports = async function (fastify, opts) {
   fastify.patch('/api/admin/characters/xp/bulk', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const { delta, character_ids } = req.body || {};
     if (typeof delta !== 'number' || !Number.isInteger(delta) || delta === 0) {
-      return reply.status(400).json({ error: 'delta must be a non-zero integer' });
+      return reply.status(400).send({ error: 'delta must be a non-zero integer' });
     }
     const ids = parseIdList(character_ids);
     if (!ids || ids.length === 0) {
-      return reply.status(400).json({ error: 'character_ids must be a non-empty array of character ids' });
+      return reply.status(400).send({ error: 'character_ids must be a non-empty array of character ids' });
     }
 
     const conn = await pool.getConnection();
@@ -84,7 +84,7 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       await conn.rollback();
       log.err('Admin bulk XP adjust failed', { message: e.message });
-      reply.status(500).json({ error: 'Failed to adjust bulk XP' });
+      reply.status(500).send({ error: 'Failed to adjust bulk XP' });
     } finally {
       conn.release();
     }
@@ -101,9 +101,9 @@ module.exports = async function (fastify, opts) {
 
   fastify.put('/api/admin/xp/bulk-selection', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const ids = parseIdList(req.body?.character_ids);
-    if (!ids) return reply.status(400).json({ error: 'character_ids must be an array of character ids' });
+    if (!ids) return reply.status(400).send({ error: 'character_ids must be an array of character ids' });
     const ok = await setSetting(selectionKey(req.user.id), JSON.stringify(ids));
-    if (!ok) return reply.status(500).json({ error: 'Failed to save selection' });
+    if (!ok) return reply.status(500).send({ error: 'Failed to save selection' });
     reply.send({ character_ids: ids });
   });
 
@@ -123,7 +123,7 @@ module.exports = async function (fastify, opts) {
       reply.send(logs);
     } catch (error) {
       console.error('Error fetching XP logs:', error);
-      reply.status(500).json({ error: 'Failed to fetch XP logs' });
+      reply.status(500).send({ error: 'Failed to fetch XP logs' });
     }
   });
 };

@@ -139,7 +139,7 @@ module.exports = async function (fastify, opts) {
         next_closing: info.nextClosing
       });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to fetch comms status' });
+      reply.status(500).send({ error: 'Failed to fetch comms status' });
     }
   });
 
@@ -169,7 +169,7 @@ module.exports = async function (fastify, opts) {
 
       reply.send({ ok: true, comms_enabled: info.isCommsEnabled, next_opening: info.nextOpening, next_closing: info.nextClosing });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to update comms status' });
+      reply.status(500).send({ error: 'Failed to update comms status' });
     }
   });
 
@@ -184,7 +184,7 @@ module.exports = async function (fastify, opts) {
       try { schedule = JSON.parse(scheduleStr); } catch (e) { }
       reply.send({ master_enabled: masterEnabled === 'true', schedule });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to fetch comms config' });
+      reply.status(500).send({ error: 'Failed to fetch comms config' });
     }
   });
 
@@ -214,7 +214,7 @@ module.exports = async function (fastify, opts) {
 
       reply.send({ ok: true, comms_enabled: info.isCommsEnabled, next_opening: info.nextOpening, next_closing: info.nextClosing });
     } catch (e) {
-      reply.status(500).json({ error: 'Failed to update comms schedule' });
+      reply.status(500).send({ error: 'Failed to update comms schedule' });
     }
   });
 };

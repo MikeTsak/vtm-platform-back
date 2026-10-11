@@ -11,7 +11,7 @@ module.exports = async function (fastify, opts) {
   // Admin: fetch last N lines
   fastify.get('/api/admin/logs', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const file = process.env.LOG_FILE;
-    if (!file) return reply.status(404).json({ error: 'Log file not configured' });
+    if (!file) return reply.status(404).send({ error: 'Log file not configured' });
 
     const lines = Number(req.query.lines || 200);
     try {
@@ -27,16 +27,16 @@ module.exports = async function (fastify, opts) {
       }
     } catch (e) {
       log.err('Admin logs read failed', { message: e.message });
-      return reply.status(500).json({ error: 'Failed to read log file' });
+      return reply.status(500).send({ error: 'Failed to read log file' });
     }
   });
 
   // Admin: download full log (stream)
   fastify.get('/api/admin/logs/download', { preHandler: [authRequired, requireAdmin] }, (req, reply) => {
     const file = process.env.LOG_FILE;
-    if (!file) return reply.status(404).json({ error: 'Log file not configured' });
+    if (!file) return reply.status(404).send({ error: 'Log file not configured' });
     const fp = path.resolve(file);
-    if (!fs.existsSync(fp)) return reply.status(404).json({ error: 'Log file missing' });
+    if (!fs.existsSync(fp)) return reply.status(404).send({ error: 'Log file missing' });
 
     reply.header('Content-Disposition', `attachment; filename="${path.basename(fp)}"`);
     reply.header('Content-Type', 'text/plain; charset=utf-8');
@@ -51,7 +51,7 @@ module.exports = async function (fastify, opts) {
   // Admin: clear log file (truncate) — use with care
   fastify.post('/api/admin/logs/clear', { preHandler: [authRequired, requireAdmin] }, (req, reply) => {
     const file = process.env.LOG_FILE;
-    if (!file) return reply.status(440).json({ error: 'Log file not configured' });
+    if (!file) return reply.status(440).send({ error: 'Log file not configured' });
     const fp = path.resolve(file);
     try {
       fs.truncateSync(fp, 0);
@@ -59,7 +59,7 @@ module.exports = async function (fastify, opts) {
       return reply.send({ ok: true });
     } catch (e) {
       log.err('Admin clear logs failed', { message: e.message });
-      return reply.status(500).json({ error: 'Failed to clear log file' });
+      return reply.status(500).send({ error: 'Failed to clear log file' });
     }
   });
 };

@@ -31,7 +31,7 @@ module.exports = async function (fastify, opts) {
   /// Create NPC
   fastify.post('/api/admin/npcs', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
   const { name, clan, sheet } = req.body;
-    if (!name || !clan) return reply.status(400).json({ error: 'Name and clan are required' });
+    if (!name || !clan) return reply.status(400).send({ error: 'Name and clan are required' });
 
     const [r] = await pool.query(
       'INSERT INTO npcs (name, clan, sheet, xp) VALUES (?,?,?,?)',
@@ -47,7 +47,7 @@ module.exports = async function (fastify, opts) {
   // Get NPC by id
   fastify.get('/api/admin/npcs/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const [rows] = await pool.query('SELECT id, name, clan, sheet, xp, created_at, updated_at, camarilla_titles, status, image_url, is_ex, is_deceased, is_hidden, is_left, is_called, is_missing, is_exiled, is_bloodhunted, is_disabled FROM npcs WHERE id=?', [req.params.id]);
-    if (!rows.length) return reply.status(404).json({ error: 'NPC not found' });
+    if (!rows.length) return reply.status(404).send({ error: 'NPC not found' });
     const npc = rows[0];
     npc.sheet = parseSheet(npc.sheet);
     reply.send({ npc });
@@ -61,7 +61,7 @@ module.exports = async function (fastify, opts) {
     if (clan != null) { fields.push('clan=?'); vals.push(clan); }
     if (sheet !== undefined) { fields.push('sheet=?'); vals.push(sheet ? JSON.stringify(sheet) : null); }
     if (typeof xp === 'number') { fields.push('xp=?'); vals.push(xp); }
-    if (!fields.length) return reply.status(400).json({ error: 'Nothing to update' });
+    if (!fields.length) return reply.status(400).send({ error: 'Nothing to update' });
 
     vals.push(req.params.id);
     await pool.query(`UPDATE npcs SET ${fields.join(', ')} WHERE id=?`, vals);

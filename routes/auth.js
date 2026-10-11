@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
 const { setAuthCookie, clearAuthCookie } = require('../utils/authCookie');
-const { bumpTokenVersion } = require('../utils/tokenVersion');
+const { bumpTokenVersion, clearTokenVersionCache } = require('../utils/tokenVersion');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, maskEmail, authRequired, authLimiter, broadcastNtfyAlert, sendResetEmailWithEmailJS } = opts;
@@ -92,6 +92,7 @@ module.exports = async function (fastify, opts) {
       log.err('Failed to increment daily_logins', { message: e.message });
     }
 
+    clearTokenVersionCache(user.id); // a fresh login must see the current role, not a cached one
     setAuthCookie(req, reply, issueToken(user));
     reply.send({ ok: true });
   });

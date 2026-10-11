@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 const { COOKIE_NAME } = require('./utils/authCookie');
-const { getTokenVersion } = require('./utils/tokenVersion');
+const { getAuthState } = require('./utils/tokenVersion');
 
 async function authRequired(req, reply) {
   const hdr = req.headers.authorization || '';
@@ -22,12 +22,13 @@ async function authRequired(req, reply) {
 
   // Revocation check: a token minted before a password reset / "log out
   // everywhere" no longer matches the user's current token_version.
-  const currentVersion = await getTokenVersion(payload.id);
-  if (currentVersion === null || (payload.tv ?? 0) !== currentVersion) {
+  const state = await getAuthState(payload.id);
+  if (!state || (payload.tv ?? 0) !== state.version) {
     return reply.status(401).send({ error: 'Session revoked, please log in again' });
   }
 
-  req.user = payload;
+  // The role in the token is a login-time snapshot; the database is the truth.
+  req.user = { ...payload, role: state.role };
 }
 
 // Populates req.user when a valid session is present, and stays silent when it
@@ -46,10 +47,10 @@ async function optionalAuth(req) {
 
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
-    const currentVersion = await getTokenVersion(payload.id);
-    if (currentVersion === null || (payload.tv ?? 0) !== currentVersion) return null;
-    req.user = payload;
-    return payload;
+    const state = await getAuthState(payload.id);
+    if (!state || (payload.tv ?? 0) !== state.version) return null;
+    req.user = { ...payload, role: state.role };
+    return req.user;
   } catch {
     return null;
   }

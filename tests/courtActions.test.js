@@ -103,6 +103,20 @@ describe('Dangerous domains', () => {
   });
 });
 
+describe('Harpy status power', () => {
+  it('needs the court role AND a Harpy office, like every other office power', async () => {
+    const harpy = await courtUser('Harpy Holder', 'Harpy');
+    const body = { id: targetId, type: 'npc', status: 3 };
+    expect((await call(harpy, 'PATCH', '/api/camarilla/status', body)).statusCode).toBe(200);
+    expect((await call(prince, 'PATCH', '/api/camarilla/status', body)).statusCode).toBe(403); // court, wrong office
+    expect((await call(admin, 'PATCH', '/api/camarilla/status', body)).statusCode).toBe(200);
+    // A Harpy title on a plain-user account grants nothing.
+    await pool.query("UPDATE characters SET camarilla_titles=? WHERE id=?", [JSON.stringify(['Harpy']), playerCharId]);
+    expect((await call(player, 'PATCH', '/api/camarilla/status', body)).statusCode).toBe(403);
+    await pool.query("UPDATE characters SET camarilla_titles=NULL WHERE id=?", [playerCharId]);
+  });
+});
+
 describe('Court access sync', () => {
   it('suggests promoting a title holder and demoting an office-less court user', async () => {
     await pool.query("UPDATE characters SET camarilla_titles=? WHERE id=?", [JSON.stringify(['Scourge']), playerCharId]);
