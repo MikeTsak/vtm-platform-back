@@ -4,6 +4,10 @@ const axios = require('axios');
 const jwt = require('jsonwebtoken');
 const { setAuthCookie, clearAuthCookie } = require('../utils/authCookie');
 const { bumpTokenVersion, clearTokenVersionCache } = require('../utils/tokenVersion');
+const loginThrottle = require('../utils/loginThrottle');
+
+// Hash of a throwaway password; only ever compared against, to equalise login timing.
+const DUMMY_HASH = bcrypt.hashSync('not-a-real-password', 12);
 
 module.exports = async function (fastify, opts) {
   const { pool, log, maskEmail, authRequired, authLimiter, broadcastNtfyAlert, sendResetEmailWithEmailJS } = opts;
@@ -67,19 +71,31 @@ module.exports = async function (fastify, opts) {
 
     const { email, password } = req.body;
 
+    const wait = loginThrottle.retryAfter(email);
+    if (wait) {
+      log.warn('Login throttled', { email, ip, retry_after_s: wait, req_id: req.id });
+      return reply.status(429).header('Retry-After', wait).send({ error: 'Too many failed attempts for this account. Try again later or reset your password.' });
+    }
+
     const [rows] = await fastify.db.query('SELECT * FROM users WHERE email=?', [email]);
     const user = rows[0];
 
+    // Always run one bcrypt compare, even for an unknown email, so a missing account
+    // takes as long to reject as a wrong password (no timing leak of which emails exist).
+    const ok = await bcrypt.compare(password, user ? user.password_hash : DUMMY_HASH);
+
     if (!user) {
+      loginThrottle.recordFailure(email);
       log.warn('Login invalid email', { email, ip, ua, req_id: req.id });
       return reply.status(401).send({ error: 'Invalid credentials', req_id: req.id });
     }
 
-    const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) {
+      loginThrottle.recordFailure(email);
       log.warn('Login wrong password', { email, ip, ua, req_id: req.id });
       return reply.status(401).send({ error: 'Invalid credentials', req_id: req.id });
     }
+    loginThrottle.clear(email);
 
     log.auth('User logged in', { user_id: user.id, email, ip, ua, req_id: req.id });
     

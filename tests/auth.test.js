@@ -236,3 +236,32 @@ describe('role is read live, not from the login-time JWT', () => {
     expect(await roleOf()).toBe('courtuser'); // same cookie, no re-login
   });
 });
+
+describe('per-account login throttle', () => {
+  const login = (email, password) => app.inject({ method: 'POST', url: '/api/auth/login', payload: { email, password } });
+
+  it('locks one account after 10 failures, even with the right password, without touching others', async () => {
+    const victim = await registerUser(app);
+    const other = await registerUser(app);
+    for (let i = 0; i < 10; i++) expect((await login(victim.email, 'WrongPassword1')).statusCode).toBe(401);
+
+    const locked = await login(victim.email, victim.password);
+    expect(locked.statusCode).toBe(429);
+    expect(Number(locked.headers['retry-after'])).toBeGreaterThan(0);
+    expect((await login(other.email, other.password)).statusCode).toBe(200);
+  });
+
+  it('a success clears earlier failures', async () => {
+    const u = await registerUser(app);
+    for (let i = 0; i < 9; i++) await login(u.email, 'WrongPassword1');
+    expect((await login(u.email, u.password)).statusCode).toBe(200);
+    for (let i = 0; i < 9; i++) await login(u.email, 'WrongPassword1');
+    expect((await login(u.email, u.password)).statusCode).toBe(200);
+  });
+
+  it('throttles unknown emails the same way, so a 429 does not reveal whether an account exists', async () => {
+    const ghost = uniqueEmail('ghost');
+    for (let i = 0; i < 10; i++) expect((await login(ghost, 'WrongPassword1')).statusCode).toBe(401);
+    expect((await login(ghost, 'WrongPassword1')).statusCode).toBe(429);
+  });
+});
