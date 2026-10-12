@@ -222,6 +222,19 @@ module.exports = async function (fastify, opts) {
       const [[ch]] = await conn.query('SELECT id, sheet FROM characters WHERE id=? FOR UPDATE', [orig.character_id]);
       const sheet = parseSheet(ch.sheet);
       if (trackers(sheet).willpowerLeft <= 0) fail(400, 'Not enough Willpower');
+
+      // Dominate Ingrained Flaw Blunt: cannot spend Willpower to reroll a Social test
+      const hasBlunt = sheet?.ingrained_discipline_flaw?.active &&
+        sheet?.ingrained_discipline_flaw?.flaw_name === 'Blunt' &&
+        Number(sheet?.disciplines?.Dominate || 0) >= 3;
+      if (hasBlunt) {
+        const note = String(orig.note || '').toLowerCase();
+        const rollType = String(orig.roll_type || '').toLowerCase();
+        const isSocial = /charisma|manipulation|composure|etiquette|insight|intimidation|leadership|performance|persuasion|streetwise|subterfuge|social/i.test(note) || /social/i.test(rollType);
+        if (isSocial) {
+          fail(400, 'Dominate Ingrained Flaw Blunt: You cannot spend Willpower to reroll a Social test.');
+        }
+      }
       sheet.willpower = { superficial: 0, aggravated: 0, ...(sheet.willpower || {}) };
       sheet.willpower.superficial = (Number(sheet.willpower.superficial) || 0) + 1;
       await conn.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), ch.id]);

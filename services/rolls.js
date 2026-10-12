@@ -11,6 +11,7 @@ const { computeV5Outcome } = require('./dice');
 
 const PHYSICAL = new Set(['Strength', 'Dexterity', 'Stamina', 'Athletics', 'Brawl', 'Craft', 'Drive', 'Firearms', 'Larceny', 'Melee', 'Stealth', 'Survival']);
 const MENTAL_SOCIAL = new Set([...ATTRIBUTES, ...SKILLS].filter(t => !PHYSICAL.has(t)));
+const SOCIAL = new Set(['Charisma', 'Manipulation', 'Composure', 'Animal Ken', 'Etiquette', 'Insight', 'Intimidation', 'Leadership', 'Performance', 'Persuasion', 'Streetwise', 'Subterfuge']);
 
 // V5 Blood Potency table (mirrors getBloodPotencyStats in the front end).
 const BP = {
@@ -162,6 +163,30 @@ function traitPool({ sheet, clan, traits, specialty, ownSpecialtyOnly = true, ef
   if (impaired && !ignoreImpairment) { pool -= impaired; parts.push(`Impaired −${impaired}`); }
   if (tr.degeneration && !frenzied) { pool -= 2; parts.push('Degeneration −2'); }
 
+  // Sanguinary Animism (Blood Sorcery Ingrained Flaw):
+  // -2 dice to Social and Mental pools in the scene following feeding.
+  const hasSanguinaryDistraction = (sheet?.sanguinaryAnimismActive || sheet?.distractedScene) &&
+    sheet?.ingrained_discipline_flaw?.active &&
+    sheet?.ingrained_discipline_flaw?.flaw_name === 'Sanguinary Animism' &&
+    num(sheet?.disciplines?.['Blood Sorcery']) >= 3;
+  if (hasSanguinaryDistraction && traits.some(t => MENTAL_SOCIAL.has(t))) {
+    pool -= 2;
+    parts.push('Sanguinary Animism: 2 dice penalty');
+  }
+
+  // Monstrous (Oblivion Ingrained Flaw):
+  // Treat Humanity as 3 lower for Social dice pools. If effective Humanity < 1, gain Repulsive Flaw (-2 to Social pools).
+  const isMonstrousActive = sheet?.ingrained_discipline_flaw?.active &&
+    sheet?.ingrained_discipline_flaw?.flaw_name === 'Monstrous' &&
+    num(sheet?.disciplines?.Oblivion) >= 3;
+  if (isMonstrousActive && traits.some(t => SOCIAL.has(t))) {
+    const effectiveHumanity = Math.max(0, tr.humanity - 3);
+    if (effectiveHumanity < 1) {
+      pool -= 2;
+      parts.push('Monstrous Repulsive Flaw: 2 dice penalty');
+    }
+  }
+
   return { pool: Math.max(0, pool), parts, impaired, hunger: tr.hunger };
 }
 
@@ -231,4 +256,4 @@ function formatRoll(row) {
   };
 }
 
-module.exports = { traitPool, frenzyPool, parsePowerPool, insertRoll, formatRoll, trackers, bloodPotency, NO_REROLL, BP };
+module.exports = { traitPool, frenzyPool, parsePowerPool, insertRoll, formatRoll, trackers, bloodPotency, NO_REROLL, BP, SOCIAL, PHYSICAL, MENTAL_SOCIAL };

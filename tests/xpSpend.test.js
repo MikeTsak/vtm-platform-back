@@ -212,4 +212,20 @@ describe('XP purchases that need a downtime action', () => {
     expect((await buy(cookie, { type: 'attribute', target: 'Strength', newLevel: 3 })).statusCode).toBe(200);
     expect(await downtimes(id)).toHaveLength(0);
   });
+
+  it('allows an unactivated character to acquire an ingrained discipline flaw without using downtime', async () => {
+    const { cookie, user } = await registerUser(app);
+    const id = await createCharacter(user.id, 50, { disciplines: { Potence: 3 } });
+    const res = await buy(cookie, { type: 'ingrained_discipline_flaw', target: 'Potence', flawName: 'Killer Instinct' });
+    expect(res.statusCode).toBe(200);
+    expect(await downtimes(id)).toHaveLength(0);
+  });
+
+  it('files a resolved downtime when an activated character acquires an ingrained discipline flaw', async () => {
+    const { cookie, user } = await registerUser(app);
+    const id = await createCharacter(user.id, 50, { is_active: true, disciplines: { Potence: 3 } });
+    const res = await buy(cookie, { type: 'ingrained_discipline_flaw', target: 'Potence', flawName: 'Killer Instinct' });
+    expect(res.statusCode).toBe(200);
+    expect(await downtimes(id)).toEqual([{ title: '[XP] Training: Ingrained Flaw: Potence', status: 'resolved' }]);
+  });
 });
