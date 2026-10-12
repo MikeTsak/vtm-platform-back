@@ -14,6 +14,34 @@ const { isAdmin, isCourt } = require('../services/guards');
 const ST_ROLL_TYPES = new Set(['admin_roll', 'opposed_roll', 'remorse', 'npc_roll']);
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 
+function getFluentBloodSurgePower(sheet, traits = []) {
+  if (!sheet) return null;
+  const norm = (val) => String(val ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const hasPower = (discipline, powerId) => {
+    const target = norm(powerId);
+    const mainList = sheet.disciplinePowers?.[discipline] || [];
+    if (mainList.some(p => norm(p?.id ?? p?.name ?? p) === target)) return true;
+    const flaw = sheet.ingrained_discipline_flaw;
+    if (flaw && flaw.active !== false && norm(flaw.discipline) === norm(discipline)) {
+      const bonusList = flaw.bonus_powers || [];
+      if (bonusList.some(p => norm(p?.id ?? p?.name ?? p) === target)) return true;
+    }
+    return false;
+  };
+
+  const traitList = Array.isArray(traits) ? traits.map(t => String(t).toLowerCase()) : [];
+  if (hasPower('Fortitude', 'fluent_endurance') && traitList.some(t => t === 'stamina' || t === 'fortitude')) {
+    return 'Fluent Endurance';
+  }
+  if (hasPower('Potence', 'fluent_strength') && traitList.some(t => t === 'strength' || t === 'potence')) {
+    return 'Fluent Strength';
+  }
+  if (hasPower('Celerity', 'fluent_swiftness') && traitList.some(t => t === 'dexterity' || t === 'celerity')) {
+    return 'Fluent Swiftness';
+  }
+  return null;
+}
+
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin } = opts;
 
@@ -117,11 +145,16 @@ module.exports = async function (fastify, opts) {
           // Blood Surge: one server Rouse Check first (not possible at Hunger 5).
           let surge = false;
           if (b.mode === 'traits' && b.bloodSurge && trackers(sheet).hunger < 5) {
-            const die = rollD10();
-            if (die < 6) sheet.hunger = Math.min(5, (Number(sheet.hunger) || 0) + 1);
+            const fluentPower = getFluentBloodSurgePower(sheet, traits);
+            const dice = fluentPower ? [rollD10(), rollD10()] : [rollD10()];
+            const success = dice.some(d => d >= 6);
+            if (!success) sheet.hunger = Math.min(5, (Number(sheet.hunger) || 0) + 1);
             sheetChanged = true;
             surge = true;
-            rows.push(await insertRoll(conn, { ...base, rollType: 'blood_surge', rouse: [die], hungerLevel: sheet.hunger, note: die >= 6 ? 'Blood Surge: No hunger gained' : 'Blood Surge: Hunger +1' }));
+            const note = fluentPower
+              ? `Blood Surge (${fluentPower}): ${success ? 'No hunger gained' : 'Hunger +1'}`
+              : (success ? 'Blood Surge: No hunger gained' : 'Blood Surge: Hunger +1');
+            rows.push(await insertRoll(conn, { ...base, rollType: 'blood_surge', rouse: dice, hungerLevel: sheet.hunger, note }));
           }
 
           const effects = session?.metadata?.activeEffects?.[ch.id] || session?.metadata?.activeEffects?.[String(ch.id)] || [];
@@ -149,7 +182,15 @@ module.exports = async function (fastify, opts) {
           }));
         } else if (b.mode === 'power') {
           const power = CATALOG.disciplines[b.discipline]?.powers?.[b.powerId];
-          const owned = (sheet.disciplinePowers?.[b.discipline] || []).some(p => String(p?.id ?? p) === String(b.powerId));
+          const mainOwned = (sheet.disciplinePowers?.[b.discipline] || []).some(p => String(p?.id ?? p?.name ?? p) === String(b.powerId));
+          const flaw = sheet.ingrained_discipline_flaw;
+          const isDiscFlaw = String(flaw?.discipline || '').toLowerCase() === String(b.discipline).toLowerCase();
+          const bonusOwned = Boolean(
+            isDiscFlaw &&
+            flaw?.active !== false &&
+            (flaw?.bonus_powers || []).some(p => String(p?.id ?? p?.name ?? p) === String(b.powerId))
+          );
+          const owned = mainOwned || bonusOwned;
           if (!power || !owned) fail(400, 'You don\'t have that power.');
           const traits = parsePowerPool(power.dicePool);
           if (!traits) fail(400, `${power.name} has no dice pool to roll.`);

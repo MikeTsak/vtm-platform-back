@@ -12,7 +12,7 @@ const { rollD10 } = require('../services/dice');
 const { insertRoll } = require('../services/rolls');
 
 // What a logged Rouse Check is labelled as in the feed and dice log.
-const ROUSE_SOURCES = new Set(['rouse_check', 'discipline_rouse_check', 'blush_of_life']);
+const ROUSE_SOURCES = new Set(['rouse_check', 'discipline_rouse_check', 'blush_of_life', 'blood_surge']);
 
 // V5 Blood Potency table (mirrors getBloodPotencyStats in the front end).
 const ROUSE_REROLL_LEVEL = [0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5];
@@ -83,20 +83,59 @@ module.exports = async function (fastify, opts) {
   // client: body { discipline, powerId } names the power being used.
   fastify.post('/api/characters/:id/rouse', { preHandler: [authRequired] }, (req, reply) =>
     withLockedSheet(req, reply, async (sheet, row, logRoll) => {
-      const { discipline, powerId, source } = req.body || {};
+      const { discipline, powerId, source, trait } = req.body || {};
       let advantage = false;
-      if (discipline && powerId) {
+      let fluentLabel = '';
+
+      if (source === 'blood_surge' || req.body?.bloodSurge) {
+        const norm = (val) => String(val ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const hasPower = (dName, pId) => {
+          const target = norm(pId);
+          const list = sheet.disciplinePowers?.[dName] || [];
+          if (list.some(p => norm(p?.id ?? p?.name ?? p) === target)) return true;
+          const flaw = sheet.ingrained_discipline_flaw;
+          if (flaw && flaw.active !== false && norm(flaw.discipline) === norm(dName)) {
+            return (flaw.bonus_powers || []).some(p => norm(p?.id ?? p?.name ?? p) === target);
+          }
+          return false;
+        };
+        const tLower = trait ? String(trait).toLowerCase() : '';
+        if (hasPower('Fortitude', 'fluent_endurance') && (!tLower || tLower === 'stamina' || tLower === 'fortitude')) {
+          advantage = true;
+          fluentLabel = 'Fluent Endurance';
+        } else if (hasPower('Potence', 'fluent_strength') && (!tLower || tLower === 'strength' || tLower === 'potence')) {
+          advantage = true;
+          fluentLabel = 'Fluent Strength';
+        } else if (hasPower('Celerity', 'fluent_swiftness') && (!tLower || tLower === 'dexterity' || tLower === 'celerity')) {
+          advantage = true;
+          fluentLabel = 'Fluent Swiftness';
+        }
+      } else if (discipline && powerId) {
         const power = CATALOG.disciplines[discipline]?.powers?.[powerId];
-        const owned = (sheet.disciplinePowers?.[discipline] || []).some(p => String(p?.id ?? p) === String(powerId));
+        const mainOwned = (sheet.disciplinePowers?.[discipline] || []).some(p => String(p?.id ?? p?.name ?? p) === String(powerId));
+        const flaw = sheet.ingrained_discipline_flaw;
+        const isDiscFlaw = String(flaw?.discipline || '').toLowerCase() === String(discipline).toLowerCase();
+        const bonusOwned = Boolean(
+          isDiscFlaw &&
+          flaw?.active !== false &&
+          (flaw?.bonus_powers || []).some(p => String(p?.id ?? p?.name ?? p) === String(powerId))
+        );
+        const owned = mainOwned || bonusOwned;
         advantage = !!power && owned && power.level <= ROUSE_REROLL_LEVEL[bloodPotency(sheet, row.clan)];
       }
       const { success, dice } = rouse(sheet, advantage);
       const power = discipline && powerId ? CATALOG.disciplines[discipline]?.powers?.[powerId] : null;
+      let note = '';
+      if (source === 'blood_surge') {
+        note = `Blood Surge${fluentLabel ? ` (${fluentLabel})` : ''}: ${success ? 'No Hunger gained' : 'Hunger +1'}`;
+      } else {
+        note = `${power ? `${discipline} • ${power.name}: ` : ''}${success ? 'No Hunger gained' : 'Hunger +1'}${advantage ? ' (BP reroll)' : ''}`;
+      }
       await logRoll({
         rollType: ROUSE_SOURCES.has(source) ? source : 'rouse_check', rouse: dice,
-        note: `${power ? `${discipline} • ${power.name}: ` : ''}${success ? 'No Hunger gained' : 'Hunger +1'}${advantage ? ' (BP reroll)' : ''}`,
+        note,
       });
-      return { success, die1: dice[0], die2: dice[1] ?? null, advantage, nextHunger: sheet.hunger };
+      return { success, die1: dice[0], die2: dice[1] ?? null, advantage, fluentLabel, nextHunger: sheet.hunger };
     }));
 
   // Spend one Willpower (marks one Superficial Willpower damage).

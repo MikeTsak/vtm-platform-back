@@ -187,6 +187,33 @@ describe('server-thrown dice', () => {
     const [[row]] = await pool.query('SELECT roll_type, session_id FROM dice_rolls WHERE character_id=? ORDER BY id DESC LIMIT 1', [p.id]);
     expect(row).toEqual({ roll_type: 'blush_of_life', session_id: s.id });
   });
+
+  it('Blood Surge without Fluent Endurance rolls a single Rouse die', async () => {
+    const p = await player(sturdy);
+    const res = await roll(p, { mode: 'traits', traits: ['Stamina', 'Brawl'], bloodSurge: true });
+    expect(res.statusCode).toBe(200);
+    const b = body(res);
+    const surge = b.rolls.find(r => r.roll_type === 'blood_surge');
+    expect(surge).toBeDefined();
+    expect(surge.results.rouse).toHaveLength(1);
+    expect(surge.note).not.toMatch(/Fluent/);
+  });
+
+  it('Blood Surge with Fluent Endurance rolls 2 Rouse dice on Stamina tests', async () => {
+    const p = await player({
+      ...sturdy,
+      disciplines: { Fortitude: 1 },
+      disciplinePowers: { Fortitude: [{ id: 'fluent_endurance', name: 'Fluent Endurance' }] },
+    });
+    const res = await roll(p, { mode: 'traits', traits: ['Stamina', 'Brawl'], bloodSurge: true });
+    expect(res.statusCode).toBe(200);
+    const b = body(res);
+    expect(b.rolls).toHaveLength(2);
+    const surge = b.rolls.find(r => r.roll_type === 'blood_surge');
+    expect(surge).toBeDefined();
+    expect(surge.results.rouse).toHaveLength(2);
+    expect(surge.note).toMatch(/Fluent Endurance/);
+  });
 });
 
 describe('frenzy pool', () => {

@@ -166,5 +166,26 @@ describe('Ingrained Discipline Flaws', () => {
         body: { type: 'ingrained_discipline_power', target: 'Potence', powerName: 'Wrecker' }
       })).rejects.toThrow(/Not enough bonus ranks remaining/);
     });
+
+    it('detects Resilience acquired via ingrained flaw to increase max health in trackers', () => {
+      const { trackers } = require('../services/rolls');
+      const sheetWithResilience = {
+          attributes: { Stamina: 3, Composure: 2, Resolve: 2 },
+          disciplines: { Fortitude: 3 },
+          disciplinePowers: { Fortitude: [] },
+          ingrained_discipline_flaw: {
+            discipline: 'Fortitude',
+            flaw_name: 'Scar Tissue',
+            active: true,
+            bonus_powers: [{ id: 'resilience', name: 'Resilience', level: 1 }]
+          },
+          health: { superficial: 6, aggravated: 0 }
+        };
+        // Without resilience, maxHealth = 3 + 3 = 6, so superficial 6 would make it impaired.
+        // With resilience bonus power, maxHealth = 3 + 3 + 3 = 9, so superficial 6 is NOT impaired.
+        const tr = trackers(sheetWithResilience);
+        expect(tr.healthImpaired).toBe(false);
+      });
+    });
   });
-});
+

@@ -417,8 +417,17 @@ module.exports = async function (fastify, opts) {
         const stamina = Number(sheet.attributes?.Stamina) || 1;
         const fortDots = Number(sheet.disciplines?.Fortitude) || 0;
         const fortPowers = sheet.disciplinePowers?.Fortitude;
+        const flaw = sheet.ingrained_discipline_flaw;
+        const isFortFlaw = String(flaw?.discipline || '').toLowerCase() === 'fortitude';
+        const bonusPowers = (isFortFlaw && flaw?.active !== false && Array.isArray(flaw?.bonus_powers))
+          ? flaw.bonus_powers
+          : [];
+        const allFortPowers = [
+          ...(Array.isArray(fortPowers) ? fortPowers : []),
+          ...bonusPowers,
+        ];
         const hasResilience = !Array.isArray(fortPowers) || fortPowers.length === 0
-          || fortPowers.some((p) => /resilien/i.test(String((p && (p.id || p.name)) || p)));
+          || allFortPowers.some((p) => /resilien/i.test(String((p && (p.id || p.name)) || p)));
         const max = Math.max(1, stamina + 3 + (hasResilience ? fortDots : 0));
 
         if (!sheet.health) sheet.health = { superficial: 0, aggravated: 0 };

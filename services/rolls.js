@@ -43,7 +43,14 @@ function bloodPotency(sheet, clan) {
 /** Impairment and the other tracker facts a pool depends on (mirrors summarizeTrackers). */
 function trackers(sheet) {
   const fortitude = num(sheet?.disciplines?.Fortitude);
-  const resilience = (sheet?.disciplinePowers?.Fortitude || []).some(p => /resilien/i.test(String(p?.id ?? p?.name ?? p)));
+  const fortPowers = sheet?.disciplinePowers?.Fortitude || [];
+  const flaw = sheet?.ingrained_discipline_flaw;
+  const isFortFlaw = String(flaw?.discipline || '').toLowerCase() === 'fortitude';
+  const bonusPowers = (isFortFlaw && flaw?.active !== false && Array.isArray(flaw?.bonus_powers))
+    ? flaw.bonus_powers
+    : [];
+  const allFortPowers = [...(Array.isArray(fortPowers) ? fortPowers : []), ...bonusPowers];
+  const resilience = allFortPowers.some(p => /resilien/i.test(String(p?.id ?? p?.name ?? p)));
   const maxHealth = Math.max(1, (num(sheet?.attributes?.Stamina) || 1) + 3 + (resilience ? fortitude : 0));
   const maxWillpower = Math.max(1, (num(sheet?.attributes?.Composure) || 1) + (num(sheet?.attributes?.Resolve) || 1));
   const humanity = clamp(sheet?.humanity ?? sheet?.morality?.humanity ?? 7, 0, 10);
