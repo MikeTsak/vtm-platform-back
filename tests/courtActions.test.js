@@ -8,7 +8,7 @@ const { registerUser } = require('./setup/helpers');
 
 let pool;
 let app;
-let prince, sheriff, keeper, player, admin;
+let prince, sheriff, keeper, harpy, seneschal, player, admin;
 let targetId, playerCharId;
 
 async function courtUser(name, title) {
@@ -26,13 +26,15 @@ const call = (user, method, url, payload) => app.inject({ method, url, payload, 
 beforeAll(async () => {
   pool = await setupTestDatabase();
   await truncateAll();
-  for (const t of ['blood_hunts', 'court_wanted', 'elysium_invitation_versions', 'elysium_invitation_reads', 'elysium_invitations', 'events']) await pool.query(`DELETE FROM ${t}`);
+  for (const t of ['court_ghoul_registry', 'blood_hunts', 'court_wanted', 'elysium_invitation_versions', 'elysium_invitation_reads', 'elysium_invitations', 'events']) await pool.query(`DELETE FROM ${t}`);
   app = buildTestApp(pool);
   await app.ready();
 
   prince = await courtUser('Prince Anna', 'Prince');
   sheriff = await courtUser('Sheriff Bo', 'Sheriff');
   keeper = await courtUser('Keeper Cy', 'Keeper');
+  harpy = await courtUser('Harpy Helen', 'Harpy');
+  seneschal = await courtUser('Seneschal Sam', 'Seneschal');
   player = await registerUser(app, { displayName: 'Player' });
   const [c] = await pool.query('INSERT INTO characters (user_id, name, clan, xp) VALUES (?,?,?,0)', [player.user.id, 'Dora', 'Toreador']);
   playerCharId = c.insertId;
@@ -222,3 +224,54 @@ describe('Elysium invitation', () => {
     expect((await img('https://img.miketsak.gr@evil.example/x.png', keeper)).statusCode).toBe(400);
   });
 });
+
+describe('Ghouls Registry', () => {
+  it('plain players, Sheriff, and Keeper cannot view or edit the registry', async () => {
+    expect((await call(player, 'GET', '/api/court-actions/ghouls-registry')).statusCode).toBe(403);
+    expect((await call(sheriff, 'GET', '/api/court-actions/ghouls-registry')).statusCode).toBe(403);
+    expect((await call(keeper, 'GET', '/api/court-actions/ghouls-registry')).statusCode).toBe(403);
+
+    expect((await call(player, 'PUT', `/api/court-actions/ghouls-registry/player/${playerCharId}`, { ghoul_count: 1 })).statusCode).toBe(403);
+    expect((await call(sheriff, 'PUT', `/api/court-actions/ghouls-registry/player/${playerCharId}`, { ghoul_count: 1 })).statusCode).toBe(403);
+  });
+
+  it('Prince, Seneschal, Harpy, and Admin can read and write census records', async () => {
+    // Harpy records a player's reported ghouls
+    const hRes = await call(harpy, 'PUT', `/api/court-actions/ghouls-registry/player/${playerCharId}`, {
+      ghoul_count: 2,
+      notes: 'Reports two ghouls: Nikos (driver in Kolonaki) and Maria (accountant).',
+    });
+    expect(hRes.statusCode).toBe(200);
+    const hBody = JSON.parse(hRes.body);
+    expect(hBody.entry.ghoul_count).toBe(2);
+    expect(hBody.entry.updated_office).toBe('Harpy');
+    expect(hBody.entry.target_type).toBe('player');
+    expect(hBody.entry.target_id).toBe(playerCharId);
+
+    // Prince records an NPC's reported ghouls
+    const pRes = await call(prince, 'PUT', `/api/court-actions/ghouls-registry/npc/${targetId}`, {
+      ghoul_count: 4,
+      notes: 'Armed bodyguards at the port.',
+    });
+    expect(pRes.statusCode).toBe(200);
+    const pBody = JSON.parse(pRes.body);
+    expect(pBody.entry.ghoul_count).toBe(4);
+    expect(pBody.entry.updated_office).toBe('Prince');
+
+    // Seneschal reads all entries
+    const sGet = await call(seneschal, 'GET', '/api/court-actions/ghouls-registry');
+    expect(sGet.statusCode).toBe(200);
+    const entries = JSON.parse(sGet.body).entries;
+    expect(entries.length).toBe(2);
+
+    // Admin can delete an entry
+    const dRes = await call(admin, 'DELETE', `/api/court-actions/ghouls-registry/npc/${targetId}`);
+    expect(dRes.statusCode).toBe(200);
+
+    const sGetAfter = await call(seneschal, 'GET', '/api/court-actions/ghouls-registry');
+    const remaining = JSON.parse(sGetAfter.body).entries;
+    expect(remaining.length).toBe(1);
+    expect(remaining[0].target_id).toBe(playerCharId);
+  });
+});
+

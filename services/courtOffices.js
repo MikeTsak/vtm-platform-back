@@ -21,6 +21,7 @@ const CAN = {
   wanted: ['Sheriff', 'Scourge', 'Hound'],
   harpy: ['Harpy', 'Assistant Harpy'],
   keeper: ['Keeper'],
+  ghoulsRegistry: ['Prince', 'Seneschal', 'Harpy', 'Assistant Harpy'],
 };
 
 function parseTitles(raw) {

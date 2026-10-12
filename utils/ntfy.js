@@ -19,6 +19,8 @@ async function broadcastNtfyAlert(message, options = {}) {
       query += " AND ntfy_subscribe_errors = 1";
     } else if (options.requiresSubscription === 'downtimes') {
       query += " AND ntfy_subscribe_downtimes = 1";
+    } else if (options.requiresSubscription === 'notes') {
+      query += " AND ntfy_subscribe_notes = 1";
     }
     const [admins] = await pool.query(query);
 

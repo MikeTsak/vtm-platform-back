@@ -178,6 +178,20 @@ function buildTestApp(pool) {
     sharp: null,
   });
 
+  app.testNtfyAlerts = [];
+  app.register(require('../../routes/anonymousNotes'), {
+    pool,
+    log: testLog,
+    authRequired,
+    requireAdmin,
+    moderateLimiter: noopLimiter,
+    uploadLimiter: noopLimiter,
+    sendPushNotification: capturePushNotification,
+    broadcastNtfyAlert: async (message, options) => { app.testNtfyAlerts.push({ message, options }); },
+    imageClient: { uploadImage: async () => ({ success: false }) },
+    sharp: null,
+  });
+
   return app;
 }
 

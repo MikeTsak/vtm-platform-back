@@ -575,15 +575,40 @@ if (commandText === 'whoami') {
       let fileName = 'meme.jpg';
 
       if (isAnimated) {
+        const numPages = downloadedImages[0].meta.pages || 1;
+        const originalPageHeight = downloadedImages[0].meta.pageHeight || Math.round(downloadedImages[0].meta.height / numPages);
+        const newPageHeight = originalPageHeight + textPaddingHeight;
+
+        const captionBuffer = await sharp({
+          create: {
+            width: targetWidth,
+            height: textPaddingHeight,
+            channels: 4,
+            background: { r: 255, g: 255, b: 255, alpha: 1 }
+          }
+        })
+        .composite([
+          { input: Buffer.from(svg), top: 0, left: 0 },
+          ...(emojiOverlays || [])
+        ])
+        .png()
+        .toBuffer();
+
+        const gifCompositeLayers = [];
+        for (let p = 0; p < numPages; p++) {
+          gifCompositeLayers.push({
+            input: captionBuffer,
+            top: p * newPageHeight,
+            left: 0
+          });
+        }
+
         outputBuffer = await sharp(downloadedImages[0].buffer, { animated: true })
           .extend({
             top: textPaddingHeight,
             background: { r: 255, g: 255, b: 255, alpha: 1 }
           })
-          .composite([
-            { input: Buffer.from(svg), top: 0, left: 0 },
-            ...(emojiOverlays || [])
-          ])
+          .composite(gifCompositeLayers)
           .gif()
           .toBuffer();
         fileName = 'meme.gif';
@@ -732,93 +757,108 @@ async function renderMemeCaptionSvg(text, targetWidth, textToSvgEngine) {
   const uniqueEmojis = [...new Set(allEmojiMatches)];
   await Promise.all(uniqueEmojis.map(e => getEmojiBuffer(e)));
 
-  const wordsRaw = text.trim().split(/\s+/);
-  const words = [];
+  const rawParagraphs = text.trim().split(/\r?\n/);
+  const lines = [];
 
-  for (const w of wordsRaw) {
-    let lastIndex = 0;
-    const tokens = [];
-    let match;
-    EMOJI_TOKEN_REGEX.lastIndex = 0;
+  for (const rawPara of rawParagraphs) {
+    const trimmedPara = rawPara.trim();
+    if (trimmedPara === '') {
+      lines.push([]);
+      continue;
+    }
 
-    while ((match = EMOJI_TOKEN_REGEX.exec(w)) !== null) {
-      if (match.index > lastIndex) {
-        const textContent = w.slice(lastIndex, match.index);
+    const wordsRaw = trimmedPara.split(/[ \t]+/);
+    const words = [];
+
+    for (const w of wordsRaw) {
+      if (!w) continue;
+      let lastIndex = 0;
+      const tokens = [];
+      let match;
+      EMOJI_TOKEN_REGEX.lastIndex = 0;
+
+      while ((match = EMOJI_TOKEN_REGEX.exec(w)) !== null) {
+        if (match.index > lastIndex) {
+          const textContent = w.slice(lastIndex, match.index);
+          tokens.push({
+            type: 'text',
+            content: textContent,
+            width: textToSvgEngine.getMetrics(textContent, fontOptions).width
+          });
+        }
+        const rawEmoji = match[0];
+        const buffer = emojiBufferCache.get(rawEmoji);
+        if (buffer) {
+          tokens.push({
+            type: 'emoji',
+            raw: rawEmoji,
+            buffer,
+            width: emojiTotalWidth
+          });
+        } else {
+          const discordMatch = rawEmoji.match(/^<a?:([a-zA-Z0-9_]+):(\d+)>$/);
+          const fallbackText = discordMatch ? `:${discordMatch[1]}:` : rawEmoji;
+          tokens.push({
+            type: 'text',
+            content: fallbackText,
+            width: textToSvgEngine.getMetrics(fallbackText, fontOptions).width
+          });
+        }
+        lastIndex = EMOJI_TOKEN_REGEX.lastIndex;
+      }
+
+      if (lastIndex < w.length) {
+        const textContent = w.slice(lastIndex);
         tokens.push({
           type: 'text',
           content: textContent,
           width: textToSvgEngine.getMetrics(textContent, fontOptions).width
         });
       }
-      const rawEmoji = match[0];
-      const buffer = emojiBufferCache.get(rawEmoji);
-      if (buffer) {
-        tokens.push({
-          type: 'emoji',
-          raw: rawEmoji,
-          buffer,
-          width: emojiTotalWidth
-        });
-      } else {
-        const discordMatch = rawEmoji.match(/^<a?:([a-zA-Z0-9_]+):(\d+)>$/);
-        const fallbackText = discordMatch ? `:${discordMatch[1]}:` : rawEmoji;
-        tokens.push({
-          type: 'text',
-          content: fallbackText,
-          width: textToSvgEngine.getMetrics(fallbackText, fontOptions).width
-        });
+
+      const wordWidth = tokens.reduce((acc, t) => acc + t.width, 0);
+      words.push({ tokens, width: wordWidth });
+    }
+
+    let currentLineTokens = [];
+    let currentLineWidth = 0;
+
+    for (const word of words) {
+      const addWidth = currentLineTokens.length > 0 ? (spaceWidth + word.width) : word.width;
+      if (currentLineTokens.length > 0 && (currentLineWidth + addWidth) > maxWidth) {
+        lines.push(currentLineTokens);
+        currentLineTokens = [];
+        currentLineWidth = 0;
       }
-      lastIndex = EMOJI_TOKEN_REGEX.lastIndex;
-    }
 
-    if (lastIndex < w.length) {
-      const textContent = w.slice(lastIndex);
-      tokens.push({
-        type: 'text',
-        content: textContent,
-        width: textToSvgEngine.getMetrics(textContent, fontOptions).width
-      });
-    }
-
-    const wordWidth = tokens.reduce((acc, t) => acc + t.width, 0);
-    words.push({ tokens, width: wordWidth });
-  }
-
-  const lines = [];
-  let currentLineTokens = [];
-  let currentLineWidth = 0;
-
-  for (const word of words) {
-    const addWidth = currentLineTokens.length > 0 ? (spaceWidth + word.width) : word.width;
-    if (currentLineTokens.length > 0 && (currentLineWidth + addWidth) > maxWidth) {
-      lines.push(currentLineTokens);
-      currentLineTokens = [];
-      currentLineWidth = 0;
-    }
-
-    if (currentLineTokens.length === 0 && word.width > maxWidth && word.tokens.length > 1) {
-      for (const tok of word.tokens) {
-        if (currentLineTokens.length > 0 && (currentLineWidth + tok.width) > maxWidth) {
-          lines.push(currentLineTokens);
-          currentLineTokens = [];
-          currentLineWidth = 0;
+      if (currentLineTokens.length === 0 && word.width > maxWidth && word.tokens.length > 1) {
+        for (const tok of word.tokens) {
+          if (currentLineTokens.length > 0 && (currentLineWidth + tok.width) > maxWidth) {
+            lines.push(currentLineTokens);
+            currentLineTokens = [];
+            currentLineWidth = 0;
+          }
+          currentLineTokens.push(tok);
+          currentLineWidth += tok.width;
         }
-        currentLineTokens.push(tok);
-        currentLineWidth += tok.width;
-      }
-    } else {
-      if (currentLineTokens.length > 0) {
-        currentLineTokens.push({ type: 'text', content: ' ', width: spaceWidth });
-        currentLineWidth += spaceWidth;
-      }
-      for (const tok of word.tokens) {
-        currentLineTokens.push(tok);
-        currentLineWidth += tok.width;
+      } else {
+        if (currentLineTokens.length > 0) {
+          currentLineTokens.push({ type: 'text', content: ' ', width: spaceWidth });
+          currentLineWidth += spaceWidth;
+        }
+        for (const tok of word.tokens) {
+          currentLineTokens.push(tok);
+          currentLineWidth += tok.width;
+        }
       }
     }
+    if (currentLineTokens.length > 0) {
+      lines.push(currentLineTokens);
+    }
   }
-  if (currentLineTokens.length > 0) {
-    lines.push(currentLineTokens);
+
+  if (lines.length === 0) {
+    lines.push([]);
   }
 
   const mergedLines = lines.map(line => {

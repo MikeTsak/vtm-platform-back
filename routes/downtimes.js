@@ -263,12 +263,13 @@ module.exports = async function (fastify, opts) {
 
     rows.forEach(r => {
       let pendingRelease = false;
+      const pastCycle = Boolean(currentCycleStart && new Date(r.created_at).getTime() < currentCycleStart.getTime());
+      r.is_past_cycle = pastCycle;
 
       if (isMassReleaseActive) {
         const alreadyRead = r.is_read === 1 || r.is_read === true;
         const isProject = r.title && r.title.startsWith('[PROJECT]');
         const projectMismatch = isProject && activePhase === 'standard';
-        const pastCycle = currentCycleStart && new Date(r.created_at).getTime() < currentCycleStart.getTime();
 
         if (!alreadyRead && !projectMismatch && !pastCycle) {
           const s = String(r.status || '').toLowerCase();

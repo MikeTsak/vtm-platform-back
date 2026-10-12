@@ -336,4 +336,98 @@ module.exports = async function (fastify, opts) {
     pushEveryone(`Decree of the ${signingOffice(req.court, 'decree')}`, entry.title, '/court/announcements');
     reply.send({ ok: true });
   });
+
+  /* ---------------- Ghouls Registry (Prince, Seneschal, Harpy) ---------------- */
+
+  // Retrieve all recorded registry entries for Kindred ghouls
+  fastify.get('/api/court-actions/ghouls-registry', { preHandler: [authRequired, requireCapability('ghoulsRegistry')] }, async (req, reply) => {
+    try {
+      const [rows] = await pool.query(`
+        SELECT r.id, r.target_type, r.target_id, r.ghoul_count, r.notes,
+               r.updated_by, r.updated_office, r.updated_at, r.created_at,
+               COALESCE(cp.name, up.display_name) AS updated_by_name
+          FROM court_ghoul_registry r
+          LEFT JOIN users up ON up.id = r.updated_by
+          LEFT JOIN characters cp ON cp.id = (SELECT MIN(id) FROM characters WHERE user_id = r.updated_by)
+         ORDER BY r.updated_at DESC
+      `);
+      reply.send({ entries: rows });
+    } catch (e) {
+      log.err('Ghouls registry fetch failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to load ghouls registry' });
+    }
+  });
+
+  // Record or update a Kindred's ghoul census notes and count
+  fastify.put('/api/court-actions/ghouls-registry/:targetType/:targetId', { preHandler: [authRequired, requireCapability('ghoulsRegistry')] }, async (req, reply) => {
+    const { targetType, targetId } = req.params;
+    if (!['player', 'npc'].includes(targetType)) {
+      return reply.status(400).send({ error: 'Invalid target type' });
+    }
+    const numId = parseInt(targetId, 10);
+    if (!Number.isInteger(numId) || numId <= 0) {
+      return reply.status(400).send({ error: 'Invalid target id' });
+    }
+
+    const table = targetType === 'player' ? 'characters' : 'npcs';
+    const [[target]] = await pool.query(`SELECT id, name FROM \`${table}\` WHERE id = ?`, [numId]);
+    if (!target) {
+      return reply.status(404).send({ error: 'Kindred not found' });
+    }
+
+    const ghoulCount = Math.max(0, parseInt(req.body?.ghoul_count, 10) || 0);
+    const notes = req.body?.notes != null ? String(req.body.notes).trim().slice(0, 10000) : '';
+    const office = signingOffice(req.court, 'ghoulsRegistry') || (req.court.isAdmin ? 'Storyteller' : 'Court');
+
+    try {
+      await pool.query(`
+        INSERT INTO court_ghoul_registry (target_type, target_id, ghoul_count, notes, updated_by, updated_office, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, NOW())
+        ON DUPLICATE KEY UPDATE
+          ghoul_count = VALUES(ghoul_count),
+          notes = VALUES(notes),
+          updated_by = VALUES(updated_by),
+          updated_office = VALUES(updated_office),
+          updated_at = NOW()
+      `, [targetType, numId, ghoulCount, notes, req.user.id, office]);
+
+      const [[entry]] = await pool.query(`
+        SELECT r.id, r.target_type, r.target_id, r.ghoul_count, r.notes,
+               r.updated_by, r.updated_office, r.updated_at, r.created_at,
+               COALESCE(cp.name, up.display_name) AS updated_by_name
+          FROM court_ghoul_registry r
+          LEFT JOIN users up ON up.id = r.updated_by
+          LEFT JOIN characters cp ON cp.id = (SELECT MIN(id) FROM characters WHERE user_id = r.updated_by)
+         WHERE r.target_type = ? AND r.target_id = ?
+      `, [targetType, numId]);
+
+      log.adm('Ghoul registry updated', { target_type: targetType, target_id: numId, target_name: target.name, count: ghoulCount, by: req.user.id, office });
+      reply.send({ entry });
+    } catch (e) {
+      log.err('Ghoul registry update failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to save registry entry' });
+    }
+  });
+
+  // Delete a Kindred's registry record if needed
+  fastify.delete('/api/court-actions/ghouls-registry/:targetType/:targetId', { preHandler: [authRequired, requireCapability('ghoulsRegistry')] }, async (req, reply) => {
+    const { targetType, targetId } = req.params;
+    if (!['player', 'npc'].includes(targetType)) {
+      return reply.status(400).send({ error: 'Invalid target type' });
+    }
+    const numId = parseInt(targetId, 10);
+    if (!Number.isInteger(numId) || numId <= 0) {
+      return reply.status(400).send({ error: 'Invalid target id' });
+    }
+
+    try {
+      await pool.query('DELETE FROM court_ghoul_registry WHERE target_type = ? AND target_id = ?', [targetType, numId]);
+      log.adm('Ghoul registry entry deleted', { target_type: targetType, target_id: numId, by: req.user.id });
+      reply.send({ ok: true });
+    } catch (e) {
+      log.err('Ghoul registry delete failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to delete registry entry' });
+    }
+  });
 };
+
