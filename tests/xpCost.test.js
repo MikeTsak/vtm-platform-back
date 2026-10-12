@@ -49,6 +49,18 @@ describe('xpCost', () => {
     expect(xpCost({ type: 'blood_potency', newLevel: 1 })).toBe(10);
   });
 
+  it('prices ingrained discipline flaws as 0 XP', () => {
+    expect(xpCost({ type: 'ingrained_discipline_flaw' })).toBe(0);
+  });
+
+  it('prices ingrained discipline bonus powers at normal discipline power rates', () => {
+    expect(xpCost({ type: 'ingrained_discipline_power', powerLevel: 1, disciplineKind: 'clan' })).toBe(5);
+    expect(xpCost({ type: 'ingrained_discipline_power', powerLevel: 2, disciplineKind: 'clan' })).toBe(10);
+    expect(xpCost({ type: 'ingrained_discipline_power', powerLevel: 3, disciplineKind: 'clan' })).toBe(15);
+    expect(xpCost({ type: 'ingrained_discipline_power', powerLevel: 1, disciplineKind: 'caitiff' })).toBe(6);
+    expect(xpCost({ type: 'ingrained_discipline_power', powerLevel: 2, disciplineKind: 'other' })).toBe(14);
+  });
+
   it('rejects an unknown type instead of silently returning 0', () => {
     expect(() => xpCost({ type: 'not_a_real_type', newLevel: 1 })).toThrow(/Unknown XP type/);
   });

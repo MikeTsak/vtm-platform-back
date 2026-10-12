@@ -13,6 +13,7 @@
 // unrestricted editing through the admin sheet editor; this path only skips
 // the discipline-unlock gate for them.
 const CATALOG = require('../data/rulesCatalog.json');
+const INGRAINED_FLAWS = require('../data/ingrainedDisciplineFlaws.json');
 const { xpCost } = require('./xpCost');
 const { parseSheet } = require('./sheet');
 const { isPredatorDiscipline } = require('../data/predatorDisciplines');
@@ -20,7 +21,7 @@ const { checkSubmission } = require('../services/downtimeSchedule');
 
 // House rule: a dot of Attribute, Discipline or Blood Potency costs the XP AND a downtime action
 // (Skills, Rituals and merits are XP only). Mirrored by DOWNTIME_TRAINED in the front's CharacterView.
-const DOWNTIME_TRAINED = ['attribute', 'discipline', 'blood_potency'];
+const DOWNTIME_TRAINED = ['attribute', 'discipline', 'blood_potency', 'ingrained_discipline_flaw'];
 const needsDowntime = (body) => DOWNTIME_TRAINED.includes(body?.type) && body?.disciplineKind !== 'select';
 
 class PurchaseError extends Error {
@@ -290,6 +291,77 @@ async function applyPurchase({ sheet: storedSheet, clan, body, isAdmin = false, 
       return { sheet, cost: isFlaw ? 0 : xpCost({ type: 'advantage', dots: delta }), from: null, to: null };
     }
 
+    case 'ingrained_discipline_flaw': {
+      if (!CATALOG.disciplines[target]) fail(400, `Unknown discipline: ${target}`);
+      const dots = num(sheet.disciplines?.[target]);
+      if (dots < 3) fail(400, `You need at least 3 dots in ${target} to take an Ingrained Discipline Flaw.`);
+      const kind = disciplineKind(clan, target);
+      if (kind !== 'clan' && clan !== 'Caitiff' && !isAdmin) {
+        fail(400, `${target} is not an in-clan discipline for ${clan}. Only in-clan disciplines are eligible.`);
+      }
+      if (sheet.ingrained_discipline_flaw && sheet.ingrained_discipline_flaw.discipline) {
+        fail(400, 'You already have an Ingrained Discipline Flaw.');
+      }
+      const flawData = INGRAINED_FLAWS[target];
+      if (!flawData) fail(400, `No ingrained flaw found for ${target}.`);
+
+      sheet.ingrained_discipline_flaw = {
+        discipline: target,
+        flaw_name: flawData.name,
+        active: true,
+        bonus_powers: []
+      };
+      return { sheet, cost: xpCost({ type }), from: null, to: null };
+    }
+
+    case 'ingrained_discipline_power': {
+      const flaw = sheet.ingrained_discipline_flaw;
+      if (!flaw || !flaw.discipline) {
+        fail(400, 'You do not have an Ingrained Discipline Flaw.');
+      }
+      if (target !== flaw.discipline) {
+        fail(400, `Your Ingrained Discipline Flaw is in ${flaw.discipline}, not ${target}.`);
+      }
+      const discDots = num(sheet.disciplines?.[target]);
+      if (discDots < 3) {
+        fail(400, `${target} has fewer than 3 dots; your flaw is currently inactive.`);
+      }
+
+      const power = findPower(target, body.powerId || body.powerName);
+      if (!power) fail(400, `Pick a ${target} power to buy.`);
+      if (power.level > Math.min(discDots, 5)) {
+        fail(400, `${power.name} needs ${target} ${power.level}.`);
+      }
+      if (power.clan && power.clan !== clan) {
+        fail(400, `${power.name} is restricted to ${power.clan}.`);
+      }
+      const unmet = unmetAmalgam(power.amalgam, sheet.disciplines);
+      if (unmet.length) fail(400, `${power.name} needs ${unmet.join(', ')}.`);
+
+      const ownedMain = cleanPowers(target, sheet.disciplinePowers?.[target]);
+      const bonusPowers = Array.isArray(flaw.bonus_powers) ? flaw.bonus_powers : [];
+      const alreadyOwned = ownedMain.some(p => keyOf(p) === power.id.toLowerCase() || keyOf({ name: p.name }) === String(power.name).toLowerCase())
+        || bonusPowers.some(p => keyOf(p) === power.id.toLowerCase() || keyOf({ name: p.name }) === String(power.name).toLowerCase());
+      if (alreadyOwned) {
+        fail(400, `You already have ${power.name}.`);
+      }
+
+      const currentBonusRanks = bonusPowers.reduce((sum, p) => sum + num(p.level), 0);
+      if (currentBonusRanks + power.level > 3) {
+        fail(400, `Not enough bonus ranks remaining (have ${3 - currentBonusRanks} of 3 remaining, power is level ${power.level}).`);
+      }
+
+      sheet.ingrained_discipline_flaw = {
+        ...flaw,
+        bonus_powers: [...bonusPowers, { id: power.id, name: power.name, level: power.level }]
+          .sort((a, b) => num(a.level) - num(b.level))
+      };
+
+      const kind = disciplineKind(clan, target);
+      const cost = xpCost({ type, powerLevel: power.level, disciplineKind: kind });
+      return { sheet, cost, from: null, to: null };
+    }
+
     default:
       return fail(400, `${type || 'That'} can't be bought with XP here. Ask your Storyteller.`);
   }
@@ -327,17 +399,20 @@ async function runPurchase({ pool, table, id, body, isAdmin, unlockedTo, logXp =
     // the spot. Characters not yet activated (still spending their starting XP) and Storytellers skip it.
     // The row lock above serialises this character's purchases, so two can't take the last slot.
     if (chargeDowntime && needsDowntime(body) && parseSheet(row.sheet)?.is_active === true) {
-      const label = body.type === 'blood_potency' ? 'Blood Potency' : body.target;
+      const isIngrained = body.type === 'ingrained_discipline_flaw';
+      const label = body.type === 'blood_potency' ? 'Blood Potency' : (isIngrained ? `Ingrained Flaw (${body.target})` : body.target);
       const { error } = await checkSubmission({ characterId: id });
-      if (error) fail(400, `Raising ${label} also needs a downtime action this cycle. ${error}`);
-      const what = `${label} ${result.from ?? 0} → ${result.to}`;
+      if (error) fail(400, `${isIngrained ? 'Taking an Ingrained Flaw' : `Raising ${label}`} also needs a downtime action this cycle. ${error}`);
+      const what = isIngrained ? `Ingrained Flaw: ${body.target}` : `${label} ${result.from ?? 0} → ${result.to}`;
       const power = body.type === 'discipline' ? findPower(body.target, body.powerId || body.powerName) : null;
       await conn.query(
         `INSERT INTO downtimes (character_id, title, body, status, gm_resolution, resolved_at, is_released)
          VALUES (?, ?, ?, 'resolved', ?, NOW(), 1)`,
         [id, `[XP] Training: ${what}`.slice(0, 140),
-          `Trained ${what}${power ? ` (${power.name})` : ''} for ${result.cost} XP.`,
-          'Filed automatically with the XP purchase: Attribute, Discipline and Blood Potency dots need a downtime action alongside the XP.']
+          isIngrained
+            ? `Acquired Ingrained Discipline Flaw for ${body.target}.`
+            : `Trained ${what}${power ? ` (${power.name})` : ''} for ${result.cost} XP.`,
+          'Filed automatically with the XP purchase: Attribute, Discipline and Blood Potency dots, as well as Ingrained Discipline Flaws, need a downtime action alongside the XP.']
       );
     }
 
@@ -374,4 +449,4 @@ async function runPurchase({ pool, table, id, body, isAdmin, unlockedTo, logXp =
   }
 }
 
-module.exports = { applyPurchase, runPurchase, needsDowntime, PurchaseError, allowedDots, ATTRIBUTES, SKILLS, CATALOG };
+module.exports = { applyPurchase, runPurchase, needsDowntime, PurchaseError, allowedDots, ATTRIBUTES, SKILLS, CATALOG, INGRAINED_FLAWS };

@@ -1,0 +1,46 @@
+{
+  "Animalism": {
+    "name": "Untamed",
+    "description": "Failing to Ride the Wave during Frenzy inflicts two Stains. Convictions cannot mitigate these Stains."
+  },
+  "Auspex": {
+    "name": "Daymares",
+    "description": "When awakening for the night, make two Rouse Checks instead of the usual one."
+  },
+  "Blood Sorcery": {
+    "name": "Sanguinary Animism",
+    "description": "For any scene following a feeding, the vampire loses two dice from all Social and Mental pools due to distraction."
+  },
+  "Celerity": {
+    "name": "Breakdown",
+    "description": "Whenever the vampire fails a Rouse Check when activating a Celerity power, they sustain 1 point of Aggravated Health damage."
+  },
+  "Dominate": {
+    "name": "Blunt",
+    "description": "Vampires with this Flaw cannot spend Willpower to reroll a Social test."
+  },
+  "Fortitude": {
+    "name": "Scar Tissue",
+    "description": "When rousing the Blood to restore Health, the physical appearance of injuries sustained remains until resting for the day."
+  },
+  "Obfuscate": {
+    "name": "Faded",
+    "description": "When making Remorse tests, the vampire rolls one fewer die (the one die minimum still applies)."
+  },
+  "Oblivion": {
+    "name": "Monstrous",
+    "description": "Treat Humanity rating as three lower for Blush of Life, Social pools, and physical appearance. If this takes rating below one, gain the Repulsive Flaw."
+  },
+  "Potence": {
+    "name": "Killer Instinct",
+    "description": "If failing a Rouse Check when activating a Potence power, immediately test for Fury Frenzy as if physically provoked."
+  },
+  "Presence": {
+    "name": "Egomaniac",
+    "description": "Whenever a Presence power generates a messy critical or fails to sway a target, make a Fury Frenzy test at Difficulty 2."
+  },
+  "Protean": {
+    "name": "Stasis",
+    "description": "If failing a Rouse Check while activating a Protean power, reverting leaves an incomplete change."
+  }
+}
