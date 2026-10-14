@@ -178,6 +178,9 @@ function buildTestApp(pool) {
     sharp: null,
   });
 
+  app.register(require('../../routes/drafts'), { pool, log: testLog, authRequired });
+  app.register(require('../../routes/comms'), { pool, log: testLog, authRequired, requireAdmin, sendPushNotification: capturePushNotification });
+
   app.testNtfyAlerts = [];
   app.register(require('../../routes/anonymousNotes'), {
     pool,

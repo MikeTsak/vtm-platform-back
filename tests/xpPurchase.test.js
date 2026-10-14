@@ -148,6 +148,23 @@ describe('XP purchases are applied by the server', () => {
     expect(res.statusCode).toBe(200);
     expect((await stored(p.id)).xp).toBe(13);
   });
+
+  it('a Storyteller tracker edit (sheetPatch) keeps a purchase made after the tab loaded', async () => {
+    const st = await admin();
+    const p = await player({ clan: 'Brujah', xp: 20, sheet: { disciplines: { Celerity: 2 }, health: { superficial: 0, aggravated: 3 } } });
+    expect((await spend(p, { type: 'discipline', target: 'Celerity', newLevel: 3, powerId: 'weaving' })).statusCode).toBe(200);
+    const res = await app.inject({
+      method: 'PATCH', url: `/api/admin/characters/${p.id}`, headers: { cookie: st.cookie },
+      payload: { sheetPatch: { health: { superficial: 0, aggravated: 2 } } },
+    });
+    expect(res.statusCode).toBe(200);
+    const s = await stored(p.id);
+    expect(s.sheet.disciplines.Celerity).toBe(3);
+    expect(s.sheet.disciplinePowers.Celerity.map(x => x.id)).toContain('weaving');
+    expect(s.sheet.health.aggravated).toBe(2);
+    const [[v]] = await pool.query('SELECT change_summary FROM character_sheet_versions WHERE character_id=? ORDER BY id DESC LIMIT 1', [p.id]);
+    expect(v.change_summary).toBe('Admin character sheet update');
+  });
 });
 
 describe('a player saving their own sheet', () => {

@@ -15,7 +15,7 @@ const { sendDiscordDM, sendDiscordMailNotifications } = require('../services/dis
 const { runFeedingDecay } = require('../services/feedingDecay');
 const { sendPushNotification } = require('../services/push');
 const { flushQueuedMessages } = require('../services/commsQueue');
-const { resolveCommsSchedule } = require('../routes/comms');
+const { loadCommsState, statusPayload, clearExpiredOverride } = require('../services/commsState');
 const { purgeOldIdempotencyKeys } = require('../utils/idempotency');
 const { releasePendingAndNotify, advanceActiveCycle } = require('../services/downtimeSchedule');
 const { closeStaleSessions } = require('../services/liveSession');
@@ -292,18 +292,25 @@ function scheduleWillpowerReset() {
 }
 
 // ============================================================================
-// QUEUED NPC MESSAGE FLUSH (SchreckNet + SurfaceWeb)
+// COMMS SWITCH + QUEUED NPC MESSAGE FLUSH (SchreckNet + SurfaceWeb)
 // ============================================================================
-// Every minute: safety net for schedule-based comms openings. The admin's
-// manual on/off toggle already flushes instantly from routes/comms.js — this
-// only matters when comms open on their own via the day-by-day schedule.
+// Every minute: the calendar opens and closes comms on its own, and an
+// emergency override expires at the calendar's next change. When the live
+// state flips, every client hears it at once (comms:status) instead of on its
+// next 60s poll, and the Send Later queue goes out when comms are open. The
+// admin's own switch / calendar edits already broadcast from routes/comms.js.
 function scheduleQueuedMessageFlush(io) {
+  let lastState = null;
   return cron.schedule('* * * * *', async () => {
     try {
-      const masterEnabled = await getSetting('comms_enabled', 'true');
-      const scheduleStr = await getSetting('chat_schedule', '{}');
-      const { isCommsEnabled } = resolveCommsSchedule(scheduleStr, masterEnabled);
-      if (!isCommsEnabled) return;
+      const info = await loadCommsState();
+      if (await clearExpiredOverride(info)) log.info('Comms override expired: back on the calendar.');
+      if (lastState !== null && lastState !== info.isCommsEnabled) {
+        log.info(`Comms ${info.isCommsEnabled ? 'opened' : 'closed'} on schedule.`);
+        io?.emit('comms:status', statusPayload(info));
+      }
+      lastState = info.isCommsEnabled;
+      if (!info.isCommsEnabled) return;
 
       await flushQueuedMessages(pool, { log, sendPushNotification, io });
     } catch (error) {

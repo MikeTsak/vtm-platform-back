@@ -5,6 +5,7 @@
 
 const { getSetting, setSetting } = require('../utils/settings');
 const { parseSheet } = require('../utils/sheet');
+const { clampBloodPotency } = require('../utils/bloodPotencyLimits');
 const { recordVersion } = require('../services/elysiumHistory');
 
 module.exports = async function (fastify, opts) {
@@ -280,7 +281,7 @@ module.exports = async function (fastify, opts) {
       const sheet = parseSheet(char.sheet);
       if (hunger !== undefined) sheet.hunger = Math.max(0, Math.min(5, Number(hunger)));
       // blood_potency is the key the sheet reads; keep the legacy camelCase copy in sync (same as liveSessions.js).
-      if (bloodPotency !== undefined) sheet.blood_potency = sheet.bloodPotency = Math.max(0, Math.min(10, Number(bloodPotency)));
+      if (bloodPotency !== undefined) sheet.blood_potency = sheet.bloodPotency = clampBloodPotency(bloodPotency, sheet.generation);
       const nextSheetJson = JSON.stringify(sheet);
       await pool.query('UPDATE characters SET sheet = ? WHERE id = ?', [nextSheetJson, id]);
       try {

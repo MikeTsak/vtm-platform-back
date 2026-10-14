@@ -15,6 +15,7 @@
 const CATALOG = require('../data/rulesCatalog.json');
 const INGRAINED_FLAWS = require('../data/ingrainedDisciplineFlaws.json');
 const { xpCost } = require('./xpCost');
+const { bloodPotencyLimits, bloodPotencyLimitMessage } = require('./bloodPotencyLimits');
 const { parseSheet } = require('./sheet');
 const { isPredatorDiscipline } = require('../data/predatorDisciplines');
 const { checkSubmission } = require('../services/downtimeSchedule');
@@ -164,6 +165,8 @@ async function applyPurchase({ sheet: storedSheet, clan, body, isAdmin = false, 
       const from = num(sheet.blood_potency ?? 1);
       const to = from + 1;
       if (to > MAX_BLOOD_POTENCY) fail(400, `Blood Potency is already at ${MAX_BLOOD_POTENCY}.`);
+      const limits = bloodPotencyLimits(sheet.generation);
+      if (to > limits.max) fail(400, bloodPotencyLimitMessage(sheet.generation, limits));
       expectLevel(body, to, 'Blood Potency');
       sheet.blood_potency = to;
       return { sheet, cost: xpCost({ type, newLevel: to }), from, to };

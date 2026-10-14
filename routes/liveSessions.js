@@ -4,6 +4,7 @@
 // Storyteller broadcast channel. Realtime nudges go through fastify.io.
 const { insertRoll, formatRoll } = require('../services/rolls');
 const { rollD10 } = require('../services/dice');
+const { clampBloodPotency } = require('../utils/bloodPotencyLimits');
 const { getSessionInternalId, getSessionRow, emitSessionRefresh, closeSession, onlineUserIds, removeUserSockets } = require('../services/liveSession');
 
 const guards = require('../services/guards');
@@ -401,12 +402,12 @@ module.exports = async function (fastify, opts) {
       }
       if (bloodPotencyDelta !== undefined) {
         const currentBP = Number(sheet.blood_potency ?? sheet.bloodPotency ?? 1);
-        const nextBP = Math.max(0, Math.min(10, currentBP + Number(bloodPotencyDelta)));
+        const nextBP = clampBloodPotency(currentBP + Number(bloodPotencyDelta), sheet.generation);
         sheet.blood_potency = nextBP;
         sheet.bloodPotency = nextBP;
       }
       if (bloodPotency !== undefined) {
-        const nextBP = Math.max(0, Math.min(10, Number(bloodPotency)));
+        const nextBP = clampBloodPotency(bloodPotency, sheet.generation);
         sheet.blood_potency = nextBP;
         sheet.bloodPotency = nextBP;
       }

@@ -79,9 +79,13 @@ module.exports = async function (fastify, opts) {
   });
 
   // --- Admin: edit character ---
+  // `sheet` replaces the whole sheet (the full editor). `sheetPatch` sets only
+  // its top-level keys on the STORED sheet: trackers and flags must go through
+  // it, or a sheet cached in the browser undoes everything saved since it was
+  // loaded (a player's XP purchase was lost that way).
   fastify.patch('/api/admin/characters/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const id = Number(req.params.id);
-  const { name, clan, sheet } = req.body;
+    const { name, clan, sheet, sheetPatch } = req.body;
 
     const fields = [];
     const vals = [];
@@ -89,8 +93,8 @@ module.exports = async function (fastify, opts) {
     if (typeof name === 'string') { fields.push('name=?'); vals.push(name.trim()); }
     if (typeof clan === 'string') { fields.push('clan=?'); vals.push(clan.trim()); }
 
+    let jsonStr = null;
     if (sheet !== undefined) {
-      let jsonStr = null;
       try {
         const obj = (typeof sheet === 'string') ? JSON.parse(sheet) : sheet;
         jsonStr = JSON.stringify(obj ?? {});
@@ -98,14 +102,33 @@ module.exports = async function (fastify, opts) {
         return reply.status(400).send({ error: 'sheet must be valid JSON (object or stringified object)' });
       }
       fields.push('sheet=?'); vals.push(jsonStr);
+    } else if (sheetPatch !== undefined) {
+      if (!sheetPatch || typeof sheetPatch !== 'object' || Array.isArray(sheetPatch)) {
+        return reply.status(400).send({ error: 'sheetPatch must be an object' });
+      }
     }
 
-    if (!fields.length) return reply.status(400).send({ error: 'Nothing to update' });
+    if (!fields.length && sheetPatch === undefined) return reply.status(400).send({ error: 'Nothing to update' });
 
-    vals.push(id);
-    await pool.query(`UPDATE characters SET ${fields.join(', ')} WHERE id=?`, vals);
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      if (jsonStr === null && sheetPatch !== undefined) {
+        const [[row]] = await conn.query('SELECT sheet FROM characters WHERE id=? FOR UPDATE', [id]);
+        if (!row) { await conn.rollback(); return reply.status(404).send({ error: 'Character not found' }); }
+        jsonStr = JSON.stringify({ ...parseSheet(row.sheet), ...sheetPatch });
+        fields.push('sheet=?'); vals.push(jsonStr);
+      }
+      await conn.query(`UPDATE characters SET ${fields.join(', ')} WHERE id=?`, [...vals, id]);
+      await conn.commit();
+    } catch (e) {
+      await conn.rollback().catch(() => {});
+      throw e;
+    } finally {
+      conn.release();
+    }
 
-    if (sheet !== undefined) {
+    if (jsonStr !== null) {
       try {
         await pool.query(
           'INSERT INTO character_sheet_versions (character_id, editor_id, sheet, change_summary) VALUES (?, ?, ?, ?)',
