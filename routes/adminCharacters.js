@@ -3,6 +3,7 @@
 // Storyteller character administration: roster, ghouls, edit, delete.
 
 const { parseSheet } = require('../utils/sheet');
+const { retireCharacter, restoreCharacter } = require('../services/characterRetirement');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin } = opts;
@@ -18,15 +19,57 @@ module.exports = async function (fastify, opts) {
   // DUP:   reply.send({ character: out[0] });
   // DUP: });
 
-  // ADMIN: Get all characters (for stats and admin views)
+  // ADMIN: Get all current characters (for stats and admin views).
+  // ?retired=1 lists retired ones instead, with their player.
   fastify.get('/api/admin/characters', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const [characters] = await pool.query('SELECT * FROM characters ORDER BY created_at DESC');
+      const [characters] = req.query.retired === '1'
+        ? await pool.query(
+          `SELECT c.id, c.name, c.clan, c.xp, c.is_deceased, c.created_at, c.retired_at, c.retired_user_id,
+                  u.display_name, u.email
+             FROM characters c JOIN users u ON u.id = c.retired_user_id
+            ORDER BY c.retired_at DESC`)
+        : await pool.query('SELECT * FROM characters WHERE user_id IS NOT NULL ORDER BY created_at DESC');
       reply.send({ characters });
     } catch (e) {
       console.error('Failed to fetch all characters:', e);
       reply.status(500).send({ error: 'Failed to fetch characters' });
     }
+  });
+
+  // Retire / restore (services/characterRetirement.js). Retiring frees the
+  // player to create a new character; restoring makes a retired one current
+  // again and retires whoever is current.
+  const inTransaction = async (fn) => {
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const out = await fn(conn);
+      await conn.commit();
+      return out;
+    } catch (e) {
+      await conn.rollback().catch(() => {});
+      throw e;
+    } finally {
+      conn.release();
+    }
+  };
+
+  fastify.post('/api/admin/characters/:id/retire', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    const id = Number(req.params.id);
+    if (!(await inTransaction(conn => retireCharacter(conn, id)))) {
+      return reply.status(404).send({ error: 'No current character with that id' });
+    }
+    log.adm('Character retired', { id, by_user_id: req.user.id });
+    reply.send({ ok: true });
+  });
+
+  fastify.post('/api/admin/characters/:id/restore', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    const id = Number(req.params.id);
+    const userId = await inTransaction(conn => restoreCharacter(conn, id));
+    if (!userId) return reply.status(404).send({ error: 'No retired character with that id' });
+    log.adm('Character restored', { id, user_id: userId, by_user_id: req.user.id });
+    reply.send({ ok: true });
   });
 
   // --- Admin: every retainer — personal mortals, ghouls, and coterie-owned ---

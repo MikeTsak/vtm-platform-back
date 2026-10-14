@@ -32,7 +32,7 @@ function resetDueDay(eventDays, today, through) {
 }
 
 async function resetAllWillpower() {
-  const [rows] = await pool.query("SELECT id FROM characters WHERE sheet LIKE '%willpower%'");
+  const [rows] = await pool.query("SELECT id FROM characters WHERE user_id IS NOT NULL AND sheet LIKE '%willpower%'");
   let reset = 0;
   for (const { id } of rows) {
     const conn = await pool.getConnection();

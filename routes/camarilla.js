@@ -16,7 +16,8 @@ module.exports = async function (fastify, opts) {
         `SELECT c.id, c.user_id, c.name, c.clan, c.camarilla_titles as titles, c.status, c.image_url, 
               c.is_ex, c.is_deceased, c.is_hidden, c.is_left, c.is_called, c.is_missing, c.is_exiled, c.is_bloodhunted, 
               'player' as type,
-              (u.avatar_url IS NOT NULL OR u.avatar_url_thumb IS NOT NULL) as has_avatar
+              c.avatar_url AS saved_avatar_url, c.avatar_url_thumb AS saved_avatar_thumb,
+              (u.avatar_url IS NOT NULL OR u.avatar_url_thumb IS NOT NULL OR c.avatar_url IS NOT NULL) as has_avatar
        FROM characters c
        LEFT JOIN users u ON c.user_id = u.id`
       );
@@ -60,7 +61,8 @@ module.exports = async function (fastify, opts) {
         `SELECT c.id, c.user_id, c.name, c.clan, c.camarilla_titles as titles, c.status, c.image_url, 
               c.is_ex, c.is_deceased, c.is_hidden, c.is_left, c.is_called, c.is_missing, c.is_exiled, c.is_bloodhunted, 
               'player' as type,
-              (u.avatar_url IS NOT NULL OR u.avatar_url_thumb IS NOT NULL) as has_avatar
+              c.avatar_url AS saved_avatar_url, c.avatar_url_thumb AS saved_avatar_thumb,
+              (u.avatar_url IS NOT NULL OR u.avatar_url_thumb IS NOT NULL OR c.avatar_url IS NOT NULL) as has_avatar
        FROM characters c
        LEFT JOIN users u ON c.user_id = u.id`
       );

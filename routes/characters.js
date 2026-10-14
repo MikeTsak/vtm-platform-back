@@ -3,6 +3,7 @@ const { DEFAULT_DISABLED_CLANS } = require('../utils/clans');
 const { isAdmin, userOwnsCharacter } = require('../services/guards');
 const { parseSheet } = require('../utils/sheet');
 const { mergePlayerSheetEdit } = require('../utils/playerSheetEdit');
+const { retireCharacter } = require('../services/characterRetirement');
 
 async function isClanDisabled(clan) {
   const raw = await getSetting('disabled_clans', JSON.stringify(DEFAULT_DISABLED_CLANS));
@@ -155,32 +156,66 @@ module.exports = async function (fastify, opts) {
       return reply.status(400).send({ error: `${clan} is not currently available for character creation` });
     }
 
+    const conn = await pool.getConnection();
     try {
-      const [exists] = await pool.query('SELECT id FROM characters WHERE user_id=?', [req.user.id]);
-      if (exists.length) {
+      await conn.beginTransaction();
+      // A character that met Final Death (Storyteller-set is_deceased) is
+      // retired here, so the player can start their next one. Any other
+      // current character blocks creation.
+      const [[current]] = await conn.query('SELECT id, is_deceased FROM characters WHERE user_id=? FOR UPDATE', [req.user.id]);
+      if (current && !current.is_deceased) {
+        await conn.rollback();
         log.warn('Create character already exists', { user_id: req.user.id });
         return reply.status(409).send({ error: 'Character already exists' });
       }
+      if (current) await retireCharacter(conn, current.id);
 
       let sheetObj = parseSheet(sheet);
       sheetObj.is_active = false;
       delete sheetObj.allow_reset; // only a Storyteller grants re-rolls
 
-      const [r] = await pool.query(
+      const [r] = await conn.query(
         'INSERT INTO characters (user_id, name, clan, sheet, xp) VALUES (?,?,?,?,?)',
         [req.user.id, name, clan, JSON.stringify(sheetObj), 50]
       );
+      await conn.commit();
 
       const [rows] = await pool.query('SELECT * FROM characters WHERE id=?', [r.insertId]);
       const ch = rows[0];
       if (ch) ch.sheet = parseSheet(ch.sheet);
+      if (current) log.char('Deceased character retired', { id: current.id, user_id: req.user.id });
       log.char('Character created', { id: r.insertId, user_id: req.user.id, name, clan, xp: ch?.xp });
       broadcastNtfyAlert(`**${name}** (Clan: **${clan}**) was created by ${req.user.display_name} (${req.user.id}).`, { title: 'New Character', tags: 'vampire', priority: 'default' });
       reply.send({ character: ch });
     } catch (e) {
+      await conn.rollback().catch(() => {});
       log.err('Failed to create character', e);
       reply.status(500).send({ error: 'Failed to create character' });
+    } finally {
+      conn.release();
     }
+  });
+
+  // Every character this account has played: the current one first, then
+  // retired ones, newest retirement first.
+  fastify.get('/api/characters/mine', { preHandler: [authRequired] }, async (req, reply) => {
+    const [characters] = await pool.query(
+      `SELECT id, name, clan, image_url, xp, is_deceased, created_at, retired_at, (user_id IS NOT NULL) AS is_current
+         FROM characters WHERE user_id = ? OR retired_user_id = ?
+        ORDER BY is_current DESC, retired_at DESC`,
+      [req.user.id, req.user.id]
+    );
+    reply.send({ characters });
+  });
+
+  // A retired character's sheet, read-only (nothing writes through this path).
+  fastify.get('/api/characters/archive/:id', { preHandler: [authRequired] }, async (req, reply) => {
+    const [[ch]] = await pool.query(
+      'SELECT * FROM characters WHERE id = ? AND retired_user_id = ?', [req.params.id, req.user.id]
+    );
+    if (!ch) return reply.status(404).send({ error: 'Character not found' });
+    ch.sheet = parseSheet(ch.sheet);
+    reply.send({ character: ch });
   });
 
   /**
@@ -350,7 +385,12 @@ module.exports = async function (fastify, opts) {
 
     try {
       const charId = Number(req.params.id);
-      if (!isAdmin(req.user) && !(await userOwnsCharacter(pool, req.user.id, charId))) {
+      // Reading also covers the player's retired characters (archived sheet);
+      // writes below stay current-character only.
+      const [[owned]] = await pool.query(
+        'SELECT 1 AS ok FROM characters WHERE id = ? AND ? IN (user_id, retired_user_id)', [charId, req.user.id]
+      );
+      if (!isAdmin(req.user) && !owned) {
         return reply.status(403).send({ error: 'Unauthorized' });
       }
 

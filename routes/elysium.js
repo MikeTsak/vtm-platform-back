@@ -194,7 +194,7 @@ module.exports = async function (fastify, opts) {
       const invitation = await draftFor(eventId);
       const [guests] = await pool.query(
         `SELECT id, name, clan, is_bloodhunted FROM characters
-          WHERE COALESCE(is_deceased,0)=0 AND COALESCE(is_left,0)=0 AND COALESCE(is_hidden,0)=0
+          WHERE user_id IS NOT NULL AND COALESCE(is_deceased,0)=0 AND COALESCE(is_left,0)=0 AND COALESCE(is_hidden,0)=0
           ORDER BY name ASC`
       );
       const [[reads]] = await pool.query('SELECT COUNT(*) AS n FROM elysium_invitation_reads WHERE event_id = ?', [eventId]);

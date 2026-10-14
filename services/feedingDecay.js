@@ -73,7 +73,7 @@ async function runFeedingDecay(pool, log) {
 
   // ---- Herd pool regen: +1 per cycle (3 weeks), capped at background dots ----
   // Runs after every completed cycle so each character recovers 1 Herd point.
-  const [charRows] = await pool.query('SELECT id, sheet FROM characters WHERE sheet IS NOT NULL');
+  const [charRows] = await pool.query('SELECT id, sheet FROM characters WHERE sheet IS NOT NULL AND user_id IS NOT NULL');
   let herdRegen = 0;
   for (const row of charRows) {
     const sheet = parseSheet(row.sheet);

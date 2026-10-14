@@ -666,7 +666,7 @@ module.exports = async function (fastify, opts) {
   /* ---- Admin: Herd Roster (all chars with Herd background) ---- */
   fastify.get('/api/admin/feeding/herd-roster', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const [chars] = await pool.query('SELECT id, name, sheet FROM characters WHERE sheet IS NOT NULL');
+      const [chars] = await pool.query('SELECT id, name, sheet FROM characters WHERE sheet IS NOT NULL AND user_id IS NOT NULL');
       const roster = [];
       for (const row of chars) {
         const sheet = parseSheet(row.sheet);
