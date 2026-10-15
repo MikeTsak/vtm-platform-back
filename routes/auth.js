@@ -52,9 +52,14 @@ module.exports = async function (fastify, opts) {
     reply.send({ ok: true });
   });
 
+  // Temporary switch: DISABLE_LOGIN_LIMITS=true in the server .env turns off both login
+  // limits (per-IP authLimiter, per-account loginThrottle). Registration keeps its limiter.
+  // Read per request, so it only takes a restart to flip back.
+  const loginLimitsOff = () => process.env.DISABLE_LOGIN_LIMITS === 'true';
+
   // POST /api/auth/login
   fastify.post('/login', { 
-    preHandler: [authLimiter],
+    preHandler: [async (req, reply) => { if (!loginLimitsOff()) return authLimiter(req, reply); }], // must be async: Fastify waits forever on a sync 2-arg hook
     schema: {
       body: {
         type: 'object',
@@ -71,7 +76,7 @@ module.exports = async function (fastify, opts) {
 
     const { email, password } = req.body;
 
-    const wait = loginThrottle.retryAfter(email);
+    const wait = loginLimitsOff() ? 0 : loginThrottle.retryAfter(email);
     if (wait) {
       log.warn('Login throttled', { email, ip, retry_after_s: wait, req_id: req.id });
       return reply.status(429).header('Retry-After', wait).send({ error: 'Too many failed attempts for this account. Try again later or reset your password.' });

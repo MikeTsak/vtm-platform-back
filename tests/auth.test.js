@@ -259,6 +259,18 @@ describe('per-account login throttle', () => {
     expect((await login(u.email, u.password)).statusCode).toBe(200);
   });
 
+  it('DISABLE_LOGIN_LIMITS=true switches the per-account throttle off', async () => {
+    const u = await registerUser(app);
+    process.env.DISABLE_LOGIN_LIMITS = 'true';
+    try {
+      // 11 failures: with the throttle on, the 11th would already be a 429.
+      for (let i = 0; i < 11; i++) expect((await login(u.email, 'WrongPassword1')).statusCode).toBe(401);
+      expect((await login(u.email, u.password)).statusCode).toBe(200);
+    } finally {
+      delete process.env.DISABLE_LOGIN_LIMITS;
+    }
+  }, 40000);
+
   it('throttles unknown emails the same way, so a 429 does not reveal whether an account exists', async () => {
     const ghost = uniqueEmail('ghost');
     for (let i = 0; i < 10; i++) expect((await login(ghost, 'WrongPassword1')).statusCode).toBe(401);
