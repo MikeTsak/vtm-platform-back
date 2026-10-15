@@ -749,6 +749,10 @@ module.exports = async function (fastify, opts) {
         MAX(c.name) AS char_name,
         MAX(c.clan) AS clan,
         MAX(c.image_url) AS image_url,
+        MAX(c.is_deceased) AS is_deceased,
+        MAX(c.is_left) AS is_left,
+        MAX(c.is_missing) AS is_missing,
+        MAX(CASE WHEN JSON_EXTRACT(c.sheet, '$.is_active') = true THEN 1 ELSE 0 END) AS is_char_active,
         (
           SELECT created_at 
           FROM chat_messages 
@@ -777,13 +781,37 @@ module.exports = async function (fastify, opts) {
       );
       const standingByUser = new Map(standings.map(c => [c.user_id, courtStanding(c)]));
 
-      const users = rows.map(r => ({
-        ...r,
-        ...(standingByUser.get(r.id) || courtStanding(null)),
-        is_admin: !!r.is_admin,
-        char_id: r.char_id ? Number(r.char_id) : null,
-        unread_count: Number(r.unread_count || 0)
-      }));
+      const isTilemachosEntity = (userId, charId, charName, displayName) => {
+        const uid = Number(userId);
+        const cid = Number(charId);
+        const cn = String(charName || '').toLowerCase();
+        const dn = String(displayName || '').toLowerCase();
+        return uid === 2 || cid === 34 || cn.includes('tilemachos') || cn.includes('τηλέμαχος') || dn.includes('tilemachos');
+      };
+
+      const users = rows.map(r => {
+        const isTilemachos = isTilemachosEntity(r.id, r.char_id, r.char_name, r.display_name);
+        const isActive = Boolean(
+          r.char_id &&
+          r.is_char_active &&
+          !r.is_deceased &&
+          !r.is_left &&
+          !r.is_missing &&
+          !isTilemachos
+        );
+
+        return {
+          ...r,
+          ...(standingByUser.get(r.id) || courtStanding(null)),
+          is_admin: !!r.is_admin,
+          char_id: r.char_id ? Number(r.char_id) : null,
+          unread_count: Number(r.unread_count || 0),
+          is_deceased: Boolean(r.is_deceased),
+          is_left: Boolean(r.is_left),
+          is_missing: Boolean(r.is_missing),
+          is_active: isActive
+        };
+      });
 
       reply.send({ users });
     } catch (e) {
