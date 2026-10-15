@@ -38,11 +38,10 @@ module.exports = async function (fastify, opts) {
     // Public / chronicle news (never rumors, filtered for private unless admin)
     const newsPromise = pool.query(`
       SELECT n.id, n.title, n.subtitle, n.type, n.theme, n.journalist_name, n.media_url, n.created_at, n.is_private,
-             u.display_name AS author_real_name,
-             c.name AS char_name
+             IF(n.type = 'announcement', COALESCE(np.name, c.name), NULL) AS char_name
       FROM news_entries n
-      LEFT JOIN users u ON n.author_id = u.id
-      LEFT JOIN characters c ON c.user_id = u.id
+      LEFT JOIN characters c ON c.user_id = n.author_id
+      LEFT JOIN npcs np ON np.id = n.npc_id
       WHERE (n.is_private = 0 OR ? = 'admin') AND n.theme != 'RUMOR'
       ORDER BY n.created_at DESC
       LIMIT 5

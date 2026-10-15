@@ -21,6 +21,16 @@ const NEWS_AUTHOR_JOINS = `
   LEFT JOIN characters c ON c.user_id = u.id
   LEFT JOIN npcs np ON np.id = n.npc_id`;
 
+// News articles are signed by journalist_name only; who posted them stays in
+// the DB. Decrees (announcements) keep their author: it's their byline.
+const AUTHOR_FIELDS = ['author_id', 'published_by', 'author_real_name', 'author_role', 'char_name', 'char_titles', 'char_image'];
+function redactNewsAuthor(row) {
+  if (row.type === 'announcement') return row;
+  const out = { ...row };
+  for (const k of AUTHOR_FIELDS) delete out[k];
+  return out;
+}
+
 // Renders the in-fiction byline for a news entry: character name plus their
 // highest-ranking Camarilla title, falling back to the account's display name
 // and finally to an anonymous Court attribution.
@@ -103,4 +113,4 @@ async function resolveMediaUrl(rawUrl, appBase, pool) {
   return `${base}${trimmed.startsWith('/') ? '' : '/'}${trimmed}`;
 }
 
-module.exports = { xmlEscape, getAuthorSignature, isVideoUrl, resolveMediaUrl, NEWS_AUTHOR_COLUMNS, NEWS_AUTHOR_JOINS };
+module.exports = { xmlEscape, getAuthorSignature, isVideoUrl, resolveMediaUrl, redactNewsAuthor, NEWS_AUTHOR_COLUMNS, NEWS_AUTHOR_JOINS };

@@ -7,7 +7,7 @@ const sharp = require('sharp');
 const { sendDiscordChannelMessage } = require('../services/discord');
 const { getSetting } = require('../utils/settings');
 const { sanitizeRichText } = require('../utils/sanitize');
-const { xmlEscape, getAuthorSignature, isVideoUrl, resolveMediaUrl, NEWS_AUTHOR_COLUMNS, NEWS_AUTHOR_JOINS } = require('../services/news');
+const { xmlEscape, getAuthorSignature, isVideoUrl, resolveMediaUrl, redactNewsAuthor, NEWS_AUTHOR_COLUMNS, NEWS_AUTHOR_JOINS } = require('../services/news');
 
 const guards = require('../services/guards');
 module.exports = async function (fastify, opts) {
@@ -17,16 +17,13 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/news/public', async (req, reply) => {
     try {
       const [rows] = await pool.query(`
-      SELECT n.*, u.display_name as author_real_name, u.role as author_role,
-             c.name as char_name, c.camarilla_titles as char_titles, c.image_url as char_image
+      SELECT n.*
       FROM news_entries n
-      LEFT JOIN users u ON n.author_id = u.id
-      LEFT JOIN characters c ON c.user_id = u.id
       WHERE n.type = 'news' AND n.theme != 'RUMOR' AND n.is_private = 0
       ORDER BY n.created_at DESC
       LIMIT 100
     `);
-      reply.send({ items: rows });
+      reply.send({ items: rows.map(redactNewsAuthor) });
     } catch (e) {
       log.err('Fetch public news failed', { message: e.message });
       reply.status(500).send({ error: 'Failed to load public news' });
@@ -57,7 +54,7 @@ module.exports = async function (fastify, opts) {
         ).catch((e) => log.err('Record news read failed', { message: e.message }));
       }
 
-      reply.send({ item: rows[0] });
+      reply.send({ item: redactNewsAuthor(rows[0]) });
     } catch (e) {
       log.err('Fetch public article failed', { message: e.message });
       reply.status(500).send({ error: 'Failed to load article' });
@@ -101,7 +98,7 @@ module.exports = async function (fastify, opts) {
       ORDER BY n.created_at DESC
       LIMIT 100
     `);
-      reply.send({ items: rows });
+      reply.send({ items: rows.map(redactNewsAuthor) });
     } catch (e) {
       log.err('Fetch news failed', { message: e.message });
       reply.status(500).send({ error: 'Failed to load news' });

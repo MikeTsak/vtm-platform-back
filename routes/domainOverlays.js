@@ -55,8 +55,9 @@ module.exports = async function (fastify, opts) {
         const grantedByMe = r.granted_by_me ? r.granted_by_me.split(',').filter(k => DOMAIN_OVERLAY_KEYS.includes(k)) : [];
         return {
           id: r.id,
-          name: r.character_name || r.display_name || r.email,
-          account: r.display_name || r.email,
+          name: r.character_name || r.display_name,
+          // account identity (and the email fallback) is admin-only
+          account: me.admin ? (r.display_name || r.email) : undefined,
           role: r.role,
           clan: r.clan || null,
           // a non-admin only sees grant status for overlays they can act on

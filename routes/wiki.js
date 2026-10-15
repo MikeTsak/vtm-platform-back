@@ -447,7 +447,7 @@ module.exports = async function (fastify, opts) {
     const { id } = req.params;
     try {
       const [rows] = await pool.query(`
-        SELECT u.id, u.display_name, u.email, m.added_at
+        SELECT u.id, u.display_name, m.added_at
         FROM wiki_elysium_board_members m
         JOIN users u ON m.user_id = u.id
         WHERE m.board_id = ?

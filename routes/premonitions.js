@@ -288,14 +288,13 @@ module.exports = async function (fastify, opts) {
     try {
 
       const [rows] = await pool.query(`
-      SELECT p.id, p.sender_id, u.display_name AS sender_name,
+      SELECT p.id,
              p.content_type, p.content_text,
              COALESCE(pm.data_url, p.content_url) AS content_url,
              p.warnings,
              p.created_at
       FROM premonitions p
       JOIN premonition_recipients pr ON p.id = pr.premonition_id
-      LEFT JOIN users u ON u.id = p.sender_id
       LEFT JOIN premonition_media pm ON pm.id = CAST(SUBSTRING_INDEX(p.content_url, '/', -1) AS UNSIGNED)
         AND p.content_url LIKE '%/media/%'
       WHERE pr.user_id = ?

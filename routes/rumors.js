@@ -13,16 +13,16 @@ module.exports = async function (fastify, opts) {
 
   // ================= RUMORS API =================
 
+  // Rumours are anonymous: author_id stays in the DB, never in a response.
+  const PUBLIC_COLS = 'id, title, body, media_url, created_at';
+
   // GET /api/rumors - Fetch all rumors
   fastify.get('/api/rumors', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const [rows] = await pool.query(`
-      SELECT r.*, u.display_name as author_real_name,
-             c.name as char_name, c.camarilla_titles as char_titles, c.image_url as char_image
-      FROM rumors r
-      LEFT JOIN users u ON r.author_id = u.id
-      LEFT JOIN characters c ON c.user_id = u.id
-      ORDER BY r.created_at DESC
+      SELECT ${PUBLIC_COLS}
+      FROM rumors
+      ORDER BY created_at DESC
       LIMIT 100
     `);
       // Send back with theme 'RUMOR' so frontend can identify it easily if needed,
@@ -37,7 +37,7 @@ module.exports = async function (fastify, opts) {
   // GET /api/rumors/:id
   fastify.get('/api/rumors/:id', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      const [rows] = await pool.query('SELECT * FROM rumors WHERE id = ?', [req.params.id]);
+      const [rows] = await pool.query(`SELECT ${PUBLIC_COLS} FROM rumors WHERE id = ?`, [req.params.id]);
       if (!rows.length) return reply.status(404).send({ error: 'Rumor not found' });
       reply.send(rows[0]);
     } catch (e) {
