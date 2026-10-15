@@ -14,15 +14,23 @@ module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, optionalAuth, requireAdmin, imageClient } = opts;
 
   // GET /api/news/public - Fetch only news, no rumors (No auth required)
+  // Optional: ?theme=SKAI to filter by outlet
   fastify.get('/api/news/public', async (req, reply) => {
     try {
-      const [rows] = await pool.query(`
+      const { theme } = req.query;
+      let sql = `
       SELECT n.*
       FROM news_entries n
-      WHERE n.type = 'news' AND n.theme != 'RUMOR' AND n.is_private = 0
+      WHERE n.type = 'news' AND n.theme != 'RUMOR' AND n.is_private = 0`;
+      const params = [];
+      if (theme && typeof theme === 'string' && theme.length <= 30) {
+        sql += ` AND n.theme = ?`;
+        params.push(theme.toUpperCase());
+      }
+      sql += `
       ORDER BY n.created_at DESC
-      LIMIT 100
-    `);
+      LIMIT 100`;
+      const [rows] = await pool.query(sql, params);
       reply.send({ items: rows.map(redactNewsAuthor) });
     } catch (e) {
       log.err('Fetch public news failed', { message: e.message });
