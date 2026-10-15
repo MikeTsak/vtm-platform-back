@@ -2,7 +2,8 @@
 //
 // Live tabletop sessions: lifecycle, participants, dice rolls, and the
 // Storyteller broadcast channel. Realtime nudges go through fastify.io.
-const { insertRoll, formatRoll } = require('../services/rolls');
+const { insertRoll, formatRoll, trackers } = require('../services/rolls');
+const { parseSheet } = require('../utils/sheet');
 const { rollD10 } = require('../services/dice');
 const { clampBloodPotency } = require('../utils/bloodPotencyLimits');
 const { getSessionInternalId, getSessionRow, emitSessionRefresh, closeSession, onlineUserIds, removeUserSockets } = require('../services/liveSession');
@@ -12,7 +13,8 @@ module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, moderateLimiter } = opts;
 
   // Same staff notion as the socket join_session handler.
-  const isStaff = guards.isCourt;
+  // Admin (Storyteller) only: a courtuser is a player and sees the table like one.
+  const isStaff = guards.isAdmin;
 
   // Everything a session exposes is for its participants and staff only: the
   // 8-character code (DDMMYY##) is guessable, so it is not an access secret.
@@ -236,11 +238,15 @@ module.exports = async function (fastify, opts) {
       WHERE lsp.session_id = ?
       ORDER BY lsp.joined_at ASC
     `, [internalId]);
-    // Other players' sheets (health, willpower, hunger, ...) and account names
-    // are ST data; players only get the table roster.
+    // Other players' sheets and account names are ST data; players only get the
+    // table roster plus each character's Hunger (the one stat visible at the table).
     const online = await onlineUserIds(fastify.io, internalId);
     const roster = players.map((p) => ({ ...p, online: online.has(Number(p.user_id)) }));
-    reply.send({ players: isStaff(req.user) ? roster : roster.map(({ sheet, user_name, ...pub }) => pub) });
+    reply.send({
+      players: isStaff(req.user)
+        ? roster
+        : roster.map(({ sheet, user_name, ...pub }) => ({ ...pub, hunger: sheet ? trackers(parseSheet(sheet)).hunger : null })),
+    });
   });
 
   // ST removes a player from the session: seat, live connection and all. Their

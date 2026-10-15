@@ -65,6 +65,8 @@ describe('live session privacy', () => {
     const roster = JSON.parse((await get(alice, `/api/live-session/${code}/players`)).body).players;
     expect(roster).toHaveLength(2);
     roster.forEach(p => { expect(p.sheet).toBeUndefined(); expect(p.user_name).toBeUndefined(); });
+    // The one sheet stat players share at the table is Hunger (fixture sheet: hunger 4); nothing else leaks.
+    roster.forEach(p => { expect(p.hunger).toBe(4); expect(JSON.stringify(p)).not.toMatch(/willpower|superficial/); });
 
     // The Storyteller still gets everything.
     const full = JSON.parse((await get(st, `/api/live-session/${code}`)).body).session;
