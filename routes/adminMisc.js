@@ -5,6 +5,7 @@
 
 const { getSetting, setSetting } = require('../utils/settings');
 const { parseSheet } = require('../utils/sheet');
+const { withSheetLock } = require('../utils/sheetLock');
 const { clampBloodPotency } = require('../utils/bloodPotencyLimits');
 const { recordVersion } = require('../services/elysiumHistory');
 
@@ -276,14 +277,15 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/admin/blood-web/update', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const { id, hunger, bloodPotency } = req.body;
-      const [[char]] = await pool.query('SELECT sheet FROM characters WHERE id = ?', [id]);
-      if (!char) return reply.status(404).send({ error: 'Character not found' });
-      const sheet = parseSheet(char.sheet);
-      if (hunger !== undefined) sheet.hunger = Math.max(0, Math.min(5, Number(hunger)));
-      // blood_potency is the key the sheet reads; keep the legacy camelCase copy in sync (same as liveSessions.js).
-      if (bloodPotency !== undefined) sheet.blood_potency = sheet.bloodPotency = clampBloodPotency(bloodPotency, sheet.generation);
-      const nextSheetJson = JSON.stringify(sheet);
-      await pool.query('UPDATE characters SET sheet = ? WHERE id = ?', [nextSheetJson, id]);
+      let nextSheetJson;
+      const r = await withSheetLock(pool, id, (sheet) => {
+        if (hunger !== undefined) sheet.hunger = Math.max(0, Math.min(5, Number(hunger)));
+        // blood_potency is the key the sheet reads; keep the legacy camelCase copy in sync (same as liveSessions.js).
+        if (bloodPotency !== undefined) sheet.blood_potency = sheet.bloodPotency = clampBloodPotency(bloodPotency, sheet.generation);
+        nextSheetJson = JSON.stringify(sheet);
+        return {};
+      });
+      if (r.notFound) return reply.status(404).send({ error: 'Character not found' });
       try {
         await pool.query(
           'INSERT INTO character_sheet_versions (character_id, editor_id, sheet, change_summary) VALUES (?, ?, ?, ?)',

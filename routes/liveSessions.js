@@ -4,6 +4,7 @@
 // Storyteller broadcast channel. Realtime nudges go through fastify.io.
 const { insertRoll, formatRoll, trackers } = require('../services/rolls');
 const { parseSheet } = require('../utils/sheet');
+const { withSheetLock } = require('../utils/sheetLock');
 const { rollD10 } = require('../services/dice');
 const { clampBloodPotency } = require('../utils/bloodPotencyLimits');
 const { getSessionInternalId, getSessionRow, emitSessionRefresh, closeSession, onlineUserIds, removeUserSockets } = require('../services/liveSession');
@@ -366,16 +367,8 @@ module.exports = async function (fastify, opts) {
       const charId = req.params.charId;
       const { hungerDelta, healthSupDelta, healthAggDelta, wpSupDelta, wpAggDelta, humanityDelta, stainsDelta, frenzyState, forceRouseCheck, damage, bloodPotencyDelta, bloodPotency } = req.body;
 
-      const [rows] = await pool.query('SELECT sheet FROM characters WHERE id=?', [charId]);
-      if (!rows.length) return reply.status(404).send({ error: 'Char not found' });
-
-      let sheet = {};
-      try {
-        sheet = typeof rows[0].sheet === 'string' ? JSON.parse(rows[0].sheet || '{}') : (rows[0].sheet || {});
-      } catch (e) {
-        return reply.status(500).send({ error: 'Failed to parse existing character sheet data.' });
-      }
-
+      // Row-locked read-modify-write: a stale copy must never overwrite a feeding or Rouse that just landed.
+      const result = await withSheetLock(pool, charId, async (sheet, target, conn) => {
       if (hungerDelta !== undefined) sheet.hunger = Math.max(0, Math.min(5, Number(sheet.hunger || 0) + Number(hungerDelta)));
       if (humanityDelta !== undefined) {
         const currentHum = Number(sheet.morality?.humanity ?? sheet.humanity ?? 7);
@@ -462,15 +455,15 @@ module.exports = async function (fastify, opts) {
           sheet.hunger = Math.max(0, Math.min(5, (sheet.hunger || 0) + 1));
         }
         const internalId = await getSessionInternalId(req.params.id);
-        const [[target]] = await pool.query('SELECT user_id, name FROM characters WHERE id=?', [charId]);
-        await insertRoll(pool, {
-          userId: target?.user_id ?? req.user.id, characterId: charId, characterName: target?.name, sessionId: internalId ?? null,
+        await insertRoll(conn, {
+          userId: target.user_id ?? req.user.id, characterId: charId, characterName: target.name, sessionId: internalId ?? null,
           rollType: 'rouse_check', rouse: [rouseDie], hungerLevel: sheet.hunger,
           note: `Storyteller forced a Rouse Check: ${rouseDie < 6 ? 'Hunger +1' : 'no Hunger gained'}`,
         });
       }
-
-      await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), charId]);
+      return {};
+      });
+      if (result.notFound) return reply.status(404).send({ error: 'Char not found' });
 
       await emitSessionRefresh(fastify.io, req.params.id);
 

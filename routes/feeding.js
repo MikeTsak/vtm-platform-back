@@ -20,6 +20,7 @@ const { rollDice, computeFeedingOutcome, OUTCOME_DELTAS } = require('../services
 const { pickFlavor } = require('../data/predatorFlavor');
 const { runFeedingDecay } = require('../services/feedingDecay');
 const { parseSheet } = require('../utils/sheet');
+const { withSheetLock } = require('../utils/sheetLock');
 
 // Character sheets store this as `predator_type` (snake_case) everywhere the
 // rest of the app reads it (CharacterEditor.jsx's edit field, CharacterView.jsx,
@@ -700,26 +701,27 @@ module.exports = async function (fastify, opts) {
       const d = parseInt(delta, 10);
       if (isNaN(d) || d === 0) return reply.status(400).send({ error: 'delta must be a non-zero integer' });
 
-      const [charRows] = await pool.query('SELECT id, name, sheet FROM characters WHERE id=? LIMIT 1', [character_id]);
-      if (!charRows.length) return reply.status(404).send({ error: 'Character not found' });
-      const sheet = parseSheet(charRows[0].sheet);
+      const r = await withSheetLock(pool, character_id, (sheet, row) => {
+        const merits = Array.isArray(sheet?.advantages?.merits) ? sheet.advantages.merits : [];
+        const herdEntry = merits.find(b =>
+          String(b.id || '').toLowerCase().includes('herd__herd') ||
+          String(b.name || '').toLowerCase() === 'herd'
+        );
+        if (!herdEntry) return { error: 'Character does not have the Herd background' };
 
-      const merits = Array.isArray(sheet?.advantages?.merits) ? sheet.advantages.merits : [];
-      const herdEntry = merits.find(b =>
-        String(b.id || '').toLowerCase().includes('herd__herd') ||
-        String(b.name || '').toLowerCase() === 'herd'
-      );
-      if (!herdEntry) return reply.status(400).send({ error: 'Character does not have the Herd background' });
+        const herdDots = clamp(Number(herdEntry.dots) || 0, 0, 5);
+        const rawCurrent = sheet.herd_current !== undefined ? Number(sheet.herd_current) : herdDots;
+        const before = clamp(rawCurrent, 0, herdDots);
+        const after = clamp(before + d, 0, herdDots);
 
-      const herdDots = clamp(Number(herdEntry.dots) || 0, 0, 5);
-      const rawCurrent = sheet.herd_current !== undefined ? Number(sheet.herd_current) : herdDots;
-      const before = clamp(rawCurrent, 0, herdDots);
-      const after = clamp(before + d, 0, herdDots);
-
-      sheet.herd_current = after;
-      await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), character_id]);
+        sheet.herd_current = after;
+        return { herdDots, before, after, name: row.name };
+      });
+      if (r.notFound) return reply.status(404).send({ error: 'Character not found' });
+      if (r.error) return reply.status(400).send({ error: r.error });
+      const { herdDots, before, after, name } = r;
       log.adm('Admin herd adjust', { admin: req.user.id, character_id, delta: d, before, after });
-      reply.send({ ok: true, character_id, name: charRows[0].name, herdDots, herdBefore: before, herdAfter: after });
+      reply.send({ ok: true, character_id, name, herdDots, herdBefore: before, herdAfter: after });
     } catch (err) {
       log.err('POST /api/admin/feeding/herd-adjust failed', { error: err.message });
       reply.status(500).send({ error: 'Database error adjusting herd', details: err.sqlMessage || err.message });
@@ -732,28 +734,29 @@ module.exports = async function (fastify, opts) {
       const { character_id, delta, hunger } = req.body || {};
       if (!character_id) return reply.status(400).send({ error: 'character_id required' });
 
-      const [charRows] = await pool.query('SELECT id, name, sheet FROM characters WHERE id=? LIMIT 1', [character_id]);
-      if (!charRows.length) return reply.status(404).send({ error: 'Character not found' });
-      const sheet = parseSheet(charRows[0].sheet);
+      const r = await withSheetLock(pool, character_id, (sheet, row) => {
+        const before = clamp(sheet.hunger !== undefined && sheet.hunger !== null ? Number(sheet.hunger) : 1, 0, 5);
+        let after = before;
 
-      const before = clamp(sheet.hunger !== undefined && sheet.hunger !== null ? Number(sheet.hunger) : 1, 0, 5);
-      let after = before;
+        if (hunger !== undefined && !isNaN(Number(hunger))) {
+          after = clamp(Number(hunger), 0, 5);
+        } else if (delta !== undefined) {
+          const d = parseInt(delta, 10);
+          if (isNaN(d) || d === 0) return { error: 'delta must be a non-zero integer' };
+          // GM manual edit: allows 0 to 5, but cannot go below 0 (cannot go to minus)
+          after = clamp(before + d, 0, 5);
+        } else {
+          return { error: 'delta or hunger required' };
+        }
 
-      if (hunger !== undefined && !isNaN(Number(hunger))) {
-        after = clamp(Number(hunger), 0, 5);
-      } else if (delta !== undefined) {
-        const d = parseInt(delta, 10);
-        if (isNaN(d) || d === 0) return reply.status(400).send({ error: 'delta must be a non-zero integer' });
-        // GM manual edit: allows 0 to 5, but cannot go below 0 (cannot go to minus)
-        after = clamp(before + d, 0, 5);
-      } else {
-        return reply.status(400).send({ error: 'delta or hunger required' });
-      }
-
-      sheet.hunger = after;
-      await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), character_id]);
+        sheet.hunger = after;
+        return { before, after, name: row.name };
+      });
+      if (r.notFound) return reply.status(404).send({ error: 'Character not found' });
+      if (r.error) return reply.status(400).send({ error: r.error });
+      const { before, after, name } = r;
       log.adm('Admin hunger adjust', { admin: req.user.id, character_id, delta, before, after });
-      reply.send({ ok: true, character_id, name: charRows[0].name, hungerBefore: before, hungerAfter: after });
+      reply.send({ ok: true, character_id, name, hungerBefore: before, hungerAfter: after });
     } catch (err) {
       log.err('POST /api/admin/feeding/hunger-adjust failed', { error: err.message });
       reply.status(500).send({ error: 'Database error adjusting hunger', details: err.sqlMessage || err.message });

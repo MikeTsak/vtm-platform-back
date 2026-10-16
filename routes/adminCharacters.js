@@ -128,7 +128,7 @@ module.exports = async function (fastify, opts) {
   // loaded (a player's XP purchase was lost that way).
   fastify.patch('/api/admin/characters/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const id = Number(req.params.id);
-    const { name, clan, sheet, sheetPatch } = req.body;
+    const { name, clan, sheet, sheetPatch, sheetUnset } = req.body;
 
     const fields = [];
     const vals = [];
@@ -159,7 +159,10 @@ module.exports = async function (fastify, opts) {
       if (jsonStr === null && sheetPatch !== undefined) {
         const [[row]] = await conn.query('SELECT sheet FROM characters WHERE id=? FOR UPDATE', [id]);
         if (!row) { await conn.rollback(); return reply.status(404).send({ error: 'Character not found' }); }
-        jsonStr = JSON.stringify({ ...parseSheet(row.sheet), ...sheetPatch });
+        const merged = { ...parseSheet(row.sheet), ...sheetPatch };
+        // Keys the editor removed (a patch can't express a delete; null is a real value).
+        if (Array.isArray(sheetUnset)) for (const k of sheetUnset) if (typeof k === 'string' && !(k in sheetPatch)) delete merged[k];
+        jsonStr = JSON.stringify(merged);
         fields.push('sheet=?'); vals.push(jsonStr);
       }
       await conn.query(`UPDATE characters SET ${fields.join(', ')} WHERE id=?`, [...vals, id]);
