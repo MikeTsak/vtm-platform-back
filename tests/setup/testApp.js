@@ -178,6 +178,15 @@ function buildTestApp(pool) {
     sharp: null,
   });
 
+  app.register(require('../../routes/npcChat'), {
+    pool,
+    log: testLog,
+    authRequired,
+    requireAdmin,
+    requireCourt: authRequired,
+    sendPushNotification: capturePushNotification,
+  });
+
   app.register(require('../../routes/drafts'), { pool, log: testLog, authRequired });
   app.register(require('../../routes/comms'), { pool, log: testLog, authRequired, requireAdmin, sendPushNotification: capturePushNotification });
 
