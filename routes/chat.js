@@ -634,7 +634,8 @@ module.exports = async function (fastify, opts) {
         const notifTitle = `Erebus Portal - 💬 ${groupName} (${senderName})`;
         const notifBody = message.attachment_id ? '📷 Image Attachment' : message.body;
 
-        let iconUrl = null;
+        // Default to the sender's avatar rather than the generic app logo.
+        let iconUrl = `/api/users/${req.user.id}/avatar`;
         if (groupInfo?.icon) {
           if (!groupInfo.icon.startsWith(':')) {
             const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">${groupInfo.icon}</text></svg>`;

@@ -1,7 +1,6 @@
 // routes/npcChat.js
 //
 // Player <-> NPC direct messages, and the Storyteller side that answers them.
-const axios = require('axios');
 const { idempotencyCheck, idempotencySave } = require('../utils/idempotency');
 const { convKey, loadConvSettings, historyWindow, emojiSize } = require('../utils/chatConversation');
 
@@ -254,30 +253,22 @@ module.exports = async function (fastify, opts) {
         const npcName = npcInfo?.name || 'NPC';
         const playerName = charInfo?.name || playerInfo?.display_name || 'Player';
 
-        const notifTitle = `Erebus Portal - 💬 ${npcName} (from ${playerName})`;
-        const notifBody = message.attachment_id ? '📷 Image Attachment' : message.body;
+        // Title leads with the NPC so the admin sees which of their NPCs was messaged.
+        const notifTitle = `${npcName} - from ${playerName}`;
+        const notifBody = message.attachment_id ? 'Image attachment' : message.body;
 
-        // 2. Find all admins and their ntfy topic + subscriptions
-        const [admins] = await pool.query("SELECT id, ntfy_topic, ntfy_subscribed_npcs FROM users WHERE role = 'admin'");
+        // 2. Only admins who picked this NPC under "My NPCs" (Master tab) are pushed.
+        // The list lives in users.ntfy_subscribed_npcs (column name predates the switch to web push).
+        const [admins] = await pool.query("SELECT id, ntfy_subscribed_npcs FROM users WHERE role = 'admin'");
 
-        // 3. Send a push to each admin
         for (const admin of admins) {
-          // Prevent sending a push to the admin if the admin is the one testing/playing as a user
-          if (admin.id !== userId) {
-            // Web Push (not awaited, so a slow push can't stall the send)
-            sendPushNotification(admin.id, notifTitle, notifBody, { url: '/schrecknet', icon: `/api/users/${userId}/avatar` }, 'chat').catch(() => { });
-
-            // Ntfy Push (Only if subscribed)
-            if (admin.ntfy_topic && admin.ntfy_subscribed_npcs) {
-              let prefs = [];
-              try { prefs = typeof admin.ntfy_subscribed_npcs === 'string' ? JSON.parse(admin.ntfy_subscribed_npcs) : admin.ntfy_subscribed_npcs; } catch (e) { }
-              if (Array.isArray(prefs) && prefs.includes(Number(npc_id))) {
-                axios.post(`https://ntfy.sh/${admin.ntfy_topic}`, notifBody, {
-                  headers: { 'Title': notifTitle, 'Tags': 'speech_balloon' }
-                }).catch(() => { });
-              }
-            }
-          }
+          // Skip the admin who is testing/playing as this user
+          if (admin.id === userId) continue;
+          let mine = [];
+          try { mine = typeof admin.ntfy_subscribed_npcs === 'string' ? JSON.parse(admin.ntfy_subscribed_npcs) : admin.ntfy_subscribed_npcs; } catch (e) { }
+          if (!Array.isArray(mine) || !mine.includes(Number(npc_id))) continue;
+          // Not awaited, so a slow push can't stall the send. Icon = the player's avatar.
+          sendPushNotification(admin.id, notifTitle, notifBody, { url: '/schrecknet', icon: `/api/users/${userId}/avatar` }, 'chat').catch(() => { });
         }
       } catch (pushErr) {
         log.err('Failed to notify admins of NPC message', { error: pushErr.message });
