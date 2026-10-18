@@ -18,8 +18,26 @@ const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@attlarp.gr';
 webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 
+// A player-avatar icon (`/api/users/:id/avatar`) 404s for players who never
+// uploaded one, which leaves the notification with the browser's default icon.
+// Swap it for their clan's icon (front/public/img/clans/push/<slug>.png) in
+// that case. Anything else, or a player with no avatar and no clan, passes
+// through untouched.
+async function iconWithClanFallback(icon) {
+  const m = /^\/api\/users\/(\d+)\/avatar/.exec(icon || '');
+  if (!m) return icon;
+  const [[row]] = await pool.query(
+    `SELECT u.avatar_url, (u.avatar IS NOT NULL AND LENGTH(u.avatar) > 0) AS has_avatar,
+            (SELECT clan FROM characters WHERE user_id = u.id LIMIT 1) AS clan
+       FROM users u WHERE u.id = ?`, [m[1]]);
+  if (!row || row.avatar_url || row.has_avatar || !row.clan) return icon;
+  const slug = String(row.clan).toLowerCase().replace(/^the /, '').replace(/[^a-z]/g, '');
+  return slug ? `/img/clans/push/${slug}.png` : icon;
+}
+
 async function sendPushNotification(userId, title, body, data = {}, category = 'system') {
   try {
+    data = { ...data, icon: await iconWithClanFallback(data.icon) };
     // Check user push settings
     const [userRows] = await pool.query('SELECT push_settings FROM users WHERE id=?', [userId]);
     if (!userRows.length) return;
