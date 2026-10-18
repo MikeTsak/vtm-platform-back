@@ -753,7 +753,7 @@ module.exports = async function (fastify, opts) {
         MAX(c.is_deceased) AS is_deceased,
         MAX(c.is_left) AS is_left,
         MAX(c.is_missing) AS is_missing,
-        MAX(CASE WHEN JSON_EXTRACT(c.sheet, '$.is_active') = true THEN 1 ELSE 0 END) AS is_char_active,
+        MAX(CASE WHEN JSON_EXTRACT(c.sheet, '$.is_active') = true OR JSON_UNQUOTE(JSON_EXTRACT(c.sheet, '$.is_active')) IN ('true', '1') THEN 1 ELSE 0 END) AS is_char_active,
         (
           SELECT created_at 
           FROM chat_messages 
@@ -790,29 +790,35 @@ module.exports = async function (fastify, opts) {
         return uid === 2 || cid === 34 || cn.includes('tilemachos') || cn.includes('τηλέμαχος') || dn.includes('tilemachos');
       };
 
-      const users = rows.map(r => {
-        const isTilemachos = isTilemachosEntity(r.id, r.char_id, r.char_name, r.display_name);
-        const isActive = Boolean(
-          r.char_id &&
-          r.is_char_active &&
-          !r.is_deceased &&
-          !r.is_left &&
-          !r.is_missing &&
-          !isTilemachos
-        );
+      const users = rows
+        .map(r => {
+          const isTilemachos = isTilemachosEntity(r.id, r.char_id, r.char_name, r.display_name);
+          const isActive = Boolean(
+            r.char_id &&
+            r.is_char_active &&
+            !r.is_deceased &&
+            !r.is_left &&
+            !r.is_missing &&
+            !isTilemachos
+          );
 
-        return {
-          ...r,
-          ...(standingByUser.get(r.id) || courtStanding(null)),
-          is_admin: !!r.is_admin,
-          char_id: r.char_id ? Number(r.char_id) : null,
-          unread_count: Number(r.unread_count || 0),
-          is_deceased: Boolean(r.is_deceased),
-          is_left: Boolean(r.is_left),
-          is_missing: Boolean(r.is_missing),
-          is_active: isActive
-        };
-      });
+          return {
+            ...r,
+            ...(standingByUser.get(r.id) || courtStanding(null)),
+            is_admin: !!r.is_admin,
+            char_id: r.char_id ? Number(r.char_id) : null,
+            unread_count: Number(r.unread_count || 0),
+            is_deceased: Boolean(r.is_deceased),
+            is_left: Boolean(r.is_left),
+            is_missing: Boolean(r.is_missing),
+            is_active: isActive
+          };
+        })
+        .filter(u => {
+          // Exclude deactivated players from comms entirely
+          if (u.char_id && !u.is_char_active) return false;
+          return true;
+        });
 
       reply.send({ users });
     } catch (e) {

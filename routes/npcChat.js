@@ -35,6 +35,7 @@ module.exports = async function (fastify, opts) {
       JOIN users u ON m.user_id = u.id
       LEFT JOIN characters c ON c.user_id = u.id -- FIXED: Changed from u.character_id = c.id
       WHERE m.npc_id = ?
+        AND (c.id IS NULL OR ((JSON_EXTRACT(c.sheet, '$.is_active') = true OR JSON_UNQUOTE(JSON_EXTRACT(c.sheet, '$.is_active')) = 'true') AND c.is_deceased = 0 AND c.is_left = 0 AND c.is_missing = 0))
       GROUP BY u.id, u.display_name, c.name
       -- MariaDB rejects aggregate aliases inside an ORDER BY expression
       -- ("reference to group function"), so the aggregates are repeated here.

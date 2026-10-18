@@ -3,6 +3,7 @@
 // The Camarilla hierarchy roster — public view and the Storyteller editor.
 
 const { MAIN_COURT, parseTitles, getCourtContext } = require('../services/courtOffices');
+const { parseSheet } = require('../utils/sheet');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin } = opts;
@@ -17,9 +18,12 @@ module.exports = async function (fastify, opts) {
               c.is_ex, c.is_deceased, c.is_hidden, c.is_left, c.is_called, c.is_missing, c.is_exiled, c.is_bloodhunted, 
               'player' as type,
               c.avatar_url AS saved_avatar_url, c.avatar_url_thumb AS saved_avatar_thumb,
-              (u.avatar_url IS NOT NULL OR u.avatar_url_thumb IS NOT NULL OR c.avatar_url IS NOT NULL) as has_avatar
+              (u.avatar_url IS NOT NULL OR u.avatar_url_thumb IS NOT NULL OR c.avatar_url IS NOT NULL) as has_avatar,
+              c.sheet
        FROM characters c
-       LEFT JOIN users u ON c.user_id = u.id`
+       LEFT JOIN users u ON c.user_id = u.id
+       WHERE c.user_id IS NOT NULL
+         AND (c.sheet IS NULL OR (JSON_EXTRACT(c.sheet, '$.is_active') = true OR JSON_UNQUOTE(JSON_EXTRACT(c.sheet, '$.is_active')) IN ('true', '1')))`
       );
       const [npcs] = await pool.query(
         `SELECT n.id, NULL as user_id, n.name, n.clan, n.camarilla_titles as titles, n.status, n.image_url, 
@@ -29,14 +33,21 @@ module.exports = async function (fastify, opts) {
        FROM npcs n`
       );
 
-      const format = (list) => list.map(item => ({
-        ...item,
-        titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || []),
-        is_ex: !!item.is_ex,
-        is_deceased: !!item.is_deceased,
-        is_hidden: !!item.is_hidden,
-        has_avatar: Boolean(item.has_avatar)
-      }));
+      const format = (list) => list
+        .filter(item => item.type !== 'player' || (!item.sheet ? true : parseSheet(item.sheet).is_active === true))
+        .map(({ sheet, ...item }) => ({
+          ...item,
+          titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || []),
+          is_ex: !!item.is_ex,
+          is_deceased: !!item.is_deceased,
+          is_hidden: !!item.is_hidden,
+          is_left: !!item.is_left,
+          is_called: !!item.is_called,
+          is_missing: !!item.is_missing,
+          is_exiled: !!item.is_exiled,
+          is_bloodhunted: !!item.is_bloodhunted,
+          has_avatar: Boolean(item.has_avatar)
+        }));
 
       const combined = [...format(players), ...format(npcs)];
       combined.sort((a, b) => {
@@ -62,9 +73,12 @@ module.exports = async function (fastify, opts) {
               c.is_ex, c.is_deceased, c.is_hidden, c.is_left, c.is_called, c.is_missing, c.is_exiled, c.is_bloodhunted, 
               'player' as type,
               c.avatar_url AS saved_avatar_url, c.avatar_url_thumb AS saved_avatar_thumb,
-              (u.avatar_url IS NOT NULL OR u.avatar_url_thumb IS NOT NULL OR c.avatar_url IS NOT NULL) as has_avatar
+              (u.avatar_url IS NOT NULL OR u.avatar_url_thumb IS NOT NULL OR c.avatar_url IS NOT NULL) as has_avatar,
+              c.sheet
        FROM characters c
-       LEFT JOIN users u ON c.user_id = u.id`
+       LEFT JOIN users u ON c.user_id = u.id
+       WHERE c.user_id IS NOT NULL
+         AND (c.sheet IS NULL OR (JSON_EXTRACT(c.sheet, '$.is_active') = true OR JSON_UNQUOTE(JSON_EXTRACT(c.sheet, '$.is_active')) IN ('true', '1')))`
       );
       const [npcs] = await pool.query(
         `SELECT n.id, NULL as user_id, n.name, n.clan, n.camarilla_titles as titles, n.status, n.image_url, 
@@ -74,19 +88,21 @@ module.exports = async function (fastify, opts) {
        FROM npcs n`
       );
 
-      const format = (list) => list.map(item => ({
-        ...item,
-        titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || []),
-        is_ex: !!item.is_ex,
-        is_deceased: !!item.is_deceased,
-        is_hidden: !!item.is_hidden,
-        is_left: !!item.is_left,
-        is_called: !!item.is_called,
-        is_missing: !!item.is_missing,
-        is_exiled: !!item.is_exiled,
-        is_bloodhunted: !!item.is_bloodhunted,
-        has_avatar: Boolean(item.has_avatar)
-      }));
+      const format = (list) => list
+        .filter(item => item.type !== 'player' || (!item.sheet ? true : parseSheet(item.sheet).is_active === true))
+        .map(({ sheet, ...item }) => ({
+          ...item,
+          titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || []),
+          is_ex: !!item.is_ex,
+          is_deceased: !!item.is_deceased,
+          is_hidden: !!item.is_hidden,
+          is_left: !!item.is_left,
+          is_called: !!item.is_called,
+          is_missing: !!item.is_missing,
+          is_exiled: !!item.is_exiled,
+          is_bloodhunted: !!item.is_bloodhunted,
+          has_avatar: Boolean(item.has_avatar)
+        }));
 
       const combined = [...format(players), ...format(npcs)];
       combined.sort((a, b) => {
@@ -209,7 +225,7 @@ module.exports = async function (fastify, opts) {
   // but is a plain user, or is a court user holding none. Admins are never touched.
   async function courtAccessMismatches(onlyUserId = null) {
     const [rows] = await pool.query(
-      `SELECT u.id AS user_id, u.role, u.display_name, c.name, c.camarilla_titles, c.is_ex, c.is_deceased
+      `SELECT u.id AS user_id, u.role, u.display_name, c.name, c.camarilla_titles, c.is_ex, c.is_deceased, c.sheet
          FROM users u LEFT JOIN characters c ON c.user_id = u.id
         WHERE u.role IN ('user','courtuser') ${onlyUserId ? 'AND u.id = ?' : ''}`,
       onlyUserId ? [onlyUserId] : []
@@ -217,7 +233,8 @@ module.exports = async function (fastify, opts) {
     const byUser = new Map();
     for (const r of rows) {
       const u = byUser.get(r.user_id) || { user_id: r.user_id, role: r.role, name: r.name || r.display_name, offices: [] };
-      if (!r.is_ex && !r.is_deceased) u.offices.push(...parseTitles(r.camarilla_titles).filter(t => MAIN_COURT.includes(t)));
+      const isDeactivated = r.sheet ? parseSheet(r.sheet).is_active === false : false;
+      if (!r.is_ex && !r.is_deceased && !isDeactivated) u.offices.push(...parseTitles(r.camarilla_titles).filter(t => MAIN_COURT.includes(t)));
       byUser.set(r.user_id, u);
     }
     return [...byUser.values()]
