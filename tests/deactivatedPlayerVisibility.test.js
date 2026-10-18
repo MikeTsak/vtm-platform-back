@@ -48,7 +48,22 @@ describe('Deactivated player visibility in Court Hierarchy and Comms', () => {
     const deactivatedPlayer = await registerUser(app, { displayName: 'Deactivated Player' });
     await makeCharacter(deactivatedPlayer.user.id, 'Deactivated Kindred', { isActive: false });
 
-    // 3. Test public Camarilla roster
+    // 3. Create a deactivated but bloodhunted player
+    const bloodhuntedPlayer = await registerUser(app, { displayName: 'Bloodhunted Player' });
+    const bhCharId = await makeCharacter(bloodhuntedPlayer.user.id, 'Bloodhunted Kindred', { isActive: false });
+    await pool.query('UPDATE characters SET is_bloodhunted = 1 WHERE id = ?', [bhCharId]);
+
+    // 4. Create a deactivated but deceased player
+    const deceasedPlayer = await registerUser(app, { displayName: 'Deceased Player' });
+    const decCharId = await makeCharacter(deceasedPlayer.user.id, 'Deceased Kindred', { isActive: false });
+    await pool.query('UPDATE characters SET is_deceased = 1 WHERE id = ?', [decCharId]);
+
+    // 5. Create a deactivated but missing player
+    const missingPlayer = await registerUser(app, { displayName: 'Missing Player' });
+    const misCharId = await makeCharacter(missingPlayer.user.id, 'Missing Kindred', { isActive: false });
+    await pool.query('UPDATE characters SET is_missing = 1 WHERE id = ?', [misCharId]);
+
+    // 6. Test public Camarilla roster
     const pubRosterRes = await app.inject({
       method: 'GET',
       url: '/api/camarilla/roster',
@@ -59,8 +74,11 @@ describe('Deactivated player visibility in Court Hierarchy and Comms', () => {
     const pubNames = pubRoster.map(r => r.name);
     expect(pubNames).toContain('Active Kindred');
     expect(pubNames).not.toContain('Deactivated Kindred');
+    expect(pubNames).toContain('Bloodhunted Kindred');
+    expect(pubNames).toContain('Deceased Kindred');
+    expect(pubNames).toContain('Missing Kindred');
 
-    // 4. Test admin Camarilla roster
+    // 7. Test admin Camarilla roster
     const admRosterRes = await app.inject({
       method: 'GET',
       url: '/api/admin/camarilla/roster',
@@ -71,8 +89,11 @@ describe('Deactivated player visibility in Court Hierarchy and Comms', () => {
     const admNames = admRoster.map(r => r.name);
     expect(admNames).toContain('Active Kindred');
     expect(admNames).not.toContain('Deactivated Kindred');
+    expect(admNames).toContain('Bloodhunted Kindred');
+    expect(admNames).toContain('Deceased Kindred');
+    expect(admNames).toContain('Missing Kindred');
 
-    // 5. Test Comms /api/chat/users from adminUser
+    // 8. Test Comms /api/chat/users from adminUser (bloodhunted/deceased/missing deactivated players excluded from comms)
     const chatUsersRes = await app.inject({
       method: 'GET',
       url: '/api/chat/users',
@@ -84,9 +105,15 @@ describe('Deactivated player visibility in Court Hierarchy and Comms', () => {
     const chatDisplayNames = chatUsers.map(u => u.display_name);
     expect(chatCharNames).toContain('Active Kindred');
     expect(chatCharNames).not.toContain('Deactivated Kindred');
+    expect(chatCharNames).not.toContain('Bloodhunted Kindred');
+    expect(chatCharNames).not.toContain('Deceased Kindred');
+    expect(chatCharNames).not.toContain('Missing Kindred');
     expect(chatDisplayNames).not.toContain('Deactivated Player');
+    expect(chatDisplayNames).not.toContain('Bloodhunted Player');
+    expect(chatDisplayNames).not.toContain('Deceased Player');
+    expect(chatDisplayNames).not.toContain('Missing Player');
 
-    // 6. Test Comms /api/chat/users from activePlayer with include_self=1
+    // 9. Test Comms /api/chat/users from activePlayer with include_self=1
     const chatSelfRes = await app.inject({
       method: 'GET',
       url: '/api/chat/users?include_self=1',
@@ -97,5 +124,8 @@ describe('Deactivated player visibility in Court Hierarchy and Comms', () => {
     const selfCharNames = selfUsers.map(u => u.char_name).filter(Boolean);
     expect(selfCharNames).toContain('Active Kindred');
     expect(selfCharNames).not.toContain('Deactivated Kindred');
+    expect(selfCharNames).not.toContain('Bloodhunted Kindred');
+    expect(selfCharNames).not.toContain('Deceased Kindred');
+    expect(selfCharNames).not.toContain('Missing Kindred');
   });
 });

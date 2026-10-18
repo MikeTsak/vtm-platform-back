@@ -23,7 +23,7 @@ module.exports = async function (fastify, opts) {
        FROM characters c
        LEFT JOIN users u ON c.user_id = u.id
        WHERE c.user_id IS NOT NULL
-         AND (c.sheet IS NULL OR (JSON_EXTRACT(c.sheet, '$.is_active') = true OR JSON_UNQUOTE(JSON_EXTRACT(c.sheet, '$.is_active')) IN ('true', '1')))`
+         AND (c.is_bloodhunted = 1 OR c.is_deceased = 1 OR c.is_missing = 1 OR c.sheet IS NULL OR (JSON_EXTRACT(c.sheet, '$.is_active') = true OR JSON_UNQUOTE(JSON_EXTRACT(c.sheet, '$.is_active')) IN ('true', '1')))`
       );
       const [npcs] = await pool.query(
         `SELECT n.id, NULL as user_id, n.name, n.clan, n.camarilla_titles as titles, n.status, n.image_url, 
@@ -34,7 +34,7 @@ module.exports = async function (fastify, opts) {
       );
 
       const format = (list) => list
-        .filter(item => item.type !== 'player' || (!item.sheet ? true : parseSheet(item.sheet).is_active === true))
+        .filter(item => item.type !== 'player' || Boolean(item.is_bloodhunted || item.is_deceased || item.is_missing) || (!item.sheet ? true : parseSheet(item.sheet).is_active === true))
         .map(({ sheet, ...item }) => ({
           ...item,
           titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || []),
@@ -46,7 +46,8 @@ module.exports = async function (fastify, opts) {
           is_missing: !!item.is_missing,
           is_exiled: !!item.is_exiled,
           is_bloodhunted: !!item.is_bloodhunted,
-          has_avatar: Boolean(item.has_avatar)
+          has_avatar: Boolean(item.has_avatar),
+          is_active: sheet ? parseSheet(sheet).is_active === true : true
         }));
 
       const combined = [...format(players), ...format(npcs)];
@@ -78,7 +79,7 @@ module.exports = async function (fastify, opts) {
        FROM characters c
        LEFT JOIN users u ON c.user_id = u.id
        WHERE c.user_id IS NOT NULL
-         AND (c.sheet IS NULL OR (JSON_EXTRACT(c.sheet, '$.is_active') = true OR JSON_UNQUOTE(JSON_EXTRACT(c.sheet, '$.is_active')) IN ('true', '1')))`
+         AND (c.is_bloodhunted = 1 OR c.is_deceased = 1 OR c.is_missing = 1 OR c.sheet IS NULL OR (JSON_EXTRACT(c.sheet, '$.is_active') = true OR JSON_UNQUOTE(JSON_EXTRACT(c.sheet, '$.is_active')) IN ('true', '1')))`
       );
       const [npcs] = await pool.query(
         `SELECT n.id, NULL as user_id, n.name, n.clan, n.camarilla_titles as titles, n.status, n.image_url, 
@@ -89,7 +90,7 @@ module.exports = async function (fastify, opts) {
       );
 
       const format = (list) => list
-        .filter(item => item.type !== 'player' || (!item.sheet ? true : parseSheet(item.sheet).is_active === true))
+        .filter(item => item.type !== 'player' || Boolean(item.is_bloodhunted || item.is_deceased || item.is_missing) || (!item.sheet ? true : parseSheet(item.sheet).is_active === true))
         .map(({ sheet, ...item }) => ({
           ...item,
           titles: typeof item.titles === 'string' ? JSON.parse(item.titles) : (item.titles || []),
@@ -101,7 +102,8 @@ module.exports = async function (fastify, opts) {
           is_missing: !!item.is_missing,
           is_exiled: !!item.is_exiled,
           is_bloodhunted: !!item.is_bloodhunted,
-          has_avatar: Boolean(item.has_avatar)
+          has_avatar: Boolean(item.has_avatar),
+          is_active: sheet ? parseSheet(sheet).is_active === true : true
         }));
 
       const combined = [...format(players), ...format(npcs)];

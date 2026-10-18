@@ -1,6 +1,6 @@
 // tests/idor.test.js — regression guards for the IDOR fixes in
-// routes/characters.js: GET /api/characters/user/:id, GET/POST
-// /api/characters/:id/inventory, and GET/POST /api/characters/:id/retainers
+// routes/characters.js: GET /api/characters/user/:id, GET
+// /api/characters/:id/inventory (routes/inventory.js), and GET/POST /api/characters/:id/retainers
 // must never let one user read or write another user's character data.
 const { setupTestDatabase, teardownTestDatabase, truncateAll, getTestPool } = require('./setup/testDb');
 const { buildTestApp } = require('./setup/testApp');

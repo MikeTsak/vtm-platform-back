@@ -121,6 +121,15 @@ function buildTestApp(pool) {
     broadcastNtfyAlert: noop,
   });
 
+  app.register(require('../../routes/inventory'), {
+    pool,
+    log: testLog,
+    authRequired,
+    requireAdmin,
+    moderateLimiter: noopLimiter,
+    imageClient: { uploadImage: async () => ({ success: false }) },
+  });
+
   app.register(require('../../routes/characterXp'), {
     pool,
     log: testLog,
