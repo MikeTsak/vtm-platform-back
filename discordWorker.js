@@ -520,7 +520,10 @@ if (commandText === 'whoami') {
   if (message.content.toLowerCase().startsWith('&meme')) {
     const text = message.content.slice(5).trim();
     
-    const attachments = Array.from(message.attachments.values()).filter(a => a.contentType && a.contentType.startsWith('image/'));
+    const attachments = Array.from(message.attachments.values()).filter(a => 
+      (a.contentType && a.contentType.startsWith('image/')) ||
+      (a.name && /\.(gif|jpe?g|png|webp)$/i.test(a.name))
+    );
 
     if (attachments.length === 0) {
       return message.reply('🦇 You need to attach at least one image to make a meme!');
@@ -528,6 +531,9 @@ if (commandText === 'whoami') {
     if (!text) {
       return message.reply('🦇 Provide some text! Example: `&meme When the ST smiles`');
     }
+
+    let statusMessage = null;
+    let originalMessageDeleted = false;
 
     try {
       if (!textToSVG) {
@@ -539,12 +545,13 @@ if (commandText === 'whoami') {
       for (const attachment of attachments) {
         const response = await axios.get(attachment.url, { responseType: 'arraybuffer' });
         const buffer = Buffer.from(response.data, 'binary');
-        const isGifOrWebp = attachment.contentType === 'image/gif' || attachment.contentType === 'image/webp';
+        const isGifOrWebp = (attachment.contentType && (attachment.contentType === 'image/gif' || attachment.contentType === 'image/webp')) ||
+          (attachment.name && /\.(gif|webp)$/i.test(attachment.name));
         
         let meta;
         if (isGifOrWebp) {
           meta = await sharp(buffer, { animated: true }).metadata();
-          if (meta.pages > 1) isAnimated = true;
+          if (meta.pages > 1 || meta.format === 'gif') isAnimated = true;
         } else {
           meta = await sharp(buffer).metadata();
         }
@@ -558,6 +565,25 @@ if (commandText === 'whoami') {
       const targetWidth = downloadedImages[0].meta.width;
       let totalImageHeight = 0;
       const processedImages = [];
+
+      if (isAnimated) {
+        try {
+          await message.delete();
+          originalMessageDeleted = true;
+        } catch (delErr) {
+          console.warn('Could not delete original meme message:', delErr.message);
+        }
+
+        const numPages = downloadedImages[0].meta.pages || 1;
+        const originalPageHeight = downloadedImages[0].meta.pageHeight || Math.round((downloadedImages[0].meta.height || 400) / numPages);
+        const estimatedSeconds = estimateGifProcessingSeconds(numPages, targetWidth, originalPageHeight);
+
+        try {
+          statusMessage = await message.channel.send(`It is a GIF, so it will take a little longer to make. Estimated time: about ${estimatedSeconds} seconds.`);
+        } catch (statusErr) {
+          console.warn('Could not send GIF status message:', statusErr.message);
+        }
+      }
 
       for (const img of downloadedImages) {
         const resizedBuffer = await sharp(img.buffer)
@@ -639,18 +665,35 @@ if (commandText === 'whoami') {
         .toBuffer();
       }
 
+      if (statusMessage) {
+        try {
+          await statusMessage.delete();
+        } catch (delErr) {
+          console.warn('Could not delete GIF status message:', delErr.message);
+        }
+      }
+
       await message.channel.send({ 
         content: `🎨 Meme created by: <@${message.author.id}>`,
         files: [{ attachment: outputBuffer, name: fileName }] 
       });
 
-      try {
-        await message.delete();
-      } catch (delErr) {
-        console.warn('Could not delete original meme message:', delErr.message);
+      if (!originalMessageDeleted) {
+        try {
+          await message.delete();
+        } catch (delErr) {
+          console.warn('Could not delete original meme message:', delErr.message);
+        }
       }
 
     } catch (error) {
+      if (statusMessage) {
+        try {
+          await statusMessage.delete();
+        } catch (delErr) {
+          console.warn('Could not delete GIF status message on error:', delErr.message);
+        }
+      }
       log.err('Discord Meme Generation Failed', { error: error.message });
       message.channel.send(`❌ <@${message.author.id}> The shadows consumed your meme. (Something went wrong processing the image).`);
     }
@@ -733,6 +776,12 @@ async function getEmojiDataUri(rawEmoji) {
   return isSvg
     ? `data:image/svg+xml;base64,${buf.toString('base64')}`
     : `data:image/png;base64,${buf.toString('base64')}`;
+}
+
+function estimateGifProcessingSeconds(numPages = 1, targetWidth = 400, originalPageHeight = 400) {
+  const safePages = Math.max(1, Number(numPages) || 1);
+  const totalPixels = Math.max(1, targetWidth) * Math.max(1, originalPageHeight) * safePages;
+  return Math.max(3, Math.round(safePages * 0.08 + (totalPixels / 25000000) + 1));
 }
 
 async function renderMemeCaptionSvg(text, targetWidth, textToSvgEngine) {
@@ -971,7 +1020,8 @@ module.exports = {
   renderMemeCaptionSvg,
   getEmojiDataUri,
   getEmojiBuffer,
-  handleMemeReply
+  handleMemeReply,
+  estimateGifProcessingSeconds
 };
 
 
