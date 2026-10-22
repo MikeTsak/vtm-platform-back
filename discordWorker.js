@@ -563,8 +563,8 @@ if (commandText === 'whoami') {
       }
 
       const targetWidth = downloadedImages[0].meta.width;
-      let totalImageHeight = 0;
-      const processedImages = [];
+      let outputBuffer;
+      let fileName = 'meme.jpg';
 
       if (isAnimated) {
         try {
@@ -576,69 +576,75 @@ if (commandText === 'whoami') {
 
         const numPages = downloadedImages[0].meta.pages || 1;
         const originalPageHeight = downloadedImages[0].meta.pageHeight || Math.round((downloadedImages[0].meta.height || 400) / numPages);
-        const estimatedSeconds = estimateGifProcessingSeconds(numPages, targetWidth, originalPageHeight);
+        const baseEstimatedSeconds = estimateGifProcessingSeconds(numPages, targetWidth, originalPageHeight);
+
+        const { promise, position } = gifMemeQueue.enqueue(async () => {
+          const { svg, textPaddingHeight, emojiOverlays } = await renderMemeCaptionSvg(text, targetWidth, textToSVG);
+          const newPageHeight = originalPageHeight + textPaddingHeight;
+
+          const captionBuffer = await sharp({
+            create: {
+              width: targetWidth,
+              height: textPaddingHeight,
+              channels: 4,
+              background: { r: 255, g: 255, b: 255, alpha: 1 }
+            }
+          })
+          .composite([
+            { input: Buffer.from(svg), top: 0, left: 0 },
+            ...(emojiOverlays || [])
+          ])
+          .png()
+          .toBuffer();
+
+          const gifCompositeLayers = [];
+          for (let p = 0; p < numPages; p++) {
+            gifCompositeLayers.push({
+              input: captionBuffer,
+              top: p * newPageHeight,
+              left: 0
+            });
+          }
+
+          return sharp(downloadedImages[0].buffer, { animated: true })
+            .extend({
+              top: textPaddingHeight,
+              background: { r: 255, g: 255, b: 255, alpha: 1 }
+            })
+            .composite(gifCompositeLayers)
+            .gif()
+            .toBuffer();
+        });
+
+        const totalEstimatedSeconds = baseEstimatedSeconds + (position * 4);
+        const statusText = position > 0
+          ? `It is a GIF, so it will take a little longer to make. Waiting in queue, position ${position}. Estimated time: about ${totalEstimatedSeconds} seconds.`
+          : `It is a GIF, so it will take a little longer to make. Estimated time: about ${totalEstimatedSeconds} seconds.`;
 
         try {
-          statusMessage = await message.channel.send(`It is a GIF, so it will take a little longer to make. Estimated time: about ${estimatedSeconds} seconds.`);
+          statusMessage = await message.channel.send(statusText);
         } catch (statusErr) {
           console.warn('Could not send GIF status message:', statusErr.message);
         }
-      }
 
-      for (const img of downloadedImages) {
-        const resizedBuffer = await sharp(img.buffer)
-          .resize({ width: targetWidth })
-          .toBuffer();
-        const resizedMeta = await sharp(resizedBuffer).metadata();
-        
-        processedImages.push({ buffer: resizedBuffer, height: resizedMeta.height });
-        totalImageHeight += resizedMeta.height; 
-      }
-
-      const { svg, textPaddingHeight, emojiOverlays } = await renderMemeCaptionSvg(text, targetWidth, textToSVG);
-
-      let outputBuffer;
-      let fileName = 'meme.jpg';
-
-      if (isAnimated) {
-        const numPages = downloadedImages[0].meta.pages || 1;
-        const originalPageHeight = downloadedImages[0].meta.pageHeight || Math.round(downloadedImages[0].meta.height / numPages);
-        const newPageHeight = originalPageHeight + textPaddingHeight;
-
-        const captionBuffer = await sharp({
-          create: {
-            width: targetWidth,
-            height: textPaddingHeight,
-            channels: 4,
-            background: { r: 255, g: 255, b: 255, alpha: 1 }
-          }
-        })
-        .composite([
-          { input: Buffer.from(svg), top: 0, left: 0 },
-          ...(emojiOverlays || [])
-        ])
-        .png()
-        .toBuffer();
-
-        const gifCompositeLayers = [];
-        for (let p = 0; p < numPages; p++) {
-          gifCompositeLayers.push({
-            input: captionBuffer,
-            top: p * newPageHeight,
-            left: 0
-          });
-        }
-
-        outputBuffer = await sharp(downloadedImages[0].buffer, { animated: true })
-          .extend({
-            top: textPaddingHeight,
-            background: { r: 255, g: 255, b: 255, alpha: 1 }
-          })
-          .composite(gifCompositeLayers)
-          .gif()
-          .toBuffer();
+        outputBuffer = await promise;
         fileName = 'meme.gif';
       } else {
+        const processedImages = [];
+        let totalImageHeight = 0;
+
+        for (const img of downloadedImages) {
+          const resizedBuffer = await sharp(img.buffer)
+            .resize({ width: targetWidth })
+            .toBuffer();
+          const resizedMeta = await sharp(resizedBuffer).metadata();
+          
+          processedImages.push({ buffer: resizedBuffer, height: resizedMeta.height });
+          totalImageHeight += resizedMeta.height; 
+        }
+
+        const { svg, textPaddingHeight, emojiOverlays } = await renderMemeCaptionSvg(text, targetWidth, textToSVG);
+
         const compositeLayers = [
           { input: Buffer.from(svg), top: 0, left: 0 },
           ...(emojiOverlays || [])
@@ -777,6 +783,44 @@ async function getEmojiDataUri(rawEmoji) {
     ? `data:image/svg+xml;base64,${buf.toString('base64')}`
     : `data:image/png;base64,${buf.toString('base64')}`;
 }
+
+class GifMemeQueue {
+  constructor(maxConcurrency = 2) {
+    this.maxConcurrency = maxConcurrency;
+    this.activeCount = 0;
+    this.waitingQueue = [];
+  }
+
+  get queuePosition() {
+    return this.waitingQueue.length;
+  }
+
+  enqueue(fn) {
+    const position = this.activeCount >= this.maxConcurrency ? this.waitingQueue.length + 1 : 0;
+    const promise = new Promise((resolve, reject) => {
+      this.waitingQueue.push({ fn, resolve, reject });
+      this._processNext();
+    });
+    return { promise, position };
+  }
+
+  _processNext() {
+    if (this.activeCount >= this.maxConcurrency || this.waitingQueue.length === 0) {
+      return;
+    }
+    const { fn, resolve, reject } = this.waitingQueue.shift();
+    this.activeCount++;
+    Promise.resolve()
+      .then(() => fn())
+      .then(resolve, reject)
+      .finally(() => {
+        this.activeCount--;
+        this._processNext();
+      });
+  }
+}
+
+const gifMemeQueue = new GifMemeQueue(2);
 
 function estimateGifProcessingSeconds(numPages = 1, targetWidth = 400, originalPageHeight = 400) {
   const safePages = Math.max(1, Number(numPages) || 1);
@@ -1021,7 +1065,9 @@ module.exports = {
   getEmojiDataUri,
   getEmojiBuffer,
   handleMemeReply,
-  estimateGifProcessingSeconds
+  estimateGifProcessingSeconds,
+  GifMemeQueue,
+  gifMemeQueue
 };
 
 

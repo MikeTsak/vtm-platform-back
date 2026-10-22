@@ -1,6 +1,6 @@
 {
   "name": "back",
-  "version": "1.0.196",
+  "version": "1.0.197",
   "private": true,
   "scripts": {
     "dev": "node swagger-autogen.js && nodemon server.fastify.js",
