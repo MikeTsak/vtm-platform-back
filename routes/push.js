@@ -134,14 +134,16 @@ module.exports = async function (fastify, opts) {
     try {
       if (req.user.imp) return reply.status(403).send({ error: 'Push subscriptions are disabled in a debug session' });
       const { subscription } = req.body || {};
-      if (!subscription || !subscription.endpoint) {
+      if (!subscription?.endpoint || !subscription.keys?.p256dh || !subscription.keys?.auth) {
         return reply.status(400).send({ error: 'Valid subscription required' });
       }
 
+      // Keys are refreshed too: a browser can re-key an endpoint, and pushes
+      // encrypted with the old keys are undecryptable on the device.
       await pool.query(
         `INSERT INTO user_push_subscriptions (user_id, endpoint, p256dh, auth)
        VALUES (?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE user_id=VALUES(user_id)`,
+       ON DUPLICATE KEY UPDATE user_id=VALUES(user_id), p256dh=VALUES(p256dh), auth=VALUES(auth)`,
         [req.user.id, subscription.endpoint, subscription.keys.p256dh, subscription.keys.auth]
       );
 

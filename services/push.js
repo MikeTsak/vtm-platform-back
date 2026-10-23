@@ -18,26 +18,33 @@ const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@attlarp.gr';
 webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 
-// A player-avatar icon (`/api/users/:id/avatar`) 404s for players who never
-// uploaded one, which leaves the notification with the browser's default icon.
-// Swap it for their clan's icon (front/public/img/clans/push/<slug>.png) in
-// that case. Anything else, or a player with no avatar and no clan, passes
-// through untouched.
-async function iconWithClanFallback(icon) {
-  const m = /^\/api\/users\/(\d+)\/avatar/.exec(icon || '');
+// Callers pass an avatar route (`/api/users/5/avatar`, `/api/npcs/3/avatar`,
+// ...), but relative icons get resolved against CORS_ORIGIN — the static
+// frontend host, which has no /api and 404s them, so every notification fell
+// back to the app logo. Resolve the route here to the CDN image it would
+// redirect to (thumb first: notification icons are small). A player with no
+// avatar gets their clan's icon (front/public/img/clans/push/<slug>.png).
+// Anything else passes through untouched.
+const AVATAR_TABLES = { users: 'users', npcs: 'npcs', identities: 'email_identities', retainers: 'retainers' };
+
+async function resolveIcon(icon) {
+  const m = /^\/api\/(users|npcs|identities|retainers)\/(\d+)\/avatar/.exec(icon || '');
   if (!m) return icon;
+  const [kind, id] = [m[1], m[2]];
+  const clan = kind === 'users' ? ', (SELECT clan FROM characters WHERE user_id = t.id LIMIT 1) AS clan' : '';
   const [[row]] = await pool.query(
-    `SELECT u.avatar_url, (u.avatar IS NOT NULL AND LENGTH(u.avatar) > 0) AS has_avatar,
-            (SELECT clan FROM characters WHERE user_id = u.id LIMIT 1) AS clan
-       FROM users u WHERE u.id = ?`, [m[1]]);
-  if (!row || row.avatar_url || row.has_avatar || !row.clan) return icon;
-  const slug = String(row.clan).toLowerCase().replace(/^the /, '').replace(/[^a-z]/g, '');
-  return slug ? `/img/clans/push/${slug}.png` : icon;
+    `SELECT t.avatar_url, t.avatar_url_thumb${clan} FROM ${AVATAR_TABLES[kind]} t WHERE t.id = ?`, [id]);
+  if (row?.avatar_url_thumb || row?.avatar_url) return row.avatar_url_thumb || row.avatar_url;
+  // No CDN image (no upload, unknown id, or a legacy blob-only avatar, which
+  // can't be linked from here): clan icon if there is one, else null so the
+  // service worker shows the app icon rather than a broken image.
+  const slug = String(row?.clan || '').toLowerCase().replace(/^the /, '').replace(/[^a-z]/g, '');
+  return slug ? `/img/clans/push/${slug}.png` : null;
 }
 
 async function sendPushNotification(userId, title, body, data = {}, category = 'system') {
   try {
-    data = { ...data, icon: await iconWithClanFallback(data.icon) };
+    data = { ...data, icon: await resolveIcon(data.icon) };
     // Check user push settings
     const [userRows] = await pool.query('SELECT push_settings FROM users WHERE id=?', [userId]);
     if (!userRows.length) return;
@@ -80,12 +87,16 @@ async function sendPushNotification(userId, title, body, data = {}, category = '
           keys: { p256dh: row.p256dh, auth: row.auth }
         };
         try {
-          await webpush.sendNotification(pushSubscription, payload);
+          // High urgency for chat: without it Android (FCM) and iOS (APNs)
+          // may hold a "normal" push until the device wakes from doze.
+          await webpush.sendNotification(pushSubscription, payload, { urgency: category === 'chat' ? 'high' : 'normal' });
         } catch (err) {
           if (err.statusCode === 404 || err.statusCode === 410) {
             await pool.query('DELETE FROM user_push_subscriptions WHERE endpoint=?', [row.endpoint]);
           } else {
-            log.err('Web push failed', { err: err.message });
+            // The push service host says which platform failed (fcm.googleapis.com,
+            // web.push.apple.com, updates.push.services.mozilla.com, wns...).
+            log.err('Web push failed', { status: err.statusCode, service: new URL(row.endpoint).host, err: err.body || err.message });
           }
         }
       }
