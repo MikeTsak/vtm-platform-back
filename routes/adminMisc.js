@@ -30,7 +30,7 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/admin/events', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const { title, date_string, description, is_elysium } = req.body;
-      const elysium = is_elysium !== undefined ? !!is_elysium : /modern/i.test(title || '');
+      const elysium = is_elysium !== undefined ? !!is_elysium : /modern|elysium/i.test(title || '');
       await pool.query('INSERT INTO events (title, date, description, is_elysium) VALUES (?, ?, ?, ?)', [title, new Date(date_string), description || null, elysium ? 1 : 0]);
       reply.send({ ok: true });
     } catch (e) {

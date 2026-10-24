@@ -588,12 +588,14 @@ module.exports = async function (fastify, opts) {
       const massReleaseDate = await getSetting('downtime_mass_release_date', null);
 
       // "Next Modern Event" comes straight from the admin Calendar's events table, so it can't drift.
-      // Event kind lives in the title ("Modern Day Event", "Past Time Event", "Grand Event"); only
+      // Event kind lives in the title ("Elysium", "Modern Day Event", "Past Time Event", "Grand Event"); only
       // Past Time events are skipped.
       const [[nextModernEvent]] = await pool.query(
-        `SELECT id, title, date FROM events
-         WHERE date >= NOW() AND LOWER(title) NOT LIKE '%past time%'
-         ORDER BY date ASC LIMIT 1`
+        `SELECT e.id, e.title, e.date, i.name AS elysium_name
+           FROM events e
+           LEFT JOIN elysium_invitations i ON i.event_id = e.id
+          WHERE e.date >= NOW() AND LOWER(e.title) NOT LIKE '%past time%'
+          ORDER BY e.date ASC LIMIT 1`
       );
 
       reply.send({

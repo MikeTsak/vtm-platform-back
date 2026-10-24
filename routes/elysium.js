@@ -113,7 +113,7 @@ module.exports = async function (fastify, opts) {
       const resent = await lastReannounce(event.id);
 
       reply.send({
-        event: { id: event.id, date: event.date, name: published ? (inv.name || null) : null },
+        event: { id: event.id, date: event.date, name: published ? (inv?.name || event.title) : null, title: event.title },
         status,
         read: !!read && (!resent || (read.last_version_id || 0) >= resent.id),
         character: character ? { name: character.name, clan: character.clan } : null,
