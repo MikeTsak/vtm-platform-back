@@ -517,19 +517,17 @@ if (commandText === 'whoami') {
   }
 
   // --- Meme Maker Feature ---
-  if (message.content.toLowerCase().startsWith('&meme')) {
-    const text = message.content.slice(5).trim();
-    
-    const attachments = Array.from(message.attachments.values()).filter(a => 
-      (a.contentType && a.contentType.startsWith('image/')) ||
-      (a.name && /\.(gif|jpe?g|png|webp)$/i.test(a.name))
-    );
+  if (message.content.trim().toLowerCase().startsWith('&meme')) {
+    const text = message.content.trim().replace(/^&meme\s*/i, '').trim();
 
-    if (attachments.length === 0) {
-      return message.reply('🦇 You need to attach at least one image to make a meme!');
-    }
     if (!text) {
       return message.reply('🦇 Provide some text! Example: `&meme When the ST smiles`');
+    }
+
+    const { imageTargets, referencedMessage } = await resolveMemeImages(message);
+
+    if (imageTargets.length === 0) {
+      return message.reply('🦇 You need to attach an image or reply to a message containing an image to make a meme!');
     }
 
     let statusMessage = null;
@@ -542,11 +540,14 @@ if (commandText === 'whoami') {
 
       const downloadedImages = [];
       let isAnimated = false;
-      for (const attachment of attachments) {
-        const response = await axios.get(attachment.url, { responseType: 'arraybuffer' });
-        const buffer = Buffer.from(response.data, 'binary');
-        const isGifOrWebp = (attachment.contentType && (attachment.contentType === 'image/gif' || attachment.contentType === 'image/webp')) ||
-          (attachment.name && /\.(gif|webp)$/i.test(attachment.name));
+      for (const attachment of imageTargets) {
+        const response = await axios.get(attachment.url, { responseType: 'arraybuffer', timeout: 15000 });
+        const buffer = Buffer.from(response.data);
+        const respContentType = (response.headers && response.headers['content-type']) || '';
+        let isGifOrWebp = (attachment.contentType && (attachment.contentType.includes('gif') || attachment.contentType.includes('webp'))) ||
+          (attachment.name && /\.(gif|webp)$/i.test(attachment.name)) ||
+          /\.(gif|webp)($|\?)/i.test(attachment.url) ||
+          respContentType.includes('gif') || respContentType.includes('webp');
         
         let meta;
         if (isGifOrWebp) {
@@ -554,6 +555,11 @@ if (commandText === 'whoami') {
           if (meta.pages > 1 || meta.format === 'gif') isAnimated = true;
         } else {
           meta = await sharp(buffer).metadata();
+          if (meta.format === 'gif' || (meta.pages && meta.pages > 1)) {
+            isGifOrWebp = true;
+            meta = await sharp(buffer, { animated: true }).metadata();
+            if (meta.pages > 1 || meta.format === 'gif') isAnimated = true;
+          }
         }
         downloadedImages.push({ buffer, meta, isGifOrWebp });
       }
@@ -679,10 +685,20 @@ if (commandText === 'whoami') {
         }
       }
 
-      await message.channel.send({ 
+      const memeSendOptions = { 
         content: `🎨 Meme created by: <@${message.author.id}>`,
         files: [{ attachment: outputBuffer, name: fileName }] 
-      });
+      };
+
+      if (referencedMessage?.id) {
+        memeSendOptions.reply = {
+          messageReference: referencedMessage.id,
+          failIfNotExists: false
+        };
+        memeSendOptions.allowedMentions = { repliedUser: false };
+      }
+
+      await message.channel.send(memeSendOptions);
 
       if (!originalMessageDeleted) {
         try {
@@ -1009,8 +1025,88 @@ async function renderMemeCaptionSvg(text, targetWidth, textToSvgEngine) {
   return { svg, textPaddingHeight, emojiOverlays };
 }
 
+async function resolveMemeImages(message) {
+  if (!message) return { imageTargets: [], referencedMessage: null };
+
+  const directAttachments = Array.from(message.attachments?.values() || []).filter(a => 
+    (a.contentType && a.contentType.startsWith('image/')) ||
+    (a.name && /\.(gif|jpe?g|png|webp)$/i.test(a.name))
+  );
+
+  let referencedMessage = null;
+  if (message.reference?.messageId) {
+    try {
+      const channel = message.reference.channelId && message.client?.channels?.cache?.get(message.reference.channelId)
+        ? message.client.channels.cache.get(message.reference.channelId)
+        : message.channel;
+
+      referencedMessage = channel?.messages?.cache?.get(message.reference.messageId);
+      if (!referencedMessage && channel?.messages?.fetch) {
+        referencedMessage = await channel.messages.fetch(message.reference.messageId);
+      }
+    } catch (refErr) {
+      log.warn('Could not fetch referenced message for meme', { error: refErr.message });
+    }
+  }
+
+  if (directAttachments.length > 0) {
+    return { imageTargets: directAttachments, referencedMessage };
+  }
+
+  if (!referencedMessage) {
+    return { imageTargets: [], referencedMessage: null };
+  }
+
+  // 1. Referenced message attachments
+  const refAttachments = Array.from(referencedMessage.attachments?.values() || []).filter(a => 
+    (a.contentType && a.contentType.startsWith('image/')) ||
+    (a.name && /\.(gif|jpe?g|png|webp)$/i.test(a.name))
+  );
+  if (refAttachments.length > 0) {
+    return { imageTargets: refAttachments, referencedMessage };
+  }
+
+  // 2. Referenced message embeds (Tenor, Giphy, embedded image)
+  const imageTargets = [];
+  for (const embed of referencedMessage.embeds || []) {
+    const embedUrl = embed.image?.url || embed.image?.proxyURL || embed.thumbnail?.url || embed.thumbnail?.proxyURL;
+    if (embedUrl) {
+      const isGif = embedUrl.toLowerCase().includes('.gif') || embed.video?.url?.toLowerCase()?.includes('.gif');
+      imageTargets.push({
+        url: embedUrl,
+        name: isGif ? 'embed.gif' : 'embed.png',
+        contentType: isGif ? 'image/gif' : 'image/png'
+      });
+      break;
+    }
+  }
+  if (imageTargets.length > 0) {
+    return { imageTargets, referencedMessage };
+  }
+
+  // 3. Referenced message text content direct image URL
+  if (referencedMessage.content) {
+    const urlMatch = referencedMessage.content.match(/https?:\/\/\S+\.(gif|jpe?g|png|webp)(\?\S*)?/i);
+    if (urlMatch) {
+      const ext = urlMatch[1].toLowerCase();
+      imageTargets.push({
+        url: urlMatch[0],
+        name: `linked_image.${ext}`,
+        contentType: `image/${ext === 'jpg' ? 'jpeg' : ext}`
+      });
+    }
+  }
+
+  return { imageTargets, referencedMessage };
+}
+
 async function handleMemeReply(message, client) {
   if (!message || !message.reference || !message.reference.messageId) {
+    return false;
+  }
+
+  // If the user is issuing a meme creation command, bypass meme reply notifications
+  if (message.content && message.content.trim().toLowerCase().startsWith('&meme')) {
     return false;
   }
 
@@ -1065,6 +1161,7 @@ module.exports = {
   getEmojiDataUri,
   getEmojiBuffer,
   handleMemeReply,
+  resolveMemeImages,
   estimateGifProcessingSeconds,
   GifMemeQueue,
   gifMemeQueue
