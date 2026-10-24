@@ -478,10 +478,27 @@ module.exports = async function (fastify, opts) {
         byCoterie.get(m.coterie_id).push(m);
       }
 
+      const coterieIds = rows.map((r) => r.id);
+      const [eventRows] = await pool.query(
+        `SELECT id, coterie_id, user_id, kind, character_id, target_name, note, created_at
+           FROM coterie_xp_log
+          WHERE coterie_id IN (?)
+          ORDER BY created_at DESC, id DESC`,
+        [coterieIds]
+      );
+      const eventsByCoterie = new Map();
+      for (const ev of eventRows) {
+        if (!eventsByCoterie.has(ev.coterie_id)) eventsByCoterie.set(ev.coterie_id, []);
+        if (eventsByCoterie.get(ev.coterie_id).length < 5) {
+          eventsByCoterie.get(ev.coterie_id).push(ev);
+        }
+      }
+
       reply.send({
         coteries: rows.map((r) => {
           const mem = byCoterie.get(r.id) || [];
-          return { ...presentCoterie(r, mem), members: mem };
+          const evs = eventsByCoterie.get(r.id) || [];
+          return { ...presentCoterie(r, mem), members: mem, events: evs };
         }),
       });
     } catch (e) {
@@ -512,7 +529,13 @@ module.exports = async function (fastify, opts) {
         [id]
       );
 
-      reply.send({ coterie: presentCoterie(row, members), members, xp_log: xpLog, retainers });
+      reply.send({
+        coterie: presentCoterie(row, members),
+        members,
+        xp_log: xpLog,
+        events: xpLog.filter((x) => x.kind === 'member_left'),
+        retainers,
+      });
     } catch (e) {
       log.err('Read coterie failed', { message: e.message, stack: e.stack });
       reply.status(500).send({ error: 'Failed to load coterie' });
@@ -734,6 +757,17 @@ module.exports = async function (fastify, opts) {
           'INSERT INTO coterie_members (coterie_id, user_id, character_id, display_name) VALUES ?',
           [rows.map((r) => [id, r[0], r[1], r[2]])]
         );
+        const removedMembers = before.filter((b) => !rows.some((r) => r[0] === b.user_id));
+        for (const b of removedMembers) {
+          const remName = b.character_name || 'A character';
+          await conn.query(
+            `INSERT INTO coterie_xp_log
+              (coterie_id, user_id, character_id, kind, target_type, target_name, note)
+             VALUES (?, ?, ?, 'member_left', 'member', ?, ?)`,
+            [id, b.user_id, b.character_id || null, remName, `${remName} left the coterie`]
+          );
+        }
+
         await conn.commit();
       } catch (e) {
         await conn.rollback();
@@ -758,6 +792,90 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       log.err('Set coterie members failed', { message: e.message, stack: e.stack });
       reply.status(500).send({ error: 'Failed to set members' });
+    }
+  });
+
+  /* ================================================================ *
+   * Membership — leave coterie
+   * ================================================================ */
+
+  fastify.post('/api/coteries/:id/leave', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const id = Number(req.params.id);
+      const [members] = await pool.query(
+        `SELECT m.id, m.character_id, m.display_name,
+                COALESCE(ch.name, m.display_name) AS character_name
+           FROM coterie_members m
+           LEFT JOIN characters ch ON ch.id = m.character_id
+          WHERE m.coterie_id=? AND m.user_id=?`,
+        [id, req.user.id]
+      );
+      if (!members.length) {
+        return reply.status(400).send({ error: 'You are not a member of this coterie' });
+      }
+
+      const [[coterie]] = await pool.query('SELECT id, name FROM coteries WHERE id=?', [id]);
+      if (!coterie) {
+        return reply.status(404).send({ error: 'Coterie not found' });
+      }
+
+      let charName = members[0].character_name;
+      let charId = members[0].character_id;
+      if (!charName || charName.startsWith('User #')) {
+        const [[fallbackChar]] = await pool.query(
+          'SELECT id, name FROM characters WHERE user_id=? ORDER BY id ASC LIMIT 1',
+          [req.user.id]
+        );
+        if (fallbackChar) {
+          charName = fallbackChar.name;
+          charId = charId || fallbackChar.id;
+        }
+      }
+      if (!charName) charName = 'A character';
+
+      const conn = await pool.getConnection();
+      try {
+        await conn.beginTransaction();
+        await conn.query('DELETE FROM coterie_members WHERE coterie_id=? AND user_id=?', [id, req.user.id]);
+
+        const [[remaining]] = await conn.query(
+          'SELECT COUNT(*) AS count FROM coterie_members WHERE coterie_id=?',
+          [id]
+        );
+
+        let deleted = false;
+        if (Number(remaining?.count || 0) === 0) {
+          await conn.query('DELETE FROM coteries WHERE id=?', [id]);
+          deleted = true;
+          log.adm('Coterie deleted because last member left', { coterie_id: id, by_user_id: req.user.id });
+        } else {
+          await conn.query(
+            `INSERT INTO coterie_xp_log
+              (coterie_id, user_id, character_id, kind, target_type, target_name, note)
+             VALUES (?, ?, ?, 'member_left', 'member', ?, ?)`,
+            [id, req.user.id, charId || null, charName, `${charName} left the coterie`]
+          );
+
+          log.adm('Member left coterie', {
+            coterie_id: id,
+            user_id: req.user.id,
+            character_id: charId,
+            character_name: charName,
+            remaining_members: remaining.count,
+          });
+        }
+
+        await conn.commit();
+        reply.send({ ok: true, deleted, coterie_id: id, character_name: charName });
+      } catch (e) {
+        await conn.rollback();
+        throw e;
+      } finally {
+        conn.release();
+      }
+    } catch (e) {
+      log.err('Leave coterie failed', { message: e.message, stack: e.stack });
+      reply.status(500).send({ error: 'Failed to leave coterie' });
     }
   });
 

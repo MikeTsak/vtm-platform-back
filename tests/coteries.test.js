@@ -580,6 +580,65 @@ describe('membership', () => {
       expect(m.character_name).toBeTruthy();
     }
   });
+
+  it('lets a member leave a coterie and logs an event with the character name', async () => {
+    const created = await post('/api/coteries', members[0].cookie, legalPayload({ name: 'Leave Test' }));
+    const id = JSON.parse(created.body).coterie.id;
+
+    const res = await post(`/api/coteries/${id}/leave`, members[2].cookie);
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.ok).toBe(true);
+    expect(body.deleted).toBe(false);
+    expect(body.character_name).toBeTruthy();
+
+    // The departed member is forbidden from viewing the sheet
+    const departedCheck = await get(`/api/coteries/${id}`, members[2].cookie);
+    expect(departedCheck.statusCode).toBe(403);
+
+    // Remaining members still see the coterie with 2 members and the departure event
+    const remainingCheck = await get(`/api/coteries/${id}`, members[0].cookie);
+    expect(remainingCheck.statusCode).toBe(200);
+    const detail = JSON.parse(remainingCheck.body);
+    expect(detail.members.length).toBe(2);
+    expect(detail.members.some((m) => m.user_id === members[2].user.id)).toBe(false);
+    expect(detail.events.some((e) => e.kind === 'member_left' && e.target_name === body.character_name)).toBe(true);
+
+    // When a player sees their coteries in /api/coteries, the event is listed with the character name
+    const mineCheck = await get('/api/coteries', members[0].cookie);
+    expect(mineCheck.statusCode).toBe(200);
+    const myCoterie = JSON.parse(mineCheck.body).coteries.find((c) => c.id === id);
+    expect(myCoterie).toBeTruthy();
+    expect(myCoterie.events.some((e) => e.kind === 'member_left' && e.target_name === body.character_name)).toBe(true);
+  });
+
+  it('refuses to leave if not a member', async () => {
+    const created = await post('/api/coteries', members[0].cookie, legalPayload({ name: 'Outsider Leave Test' }));
+    const id = JSON.parse(created.body).coterie.id;
+
+    const res = await post(`/api/coteries/${id}/leave`, outsider.cookie);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('deletes the coterie when the last member leaves', async () => {
+    const created = await post('/api/coteries', members[0].cookie, legalPayload({ name: 'Orphan Delete Test' }));
+    const id = JSON.parse(created.body).coterie.id;
+
+    // Leave member 2 and member 1
+    await post(`/api/coteries/${id}/leave`, members[2].cookie);
+    await post(`/api/coteries/${id}/leave`, members[1].cookie);
+
+    // Member 0 is the last remaining member
+    const lastLeave = await post(`/api/coteries/${id}/leave`, members[0].cookie);
+    expect(lastLeave.statusCode).toBe(200);
+    const body = JSON.parse(lastLeave.body);
+    expect(body.ok).toBe(true);
+    expect(body.deleted).toBe(true);
+
+    // Coterie is gone from database
+    const check = await get(`/api/coteries/${id}`, admin.cookie);
+    expect(check.statusCode).toBe(404);
+  });
 });
 
 /* ================================================================== */
