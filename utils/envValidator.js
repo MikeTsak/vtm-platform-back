@@ -13,6 +13,13 @@ const envSchema = z.object({
   DB_PASS: z.string(),
   DB_NAME: z.string(),
 
+  // Wiki Database
+  WIKI_DB_HOST: z.string().optional(),
+  WIKI_DB_PORT: z.string().optional(),
+  WIKI_DB_USER: z.string().optional(),
+  WIKI_DB_PASS: z.string().optional(),
+  WIKI_DB_NAME: z.string().optional(),
+
   // JWT
   JWT_SECRET: z.string(),
   JWT_REFRESH_SECRET: z.string().optional(),

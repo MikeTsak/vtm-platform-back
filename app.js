@@ -6,6 +6,7 @@
 // isolation (tests, route dumps, swagger generation) without opening a port.
 
 const pool = require('./db');
+const wikiPool = require('./wikiDb');
 const { log } = require('./logger');
 const { authRequired, optionalAuth, requireAdmin } = require('./authMiddleware.fastify');
 const { requireCourt, authLimiter, moderateLimiter, uploadLimiter } = require('./services/guards');
@@ -34,6 +35,7 @@ function buildApp(overrides = {}) {
   startBootProgress([...INFRA_PLUGINS, ...ROUTE_MODULES.map((m) => m.name)]);
 
   fastify.decorate('db', pool);
+  fastify.decorate('wikiDb', wikiPool);
 
   fastify.register(require('./plugins/observability'));
   fastify.register(require('./plugins/security'));
@@ -43,6 +45,7 @@ function buildApp(overrides = {}) {
   // anything stateless belongs in a require() inside the module that uses it.
   const deps = {
     pool,
+    wikiPool,
     log,
     authRequired,
     optionalAuth,

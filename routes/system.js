@@ -14,7 +14,8 @@ const { DEFAULT_CORS_ORIGINS } = require('../config/cors');
 const APP_ROOT = path.join(__dirname, '..');
 
 module.exports = async function (fastify, opts) {
-  const { pool, authRequired, requireAdmin } = opts;
+  const { pool, wikiPool, authRequired, requireAdmin } = opts;
+  const wikiDb = wikiPool || fastify.wikiDb;
 
   // --- Simple status/health ---
 
@@ -29,6 +30,16 @@ module.exports = async function (fastify, opts) {
       const [rows] = await pool.query('SELECT 1 AS ok');
       const dbOk = rows?.[0]?.ok === 1;
 
+      let wikiDbOk = false;
+      if (wikiDb) {
+        try {
+          const [wRows] = await wikiDb.query('SELECT 1 AS ok');
+          wikiDbOk = wRows?.[0]?.ok === 1;
+        } catch {
+          wikiDbOk = false;
+        }
+      }
+
       let version = '1.0.0';
       try {
         version = require('../package.json').version || '1.0.0';
@@ -40,6 +51,7 @@ module.exports = async function (fastify, opts) {
       return reply.send({
         ok: true,
         db: dbOk,
+        wiki_db: wikiDbOk,
         version,
         env: process.env.NODE_ENV || 'stable',
         uptime_sec: Math.floor(process.uptime()),
@@ -50,6 +62,7 @@ module.exports = async function (fastify, opts) {
       return reply.status(500).send({
         ok: false,
         db: false,
+        wiki_db: false,
         error: e.message,
         now: new Date().toISOString(),
       });
@@ -90,6 +103,23 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       dbStatus = 'DOWN';
       errors.push(`Database: ${e.message}`);
+    }
+
+    // 1b. Check Wiki DB
+    let wikiDbStatus = 'UNKNOWN';
+    let wikiDbLatencyMs = 0;
+    if (wikiDb) {
+      try {
+        const startWikiDb = Date.now();
+        const [wRows] = await wikiDb.query('SELECT 1 AS ok');
+        wikiDbLatencyMs = Date.now() - startWikiDb;
+        wikiDbStatus = wRows?.[0]?.ok === 1 ? 'OK' : 'DOWN';
+      } catch (e) {
+        wikiDbStatus = 'DOWN';
+        errors.push(`Wiki Database: ${e.message}`);
+      }
+    } else {
+      wikiDbStatus = 'NOT CONFIGURED';
     }
 
     // 2. Check Discord Bot
@@ -213,7 +243,7 @@ module.exports = async function (fastify, opts) {
     }
 
     // Determine overall system health
-    const systemStatus = (dbStatus === 'OK' && discordClass !== 'bad' && emailClass !== 'bad') ? 'Ok' : 'Bad';
+    const systemStatus = (dbStatus === 'OK' && wikiDbStatus === 'OK' && discordClass !== 'bad' && emailClass !== 'bad') ? 'Ok' : 'Bad';
     const systemClass = systemStatus === 'Ok' ? 'ok' : 'bad';
 
     let html = '';
@@ -291,6 +321,7 @@ module.exports = async function (fastify, opts) {
     const apiDocsLink = enhancedInfo.app && enhancedInfo.app.version ? `<div class="k">API Docs</div><div class="v"><a href="/api-docs">/api-docs</a></div>` : '';
 
     const dbStatusStr = dbStatus === 'OK' ? `OK (${dbLatencyMs}ms)` : dbStatus;
+    const wikiDbStatusStr = wikiDbStatus === 'OK' ? `OK (${wikiDbLatencyMs}ms)` : wikiDbStatus;
     const socketUsersStr = (enhancedInfo.sockets?.connected !== undefined) ? `${enhancedInfo.sockets.connected} Connected Users` : 'N/A';
     const gitHashStr = enhancedInfo.app?.gitHash || 'unknown';
 
@@ -305,6 +336,7 @@ module.exports = async function (fastify, opts) {
         errors,
         services: {
           database: { status: dbStatus, latencyMs: dbLatencyMs },
+          wiki_database: { status: wikiDbStatus, latencyMs: wikiDbLatencyMs },
           discord: { status: discordStatus.split(' ')[0], details: discordStatus },
           email: { status: emailStatus },
           jwt: { status: jwtStatus },
@@ -345,6 +377,8 @@ module.exports = async function (fastify, opts) {
       .replace('{{LOAD_AVG}}', loadAvgStr)
       .replace('{{DB_CLASS}}', dbStatus === 'OK' ? 'ok' : 'bad')
       .replace('{{DB_STATUS}}', dbStatusStr)
+      .replace('{{WIKI_DB_CLASS}}', wikiDbStatus === 'OK' ? 'ok' : 'bad')
+      .replace('{{WIKI_DB_STATUS}}', wikiDbStatusStr)
       .replace('{{DISCORD_CLASS}}', discordClass)
       .replace('{{DISCORD_STATUS}}', discordStatus)
       .replace('{{EMAIL_CLASS}}', emailClass)

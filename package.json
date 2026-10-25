@@ -1,9 +1,10 @@
 {
   "name": "back",
-  "version": "1.0.201",
+  "version": "1.0.212",
   "private": true,
   "scripts": {
     "dev": "node swagger-autogen.js && nodemon server.fastify.js",
+    "dv": "npm run dev",
     "start": "node swagger-autogen.js && node server.fastify.js",
     "deploy": "node scripts/deploy.mjs",
     "deploy:dry": "node scripts/deploy.mjs --dry-run",

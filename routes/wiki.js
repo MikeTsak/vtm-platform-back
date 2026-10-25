@@ -1,6 +1,26 @@
 const guards = require('../services/guards');
 module.exports = async function (fastify, opts) {
-  const { pool, log, authRequired, optionalAuth, requireAdmin, imageClient } = opts;
+  const { pool, wikiPool, log, authRequired, optionalAuth, requireAdmin, imageClient } = opts;
+  const wikiDb = wikiPool || pool;
+
+  async function attachUserDisplayNames(items, idKey, nameKey = 'author_name') {
+    if (!items || !items.length) return items;
+    const userIds = [...new Set(items.map(i => i[idKey]).filter(Boolean))];
+    if (!userIds.length) return items;
+    try {
+      const [uRows] = await pool.query('SELECT id, display_name, username FROM users WHERE id IN (?)', [userIds]);
+      const map = new Map(uRows.map(u => [u.id, u.display_name || u.username]));
+      items.forEach(i => {
+        i[nameKey] = map.get(i[idKey]) || 'Unknown';
+      });
+    } catch (e) {
+      log.err('Failed to resolve user display names for wiki', e);
+      items.forEach(i => {
+        if (!i[nameKey]) i[nameKey] = 'Unknown';
+      });
+    }
+    return items;
+  }
 
   /* -------------------- WIKI ARTICLES -------------------- */
 
@@ -12,13 +32,13 @@ module.exports = async function (fastify, opts) {
       const isAdmin = guards.isAdmin(req.user);
 
       const statusFilter = isAdmin ? `a.status IN ('published','private')` : `a.status = 'published'`;
-      const [rows] = await pool.query(
-        `SELECT a.id, a.title, a.slug, a.status, a.created_at, u.display_name as author_name 
+      const [rows] = await wikiDb.query(
+        `SELECT a.id, a.author_id, a.title, a.slug, a.status, a.created_at 
          FROM wiki_articles a 
-         JOIN users u ON a.author_id = u.id 
          WHERE ${statusFilter} 
          ORDER BY a.created_at DESC LIMIT 50`
       );
+      await attachUserDisplayNames(rows, 'author_id', 'author_name');
       return reply.send({ articles: rows });
     } catch (e) {
       log.err('Failed to fetch wiki articles', e);
@@ -30,7 +50,7 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/wiki/articles/:slug', async (req, reply) => {
     const { slug } = req.params;
     try {
-      const [rows] = await pool.query('SELECT * FROM wiki_articles WHERE slug=?', [slug]);
+      const [rows] = await wikiDb.query('SELECT * FROM wiki_articles WHERE slug=?', [slug]);
       const article = rows[0];
 
       if (!article) return reply.status(404).send({ error: 'Article not found' });
@@ -42,7 +62,7 @@ module.exports = async function (fastify, opts) {
         if (!guards.isAdmin(user)) return reply.status(403).send({ error: 'Forbidden' });
       }
 
-      const [tagRows] = await pool.query(
+      const [tagRows] = await wikiDb.query(
         `SELECT t.name FROM wiki_tags t 
          JOIN wiki_article_tags wat ON t.id = wat.tag_id 
          WHERE wat.article_id = ?`, [article.id]
@@ -63,7 +83,7 @@ module.exports = async function (fastify, opts) {
 
     try {
       const searchTerm = `%${q}%`;
-      const [rows] = await pool.query(
+      const [rows] = await wikiDb.query(
         `SELECT id, title, slug, SUBSTRING(content, 1, 150) as snippet
          FROM wiki_articles 
          WHERE status = 'published' AND (title LIKE ? OR content LIKE ?)
@@ -80,7 +100,7 @@ module.exports = async function (fastify, opts) {
   // Graph Data (Lore Graph)
   fastify.get('/api/wiki/graph', async (req, reply) => {
     try {
-      const [rows] = await pool.query(
+      const [rows] = await wikiDb.query(
         `SELECT id, title, slug, content 
          FROM wiki_articles 
          WHERE status = 'published'`
@@ -115,23 +135,21 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/wiki/sidebar-suggestions', async (req, reply) => {
     try {
       // Recently added
-      const [recentRows] = await pool.query(
+      const [recentRows] = await wikiDb.query(
         `SELECT id, title, slug FROM wiki_articles 
          WHERE status = 'published' 
          ORDER BY created_at DESC LIMIT 5`
       );
 
       // Random / General public (using ORDER BY RAND() is okay for small datasets)
-      const [publicRows] = await pool.query(
+      const [publicRows] = await wikiDb.query(
         `SELECT id, title, slug FROM wiki_articles 
          WHERE status = 'published' 
          ORDER BY RAND() LIMIT 5`
       );
 
       // For You (Requires User Context)
-      // Since we don't have full context on user preferences here, we'll just return a random set,
-      // or if we had req.user, we could query based on their clan. For now, another random set or fallback.
-      const [forYouRows] = await pool.query(
+      const [forYouRows] = await wikiDb.query(
         `SELECT id, title, slug FROM wiki_articles 
          WHERE status = 'published' 
          ORDER BY RAND() LIMIT 5`
@@ -157,7 +175,7 @@ module.exports = async function (fastify, opts) {
       return reply.status(403).send({ error: 'Only admins can create private articles' });
     }
 
-    const conn = await pool.getConnection();
+    const conn = await wikiDb.getConnection();
     try {
       await conn.beginTransaction();
 
@@ -240,17 +258,17 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/wiki/articles/:slug/history', async (req, reply) => {
     const { slug } = req.params;
     try {
-      const [artRows] = await pool.query('SELECT id FROM wiki_articles WHERE slug=?', [slug]);
+      const [artRows] = await wikiDb.query('SELECT id FROM wiki_articles WHERE slug=?', [slug]);
       if (!artRows.length) return reply.status(404).send({ error: 'Article not found' });
       
-      const [rows] = await pool.query(
-        `SELECT v.id, v.content, v.edit_summary, v.created_at, u.display_name as editor_name
+      const [rows] = await wikiDb.query(
+        `SELECT v.id, v.editor_id, v.content, v.edit_summary, v.created_at
          FROM wiki_article_versions v
-         JOIN users u ON v.editor_id = u.id
          WHERE v.article_id = ?
          ORDER BY v.created_at DESC`,
         [artRows[0].id]
       );
+      await attachUserDisplayNames(rows, 'editor_id', 'editor_name');
       reply.send({ history: rows });
     } catch (e) {
       log.err('Failed to fetch wiki history', e);
@@ -265,16 +283,16 @@ module.exports = async function (fastify, opts) {
     if (!guards.isAdmin(req.user)) return reply.status(403).send({ error: 'Only admins can rollback articles' });
 
     try {
-      const [artRows] = await pool.query('SELECT id FROM wiki_articles WHERE slug=?', [slug]);
+      const [artRows] = await wikiDb.query('SELECT id FROM wiki_articles WHERE slug=?', [slug]);
       if (!artRows.length) return reply.status(404).send({ error: 'Article not found' });
       const articleId = artRows[0].id;
 
-      const [verRows] = await pool.query('SELECT content FROM wiki_article_versions WHERE id=? AND article_id=?', [version_id, articleId]);
+      const [verRows] = await wikiDb.query('SELECT content FROM wiki_article_versions WHERE id=? AND article_id=?', [version_id, articleId]);
       if (!verRows.length) return reply.status(404).send({ error: 'Version not found' });
       
       const newContent = verRows[0].content;
       
-      const conn = await pool.getConnection();
+      const conn = await wikiDb.getConnection();
       try {
         await conn.beginTransaction();
         await conn.query('UPDATE wiki_articles SET content=? WHERE id=?', [newContent, articleId]);
@@ -302,7 +320,7 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/wiki/notes/:articleId', { preHandler: [authRequired] }, async (req, reply) => {
     const { articleId } = req.params;
     try {
-      const [rows] = await pool.query(
+      const [rows] = await wikiDb.query(
         'SELECT content FROM wiki_notes WHERE user_id=? AND article_id<=>?',
         [req.user.id, articleId === 'general' ? null : articleId]
       );
@@ -317,7 +335,7 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/wiki/notes', { preHandler: [authRequired] }, async (req, reply) => {
     const { article_id, content } = req.body;
     try {
-      await pool.query(
+      await wikiDb.query(
         `INSERT INTO wiki_notes (user_id, article_id, content) 
          VALUES (?, ?, ?) 
          ON DUPLICATE KEY UPDATE content=?, updated_at=CURRENT_TIMESTAMP`,
@@ -339,7 +357,7 @@ module.exports = async function (fastify, opts) {
         : 'SELECT b.* FROM wiki_boards b LEFT JOIN wiki_board_members m ON b.id = m.board_id WHERE b.visibility = "public" OR b.owner_id = ? OR (b.visibility = "shared" AND m.user_id = ?)';
       
       const params = guards.isAdmin(req.user) ? [] : [req.user.id, req.user.id];
-      const [rows] = await pool.query(query, params);
+      const [rows] = await wikiDb.query(query, params);
       reply.send({ boards: rows });
     } catch (e) {
       log.err('Failed to fetch wiki boards', e);
@@ -353,7 +371,7 @@ module.exports = async function (fastify, opts) {
     try {
       const userId = req.user.id;
       // List all public boards, and any private/personal boards owned by the user or where they are a member
-      const [rows] = await pool.query(`
+      const [rows] = await wikiDb.query(`
         SELECT b.id, b.title, b.visibility, b.owner_id, b.created_at, b.updated_at 
         FROM wiki_elysium_boards b
         LEFT JOIN wiki_elysium_board_members m ON b.id = m.board_id AND m.user_id = ?
@@ -376,7 +394,7 @@ module.exports = async function (fastify, opts) {
     const ownerId = req.user.id;
 
     try {
-      const [result] = await pool.query(
+      const [result] = await wikiDb.query(
         'INSERT INTO wiki_elysium_boards (title, data, visibility, owner_id) VALUES (?, ?, ?, ?)',
         [title, JSON.stringify(data || { nodes: [], edges: [] }), boardVis, ownerId]
       );
@@ -391,12 +409,12 @@ module.exports = async function (fastify, opts) {
     const { id } = req.params;
     const userId = req.user.id;
     try {
-      const [rows] = await pool.query('SELECT * FROM wiki_elysium_boards WHERE id = ?', [id]);
+      const [rows] = await wikiDb.query('SELECT * FROM wiki_elysium_boards WHERE id = ?', [id]);
       if (!rows.length) return reply.status(404).send({ error: 'Board not found' });
       
       const board = rows[0];
       
-      const [memberRows] = await pool.query('SELECT user_id FROM wiki_elysium_board_members WHERE board_id = ? AND user_id = ?', [id, userId]);
+      const [memberRows] = await wikiDb.query('SELECT user_id FROM wiki_elysium_board_members WHERE board_id = ? AND user_id = ?', [id, userId]);
       const isMember = memberRows.length > 0;
 
       // Enforce personal visibility
@@ -418,12 +436,12 @@ module.exports = async function (fastify, opts) {
     
     try {
       // Fetch board to check ownership for edits
-      const [boardRows] = await pool.query('SELECT owner_id FROM wiki_elysium_boards WHERE id = ?', [id]);
+      const [boardRows] = await wikiDb.query('SELECT owner_id FROM wiki_elysium_boards WHERE id = ?', [id]);
       if (!boardRows.length) return reply.status(404).send({ error: 'Board not found' });
       
       const board = boardRows[0];
       
-      const [memberRows] = await pool.query('SELECT user_id FROM wiki_elysium_board_members WHERE board_id = ? AND user_id = ?', [id, userId]);
+      const [memberRows] = await wikiDb.query('SELECT user_id FROM wiki_elysium_board_members WHERE board_id = ? AND user_id = ?', [id, userId]);
       const isMember = memberRows.length > 0;
 
       // Owner or Member can edit the board
@@ -431,7 +449,7 @@ module.exports = async function (fastify, opts) {
          return reply.status(403).send({ error: 'Only the board owner or members can edit this board.' });
       }
 
-      const [result] = await pool.query(
+      const [result] = await wikiDb.query(
         'UPDATE wiki_elysium_boards SET title = ?, data = ?, visibility = COALESCE(?, visibility) WHERE id = ?',
         [title, JSON.stringify(data), visibility, id]
       );
@@ -446,13 +464,33 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/wiki/elysium-boards/:id/members', { preHandler: [authRequired] }, async (req, reply) => {
     const { id } = req.params;
     try {
-      const [rows] = await pool.query(`
-        SELECT u.id, u.display_name, m.added_at
+      const [rows] = await wikiDb.query(`
+        SELECT m.user_id, m.added_at
         FROM wiki_elysium_board_members m
-        JOIN users u ON m.user_id = u.id
         WHERE m.board_id = ?
       `, [id]);
-      reply.send({ members: rows });
+
+      const userIds = [...new Set(rows.map(r => r.user_id).filter(Boolean))];
+      let members = [];
+      if (userIds.length > 0) {
+        try {
+          const [uRows] = await pool.query('SELECT id, display_name, username FROM users WHERE id IN (?)', [userIds]);
+          const uMap = new Map(uRows.map(u => [u.id, u.display_name || u.username]));
+          members = rows.map(r => ({
+            id: r.user_id,
+            display_name: uMap.get(r.user_id) || 'Unknown',
+            added_at: r.added_at
+          }));
+        } catch (uErr) {
+          log.err('Failed to lookup board member names', uErr);
+          members = rows.map(r => ({
+            id: r.user_id,
+            display_name: 'Unknown',
+            added_at: r.added_at
+          }));
+        }
+      }
+      reply.send({ members });
     } catch (e) {
       log.err('Failed to fetch board members', e);
       reply.status(500).send({ error: 'Database error' });
@@ -467,12 +505,12 @@ module.exports = async function (fastify, opts) {
     
     try {
       // Check ownership
-      const [boardRows] = await pool.query('SELECT owner_id FROM wiki_elysium_boards WHERE id = ?', [id]);
+      const [boardRows] = await wikiDb.query('SELECT owner_id FROM wiki_elysium_boards WHERE id = ?', [id]);
       if (!boardRows.length || boardRows[0].owner_id !== currentUserId) {
         return reply.status(403).send({ error: 'Only owner can manage members' });
       }
 
-      await pool.query('INSERT IGNORE INTO wiki_elysium_board_members (board_id, user_id) VALUES (?, ?)', [id, userId]);
+      await wikiDb.query('INSERT IGNORE INTO wiki_elysium_board_members (board_id, user_id) VALUES (?, ?)', [id, userId]);
       reply.send({ success: true });
     } catch (e) {
       log.err('Failed to add board member', e);
@@ -487,12 +525,12 @@ module.exports = async function (fastify, opts) {
     
     try {
       // Check ownership
-      const [boardRows] = await pool.query('SELECT owner_id FROM wiki_elysium_boards WHERE id = ?', [id]);
+      const [boardRows] = await wikiDb.query('SELECT owner_id FROM wiki_elysium_boards WHERE id = ?', [id]);
       if (!boardRows.length || boardRows[0].owner_id !== currentUserId) {
         return reply.status(403).send({ error: 'Only owner can manage members' });
       }
 
-      await pool.query('DELETE FROM wiki_elysium_board_members WHERE board_id = ? AND user_id = ?', [id, userId]);
+      await wikiDb.query('DELETE FROM wiki_elysium_board_members WHERE board_id = ? AND user_id = ?', [id, userId]);
       reply.send({ success: true });
     } catch (e) {
       log.err('Failed to remove board member', e);
@@ -538,12 +576,12 @@ module.exports = async function (fastify, opts) {
 
   fastify.get('/api/wiki/timeline', async (req, reply) => {
     try {
-      const [rows] = await pool.query(
-        `SELECT t.*, u.display_name as created_by_name
+      const [rows] = await wikiDb.query(
+        `SELECT t.*
          FROM wiki_timeline_events t
-         LEFT JOIN users u ON t.created_by = u.id
          ORDER BY t.sort_order ASC, t.created_at ASC`
       );
+      await attachUserDisplayNames(rows, 'created_by', 'created_by_name');
       return reply.send({ events: rows });
     } catch (e) {
       log.err('Failed to fetch timeline', e);
@@ -555,7 +593,7 @@ module.exports = async function (fastify, opts) {
     const { title, date_label, description, article_slug, category, sort_order } = req.body;
     if (!title || !date_label) return reply.status(400).send({ error: 'title and date_label are required' });
     try {
-      const [result] = await pool.query(
+      const [result] = await wikiDb.query(
         'INSERT INTO wiki_timeline_events (title, date_label, description, article_slug, category, sort_order, created_by) VALUES (?,?,?,?,?,?,?)',
         [title, date_label, description || '', article_slug || null, category || 'General', sort_order || 0, req.user.id]
       );
@@ -570,7 +608,7 @@ module.exports = async function (fastify, opts) {
     const { id } = req.params;
     const { title, date_label, description, article_slug, category, sort_order } = req.body;
     try {
-      await pool.query(
+      await wikiDb.query(
         'UPDATE wiki_timeline_events SET title=?, date_label=?, description=?, article_slug=?, category=?, sort_order=? WHERE id=?',
         [title, date_label, description || '', article_slug || null, category || 'General', sort_order || 0, id]
       );
@@ -583,7 +621,7 @@ module.exports = async function (fastify, opts) {
 
   fastify.delete('/api/wiki/timeline/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      await pool.query('DELETE FROM wiki_timeline_events WHERE id=?', [req.params.id]);
+      await wikiDb.query('DELETE FROM wiki_timeline_events WHERE id=?', [req.params.id]);
       return reply.send({ success: true });
     } catch (e) {
       log.err('Failed to delete timeline event', e);
@@ -595,7 +633,7 @@ module.exports = async function (fastify, opts) {
 
   fastify.get('/api/wiki/journal', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      const [rows] = await pool.query(
+      const [rows] = await wikiDb.query(
         'SELECT id, title, created_at, updated_at FROM wiki_journal_entries WHERE user_id=? ORDER BY updated_at DESC',
         [req.user.id]
       );
@@ -608,7 +646,7 @@ module.exports = async function (fastify, opts) {
 
   fastify.get('/api/wiki/journal/:id', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      const [rows] = await pool.query(
+      const [rows] = await wikiDb.query(
         'SELECT * FROM wiki_journal_entries WHERE id=? AND user_id=?',
         [req.params.id, req.user.id]
       );
@@ -625,12 +663,12 @@ module.exports = async function (fastify, opts) {
     try {
       if (id) {
         // Verify ownership before update
-        const [rows] = await pool.query('SELECT user_id FROM wiki_journal_entries WHERE id=?', [id]);
+        const [rows] = await wikiDb.query('SELECT user_id FROM wiki_journal_entries WHERE id=?', [id]);
         if (!rows.length || rows[0].user_id !== req.user.id) return reply.status(403).send({ error: 'Forbidden' });
-        await pool.query('UPDATE wiki_journal_entries SET title=?, content=? WHERE id=?', [title, content, id]);
+        await wikiDb.query('UPDATE wiki_journal_entries SET title=?, content=? WHERE id=?', [title, content, id]);
         return reply.send({ success: true, id });
       } else {
-        const [result] = await pool.query(
+        const [result] = await wikiDb.query(
           'INSERT INTO wiki_journal_entries (user_id, title, content) VALUES (?,?,?)',
           [req.user.id, title || 'Untitled Entry', content || '']
         );
@@ -644,9 +682,9 @@ module.exports = async function (fastify, opts) {
 
   fastify.delete('/api/wiki/journal/:id', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      const [rows] = await pool.query('SELECT user_id FROM wiki_journal_entries WHERE id=?', [req.params.id]);
+      const [rows] = await wikiDb.query('SELECT user_id FROM wiki_journal_entries WHERE id=?', [req.params.id]);
       if (!rows.length || rows[0].user_id !== req.user.id) return reply.status(403).send({ error: 'Forbidden' });
-      await pool.query('DELETE FROM wiki_journal_entries WHERE id=?', [req.params.id]);
+      await wikiDb.query('DELETE FROM wiki_journal_entries WHERE id=?', [req.params.id]);
       return reply.send({ success: true });
     } catch (e) {
       log.err('Failed to delete journal entry', e);
@@ -658,16 +696,16 @@ module.exports = async function (fastify, opts) {
 
   fastify.get('/api/wiki/articles/:slug/admin-notes', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const [artRows] = await pool.query('SELECT id FROM wiki_articles WHERE slug=?', [req.params.slug]);
+      const [artRows] = await wikiDb.query('SELECT id FROM wiki_articles WHERE slug=?', [req.params.slug]);
       if (!artRows.length) return reply.status(404).send({ error: 'Article not found' });
-      const [rows] = await pool.query(
-        `SELECT n.*, u.display_name as author_name
+      const [rows] = await wikiDb.query(
+        `SELECT n.*
          FROM wiki_admin_notes n
-         JOIN users u ON n.author_id = u.id
          WHERE n.article_id=?
          ORDER BY n.created_at DESC`,
         [artRows[0].id]
       );
+      await attachUserDisplayNames(rows, 'author_id', 'author_name');
       return reply.send({ notes: rows });
     } catch (e) {
       log.err('Failed to fetch admin notes', e);
@@ -679,9 +717,9 @@ module.exports = async function (fastify, opts) {
     const { content } = req.body;
     if (!content?.trim()) return reply.status(400).send({ error: 'Content is required' });
     try {
-      const [artRows] = await pool.query('SELECT id FROM wiki_articles WHERE slug=?', [req.params.slug]);
+      const [artRows] = await wikiDb.query('SELECT id FROM wiki_articles WHERE slug=?', [req.params.slug]);
       if (!artRows.length) return reply.status(404).send({ error: 'Article not found' });
-      const [result] = await pool.query(
+      const [result] = await wikiDb.query(
         'INSERT INTO wiki_admin_notes (article_id, author_id, content) VALUES (?,?,?)',
         [artRows[0].id, req.user.id, content]
       );
@@ -694,7 +732,7 @@ module.exports = async function (fastify, opts) {
 
   fastify.delete('/api/wiki/admin-notes/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      await pool.query('DELETE FROM wiki_admin_notes WHERE id=?', [req.params.id]);
+      await wikiDb.query('DELETE FROM wiki_admin_notes WHERE id=?', [req.params.id]);
       return reply.send({ success: true });
     } catch (e) {
       log.err('Failed to delete admin note', e);

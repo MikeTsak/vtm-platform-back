@@ -1,5 +1,6 @@
 const { log } = require('../logger');
 const { runMigrations } = require('./runner');
+const { initWikiDatabase } = require('./wikiSchema');
 
 // Runs any migration in migrations/list/ that hasn't been applied yet
 // (tracked in the schema_migrations table). On an already-initialized
@@ -10,7 +11,13 @@ async function initDatabase() {
   try {
     await runMigrations();
   } catch (e) {
-    log.err('Failed to init database', { message: e.message });
+    log.err('Failed to init primary database', { message: e.message });
+  }
+
+  try {
+    await initWikiDatabase();
+  } catch (e) {
+    log.err('Failed to init wiki database', { message: e.message });
   }
 }
 
