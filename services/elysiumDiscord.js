@@ -124,7 +124,7 @@ async function sendElysiumInvitationToDiscord({ event, invitation, renderedCardB
       description: cleanGenericBody(invitation.body),
       color: 0x8a1826,
       fields,
-      footer: { text: 'Athens by Night Court of Elysium' }
+      footer: { text: 'Athens Through Time: City of Athens Court' }
     }],
     allowed_mentions: { parse: ['everyone'] },
     allowedMentions: { parse: ['everyone'] }
