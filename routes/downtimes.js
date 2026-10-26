@@ -9,7 +9,7 @@ const { parseSheet } = require('../utils/sheet');
 const { sendPushNotification } = require('../services/push');
 const {
   deadlineEnd, submissionState, syncSettingsToActiveCycle, applyActiveCycle, readCycles, findActiveIndex, withReleaseDates,
-  releasePendingAndNotify, dateOnly, ACTIONS_PER_CYCLE, cycleWindow, checkSubmission,
+  releasePendingAndNotify, broadcastMassDowntimeDiscordAnnouncement, dateOnly, ACTIONS_PER_CYCLE, cycleWindow, checkSubmission,
 } = require('../services/downtimeSchedule');
 
 const FINAL_STATUSES = ['resolved', 'resolved in scene'];
@@ -649,6 +649,7 @@ module.exports = async function (fastify, opts) {
               priority: 'default'
             }).catch(() => { });
             await setSetting('downtime_mass_release_notified', 'true');
+            await broadcastMassDowntimeDiscordAnnouncement().catch(e => log.warn('Manual release discord announcement failed', { message: e.message }));
           }
         } else if (oldMassReleaseMode !== 'true' && downtime_mass_release_mode) {
           let start = null;

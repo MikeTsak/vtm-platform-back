@@ -230,8 +230,70 @@ async function releasePendingAndNotify() {
   return owners.length;
 }
 
+// Broadcasts @everyone announcement from Giannakis bot when mass downtime release happens.
+async function broadcastMassDowntimeDiscordAnnouncement() {
+  const { log } = require('../logger');
+  const { sendDiscordChannelMessage } = require('./discord');
+  try {
+    const isEnabled = (await getSetting('discord_enabled', 'true')) === 'true';
+    if (!isEnabled) {
+      log.info('Discord notifications disabled: skipping mass downtime release announcement.');
+      return false;
+    }
+    const channelId = await getSetting('discord_channel_id', null);
+    if (!channelId) {
+      log.warn('Discord notification skipped: no channel ID configured for mass downtime release.');
+      return false;
+    }
+
+    const cycles = await readCycles();
+    const activeIdx = await findActiveIndex(cycles);
+    const rawCycleName = cycle?.title || (cycle?.id ? `Cycle ${cycle.id}` : 'the current cycle');
+    const cycleName = String(rawCycleName).replace(/[-—]/g, ':').trim();
+
+    const [events] = await pool.query(
+      `SELECT e.id, e.title, e.date, e.is_elysium, i.name AS elysium_name
+         FROM events e
+    LEFT JOIN elysium_invitations i ON i.event_id = e.id
+        WHERE e.date >= NOW()
+        ORDER BY e.date ASC
+        LIMIT 1`
+    );
+    const nextEvent = events[0] || null;
+
+    let eventNotice = '';
+    if (nextEvent) {
+      const evDate = new Date(nextEvent.date);
+      const weekday = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Athens', weekday: 'long' }).format(evDate);
+      const dateFormatted = new Intl.DateTimeFormat('el-GR', { timeZone: 'Europe/Athens', day: 'numeric', month: 'numeric' }).format(evDate);
+      const eventTitle = String(nextEvent.title || '').replace(/[-—]/g, ':').trim();
+      const elysiumName = String(nextEvent.elysium_name || '').replace(/[-—]/g, ':').trim();
+      const combinedTitle = (elysiumName && elysiumName.toLowerCase() !== eventTitle.toLowerCase())
+        ? `${eventTitle}: ${elysiumName}`
+        : eventTitle;
+      eventNotice = `\n\nDon't forget that this ${weekday} (${dateFormatted}) our next event will happen, we have the event: **${combinedTitle}**!`;
+    }
+
+    const content = `@everyone\n🦇 **Mass Downtime Release**\n\nMass downtime release happened for downtime cycle: **${cycleName}**!\nAll submitted downtime actions have been resolved and released. Log in to the platform to read your character's results.${eventNotice}`;
+
+    const payload = {
+      content,
+      allowed_mentions: { parse: ['everyone'] },
+      allowedMentions: { parse: ['everyone'] }
+    };
+
+    await sendDiscordChannelMessage(channelId, payload);
+    log.info('Mass downtime release Discord announcement broadcast successfully', { cycleName });
+    return true;
+  } catch (err) {
+    log.err('Failed to broadcast mass downtime release Discord announcement', { error: err.message });
+    return false;
+  }
+}
+
 module.exports = {
   releasePendingAndNotify,
+  broadcastMassDowntimeDiscordAnnouncement,
   deadlineEnd,
   dateOnly,
   defaultReleaseFor,

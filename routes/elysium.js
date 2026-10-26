@@ -9,6 +9,7 @@ const axios = require('axios');
 const { requireCapability, signingOffice } = require('../services/courtOffices');
 const { recordVersion } = require('../services/elysiumHistory');
 const { sendDiscordChannelMessage } = require('../services/discord');
+const { sendElysiumInvitationToDiscord, getMondayBeforeEvent } = require('../services/elysiumDiscord');
 const { getSetting } = require('../utils/settings');
 
 const TEXT_FIELDS = { name: 160, location: 255, salutation: 255, body: 8000, dress_code: 160, signature: 160 };
@@ -222,12 +223,14 @@ module.exports = async function (fastify, opts) {
       }
       const design = JSON.stringify(cleanDesign(b.design));
       const barred = JSON.stringify((Array.isArray(b.barred) ? b.barred : []).map(n => parseInt(n, 10)).filter(Boolean));
+      const renderedCardData = typeof b.renderedImage === 'string' && b.renderedImage.startsWith('data:image/') ? b.renderedImage : null;
       await pool.query(
-        `INSERT INTO elysium_invitations (event_id, name, location, salutation, body, dress_code, signature, design, barred, updated_by)
-         VALUES (?,?,?,?,?,?,?,?,?,?)
+        `INSERT INTO elysium_invitations (event_id, name, location, salutation, body, dress_code, signature, design, barred, rendered_card_data, updated_by)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?)
          ON DUPLICATE KEY UPDATE name=VALUES(name), location=VALUES(location), salutation=VALUES(salutation), body=VALUES(body),
-           dress_code=VALUES(dress_code), signature=VALUES(signature), design=VALUES(design), barred=VALUES(barred), updated_by=VALUES(updated_by)`,
-        [eventId, vals.name, vals.location, vals.salutation, vals.body, vals.dress_code, vals.signature, design, barred, req.user.id]
+           dress_code=VALUES(dress_code), signature=VALUES(signature), design=VALUES(design), barred=VALUES(barred),
+           rendered_card_data=COALESCE(VALUES(rendered_card_data), rendered_card_data), updated_by=VALUES(updated_by)`,
+        [eventId, vals.name, vals.location, vals.salutation, vals.body, vals.dress_code, vals.signature, design, barred, renderedCardData, req.user.id]
       );
       const [[cur]] = await pool.query('SELECT published_at FROM elysium_invitations WHERE event_id = ?', [eventId]);
       // Autosaves leave no history entry; the explicit save or publish that follows snapshots the result.
@@ -246,16 +249,39 @@ module.exports = async function (fastify, opts) {
     if (!eventId) return reply.status(409).send({ error: 'Only the coming Elysium can be published.' });
     const inv = await loadInvitation(eventId);
     if (!inv) return reply.status(400).send({ error: 'Save the invitation first.' });
-    const { publish, reannounce } = req.body || {};
+    const { publish, reannounce, renderedImage } = req.body || {};
+    const renderedCardData = typeof renderedImage === 'string' && renderedImage.startsWith('data:image/') ? renderedImage : null;
     if (publish === false) {
       await pool.query('UPDATE elysium_invitations SET published_at = NULL WHERE event_id = ?', [eventId]);
     } else {
-      await pool.query('UPDATE elysium_invitations SET published_at = COALESCE(published_at, NOW()) WHERE event_id = ?', [eventId]);
+      if (renderedCardData) {
+        await pool.query('UPDATE elysium_invitations SET published_at = COALESCE(published_at, NOW()), rendered_card_data = ? WHERE event_id = ?', [renderedCardData, eventId]);
+      } else {
+        await pool.query('UPDATE elysium_invitations SET published_at = COALESCE(published_at, NOW()) WHERE event_id = ?', [eventId]);
+      }
     }
     const wasPublished = !!inv.published_at;
     const action = publish === false ? 'withdraw' : reannounce ? 'reannounce' : wasPublished ? 'edit' : 'publish';
     if (publish === false || reannounce || !wasPublished) await recordVersion(eventId, action, req.user.id, signingOffice(req.court, 'keeper'));
     log.adm('Elysium invitation publish state', { event_id: eventId, publish: publish !== false, reannounce: !!reannounce, by: req.user.id });
+
+    // Automatic Discord broadcast on publication if published on or after the Monday before the event
+    if (publish !== false && !inv.discord_posted_at) {
+      const [[eventRow]] = await pool.query('SELECT id, title, date, is_elysium FROM events WHERE id = ?', [eventId]);
+      if (eventRow && eventRow.date) {
+        const mondayBefore = getMondayBeforeEvent(eventRow.date);
+        const todayAthens = athensDay(new Date());
+        if (todayAthens >= mondayBefore) {
+          const freshInv = await loadInvitation(eventId);
+          sendElysiumInvitationToDiscord({
+            event: eventRow,
+            invitation: freshInv,
+            customPool: pool
+          }).catch(err => log.err('Immediate auto send to Discord on publish failed', { error: err.message }));
+        }
+      }
+    }
+
     reply.send({ ok: true, invitation: await loadInvitation(eventId) });
   });
 
@@ -361,6 +387,7 @@ module.exports = async function (fastify, opts) {
       };
 
       await sendDiscordChannelMessage(channelId, payload);
+      await pool.query('UPDATE elysium_invitations SET discord_posted_at = NOW(), rendered_card_data = COALESCE(?, rendered_card_data) WHERE event_id = ?', [image, req.params.eventId]);
       log.adm('Elysium invitation pushed to Discord', { event_id: req.params.eventId, by: req.user.id });
       reply.send({ ok: true });
     } catch (e) {

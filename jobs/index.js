@@ -17,7 +17,8 @@ const { sendPushNotification } = require('../services/push');
 const { flushQueuedMessages } = require('../services/commsQueue');
 const { loadCommsState, statusPayload, clearExpiredOverride } = require('../services/commsState');
 const { purgeOldIdempotencyKeys } = require('../utils/idempotency');
-const { releasePendingAndNotify, advanceActiveCycle } = require('../services/downtimeSchedule');
+const { releasePendingAndNotify, advanceActiveCycle, broadcastMassDowntimeDiscordAnnouncement } = require('../services/downtimeSchedule');
+const { checkAndAutoSendElysiumInvitations } = require('../services/elysiumDiscord');
 const { closeStaleSessions } = require('../services/liveSession');
 const { expireBloodHunts } = require('../services/bloodHunts');
 const { runWillpowerReset } = require('../services/willpowerReset');
@@ -123,6 +124,9 @@ function scheduleMassReleasePings() {
             return 0;
           });
           log.info(`Mass release: pushed ${notified} player(s).`);
+          await broadcastMassDowntimeDiscordAnnouncement().catch(e => {
+            log.err('Mass release discord announcement failed', { error: e.message });
+          });
         }
       }
     } catch (error) {
@@ -361,6 +365,25 @@ function scheduleBloodHuntExpiry() {
   });
 }
 
+// ============================================================================
+// AUTOMATED ELYSIUM INVITATION DISCORD BROADCAST
+// ============================================================================
+// Checks periodically (every 15 minutes, and on boot) for any published Elysium
+// invitation whose Monday before the event date has arrived, and auto broadcasts
+// it to Discord once.
+function scheduleElysiumInvitationAutoSend() {
+  const run = async () => {
+    try {
+      const sent = await checkAndAutoSendElysiumInvitations(pool);
+      if (sent) log.info(`Auto sent ${sent} Elysium invitation(s) to Discord.`);
+    } catch (error) {
+      log.err('Elysium invitation auto send cron failed', { error: error.message });
+    }
+  };
+  run();
+  return cron.schedule('*/15 * * * *', run);
+}
+
 function startJobs(fastify) {
   if (started) return;
   started = true;
@@ -376,7 +399,9 @@ function startJobs(fastify) {
   scheduleIdempotencyPurge();
   scheduleStaleLiveSessionClose(fastify?.io);
   scheduleBloodHuntExpiry();
+  scheduleElysiumInvitationAutoSend();
   log.start('Background jobs scheduled.');
 }
 
 module.exports = { startJobs };
+

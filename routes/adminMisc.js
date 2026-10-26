@@ -16,7 +16,7 @@ module.exports = async function (fastify, opts) {
     try {
       // Elysium name / publish state come from the Keeper's invitation (routes/elysium.js).
       const [events] = await pool.query(
-        `SELECT e.*, i.name AS elysium_name, i.published_at AS invitation_published_at
+        `SELECT e.*, i.name AS elysium_name, i.published_at AS invitation_published_at, i.discord_posted_at
            FROM events e LEFT JOIN elysium_invitations i ON i.event_id = e.id
           ORDER BY e.date ASC`
       );
