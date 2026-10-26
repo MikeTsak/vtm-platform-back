@@ -160,6 +160,8 @@ function buildTestApp(pool) {
     // than needing a fake implementation.
   });
 
+  app.register(require('../../routes/wishlist'), { pool, log: testLog, authRequired, requireAdmin });
+
   app.register(require('../../routes/coteries'), {
     pool,
     log: testLog,

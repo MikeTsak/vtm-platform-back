@@ -13,6 +13,7 @@ const { computeV5Outcome } = require('../../services/dice');
 module.exports = {
   name: '0043_unify_dice_rolls',
   async up(pool) {
+    await pool.query('ALTER TABLE dice_rolls ROW_FORMAT=DYNAMIC');
     // Column by column: older databases (production among them) predate
     // is_hidden, so nothing here may assume the baseline's exact layout.
     const [existing] = await pool.query('SHOW COLUMNS FROM dice_rolls');

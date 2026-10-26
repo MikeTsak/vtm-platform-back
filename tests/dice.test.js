@@ -234,7 +234,14 @@ describe('migration 0043: live_session_rolls merged into dice_rolls', () => {
     await pool.query('DELETE FROM dice_rolls');
     await pool.query('DELETE FROM live_session_rolls'); // not reset between test runs
     // Production's dice_rolls predates is_hidden and the new columns: start from that layout.
-    await pool.query('ALTER TABLE dice_rolls DROP KEY idx_dice_rolls_session, DROP COLUMN session_id, DROP COLUMN roll_type, DROP COLUMN character_name, DROP COLUMN is_hidden, DROP COLUMN rerolled');
+    await pool.query('ALTER TABLE dice_rolls ROW_FORMAT=DYNAMIC');
+    const [existingKeys] = await pool.query("SHOW INDEX FROM dice_rolls WHERE Key_name = 'idx_dice_rolls_session'");
+    if (existingKeys.length) await pool.query('ALTER TABLE dice_rolls DROP KEY idx_dice_rolls_session');
+    const [existingCols] = await pool.query('SHOW COLUMNS FROM dice_rolls');
+    const colSet = new Set(existingCols.map(c => c.Field));
+    for (const c of ['session_id', 'roll_type', 'character_name', 'is_hidden', 'rerolled']) {
+      if (colSet.has(c)) await pool.query(`ALTER TABLE dice_rolls DROP COLUMN ${c}`);
+    }
     await pool.query(
       'INSERT INTO live_session_rolls (session_id, character_id, character_name, roll_type, pool, hunger, results, successes, note, is_hidden) VALUES (?,?,?,?,?,?,?,?,?,?), (?,?,?,?,?,?,?,?,?,?)',
       [s.id, p.id, 'Old roll', 'pool_roll', 3, 1, JSON.stringify({ normal: [10, 10], hunger: [10] }), 4, 'old', 0,

@@ -29,6 +29,7 @@ const ROUTE_MODULES = [
   { name: 'character-xp', path: './characterXp' },
   { name: 'inventory', path: './inventory' },
   { name: 'discipline-access', path: './disciplineAccess' },
+  { name: 'wishlist', path: './wishlist' },
   { name: 'wiki', path: './wiki' },
 
   { name: 'system', path: './system' },
