@@ -111,18 +111,30 @@ console.log(`  importing ${path.basename(picked)}  (${path.basename(bin)})`);
 const started = Date.now();
 const proc = spawn(
   bin,
-  ['-h', DB_HOST, '-P', String(DB_PORT), '-u', DB_USER, '--default-character-set=utf8mb4', '--max-allowed-packet=1G', DB_NAME],
+  [
+    '-h', DB_HOST,
+    '-P', String(DB_PORT),
+    '-u', DB_USER,
+    '--default-character-set=utf8mb4',
+    '--max-allowed-packet=1G',
+    '--init-command=SET @@session.time_zone = \'+00:00\';',
+    DB_NAME,
+  ],
   // stdout ignored: on error the client echoes the failed statement, which can be 70+ MB.
   { env: { ...process.env, MYSQL_PWD: DB_PASS }, stdio: ['pipe', 'ignore', 'pipe'] },
 );
 let stderr = '';
-proc.stderr.on('data', (d) => { stderr = (stderr + d).slice(-2000); });
+proc.stderr.on('data', (d) => { stderr = (stderr + d).slice(-4000); });
 const exited = new Promise((res) => proc.on('close', res));
 await pipeline(fs.createReadStream(picked), zlib.createGunzip(), proc.stdin).catch(() => {});
 const code = await exited;
 await conn.query(`SET GLOBAL max_allowed_packet = ${Number(packet)}`);
 await conn.end();
-if (code !== 0) die(`import failed (exit ${code}): ${stderr.trim().slice(0, 500)}\n    Local DB is partial, re-run to retry.`);
+if (code !== 0) {
+  const errMatch = stderr.match(/ERROR \d+.*$/m);
+  const errMsg = errMatch ? errMatch[0] : stderr.trim().slice(-500);
+  die(`import failed (exit ${code}): ${errMsg}\n    Local DB is partial, re-run to retry.`);
+}
 
 const verify = await mysql.createConnection({ host: DB_HOST, port: DB_PORT, user: DB_USER, password: DB_PASS, database: DB_NAME });
 const [[{ n }]] = await verify.query('SELECT COUNT(*) AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()');

@@ -166,7 +166,8 @@ async function backup({ quiet = false, skipMedia = false, onProgress } = {}) {
     `\n` +
     `SET NAMES utf8mb4;\n` +
     `SET FOREIGN_KEY_CHECKS = 0;\n` +
-    `SET SQL_MODE = 'NO_AUTO_VALUE_ON_ZERO';\n\n`,
+    `SET SQL_MODE = 'NO_AUTO_VALUE_ON_ZERO';\n` +
+    `SET @@session.time_zone = '+00:00';\n\n`,
   );
 
   // System-versioned tables (migrations/sql/0051) report TABLE_TYPE 'SYSTEM VERSIONED', not
