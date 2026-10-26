@@ -401,6 +401,7 @@ module.exports = async function (fastify, opts) {
 
               broadcast += `\n**Source:** ${emojiTag ? `${emojiTag} ` : ''}${sourceName}`;
               broadcast += `\n**Read the full article:**\n${articleLink}`;
+              broadcast += `\n\n> ℹ️ *Note: News articles feature real ads to help support and maintain the site, fitting naturally in universe with mortal media.*`;
             } else {
               const sig = await getAuthorSignature(insertResult.insertId, pool);
               broadcast += `\n*${sig}*`;
@@ -494,6 +495,7 @@ module.exports = async function (fastify, opts) {
 
         broadcast += `\n**Source:** ${emojiTag ? `${emojiTag} ` : ''}${sourceName}`;
         broadcast += `\n**Read the full article:**\n${articleLink}`;
+        broadcast += `\n\n> ℹ️ *Note: News articles feature real ads to help support and maintain the site, fitting naturally in universe with mortal media.*`;
       } else {
         const sig = await getAuthorSignature(entry.id, pool);
         broadcast += `\n*${sig}*`;
@@ -537,14 +539,20 @@ module.exports = async function (fastify, opts) {
       // Or we can just let the admin click the "Broadcast" button from the UI after publishing.
       // Wait, the user said "i sould be able to push it to public form there to ap;piar in official new s and the discord bot."
       // Let's trigger the broadcast endpoint internally.
-      try {
-        await axios.post(`http://127.0.0.1:${process.env.PORT || 3001}/api/news/${req.params.id}/broadcast`, {}, {
-          headers: {
-            'Cookie': req.headers.cookie, // Pass the cookie for auth
+      if (!req.body?.skip_discord) {
+        try {
+          const broadcastPayload = {};
+          if (req.body?.discord_prefix) {
+            broadcastPayload.discord_prefix = req.body.discord_prefix;
           }
-        });
-      } catch (err) {
-        log.err('Failed to auto-broadcast published news', { error: err.message });
+          await axios.post(`http://127.0.0.1:${process.env.PORT || 3001}/api/news/${req.params.id}/broadcast`, broadcastPayload, {
+            headers: {
+              'Cookie': req.headers.cookie, // Pass the cookie for auth
+            }
+          });
+        } catch (err) {
+          log.err('Failed to auto-broadcast published news', { error: err.message });
+        }
       }
 
       reply.send({ success: true, message: 'Published successfully' });
@@ -769,6 +777,198 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       log.err('Batch fetch announcement reactions failed', { message: e.message });
       reply.status(500).send({ error: 'Failed to batch fetch reactions' });
+    }
+  });
+
+  // --- NEWS DRAFTS ---
+
+  const canAuthorNews = async (user) => {
+    if (guards.isAdmin(user)) return true;
+    const [perms] = await pool.query('SELECT id FROM user_news_permissions WHERE user_id=? LIMIT 1', [user.id]);
+    return perms.length > 0;
+  };
+
+  // GET /api/news/drafts - List drafts
+  fastify.get('/api/news/drafts', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const isAllowed = await canAuthorNews(req.user);
+      if (!isAllowed) {
+        return reply.status(403).send({ error: 'Forbidden' });
+      }
+
+      const isAdminUser = guards.isAdmin(req.user);
+      let sql = `
+        SELECT d.*, 
+               u.display_name AS author_name,
+               c.name AS author_char_name,
+               c.clan AS author_clan
+        FROM news_article_drafts d
+        JOIN users u ON u.id = d.user_id
+        LEFT JOIN characters c ON c.user_id = u.id
+      `;
+      const params = [];
+      if (!isAdminUser) {
+        sql += ` WHERE d.user_id = ?`;
+        params.push(req.user.id);
+      }
+      sql += ` ORDER BY d.updated_at DESC LIMIT 100`;
+
+      const [rows] = await pool.query(sql, params);
+      reply.send({ drafts: rows });
+    } catch (e) {
+      log.err('Fetch news drafts failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to load news drafts' });
+    }
+  });
+
+  // GET /api/news/drafts/:id - Fetch single draft
+  fastify.get('/api/news/drafts/:id', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const isAllowed = await canAuthorNews(req.user);
+      if (!isAllowed) return reply.status(403).send({ error: 'Forbidden' });
+
+      const [rows] = await pool.query(
+        `SELECT d.*, u.display_name AS author_name
+         FROM news_article_drafts d
+         JOIN users u ON u.id = d.user_id
+         WHERE d.id = ? LIMIT 1`,
+        [req.params.id]
+      );
+      if (rows.length === 0) {
+        return reply.status(404).send({ error: 'Draft not found' });
+      }
+
+      const draft = rows[0];
+      if (!guards.isAdmin(req.user) && Number(draft.user_id) !== Number(req.user.id)) {
+        return reply.status(403).send({ error: 'Forbidden' });
+      }
+
+      reply.send({ draft });
+    } catch (e) {
+      log.err('Fetch news draft failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to load draft' });
+    }
+  });
+
+  // POST /api/news/drafts - Save new draft
+  fastify.post('/api/news/drafts', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const isAllowed = await canAuthorNews(req.user);
+      if (!isAllowed) return reply.status(403).send({ error: 'Forbidden' });
+
+      const {
+        title = '',
+        subtitle = null,
+        body = '',
+        theme = 'ERT',
+        journalist_name = null,
+        discord_prefix = null,
+        is_custom_prefix = 0,
+        is_private = 0,
+        media_url = null
+      } = req.body || {};
+
+      const safeBody = sanitizeRichText(body || '');
+
+      const [res] = await pool.query(
+        `INSERT INTO news_article_drafts
+         (user_id, title, subtitle, body, theme, journalist_name, discord_prefix, is_custom_prefix, is_private, media_url)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          req.user.id,
+          String(title || '').slice(0, 255),
+          subtitle ? String(subtitle).slice(0, 255) : null,
+          safeBody,
+          theme || 'ERT',
+          journalist_name ? String(journalist_name).slice(0, 100) : null,
+          discord_prefix ? String(discord_prefix).slice(0, 255) : null,
+          is_custom_prefix ? 1 : 0,
+          is_private ? 1 : 0,
+          media_url || null
+        ]
+      );
+
+      const [created] = await pool.query('SELECT * FROM news_article_drafts WHERE id = ?', [res.insertId]);
+      reply.status(201).send({ draft: created[0] });
+    } catch (e) {
+      log.err('Create news draft failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to save news draft' });
+    }
+  });
+
+  // PUT /api/news/drafts/:id - Update existing draft
+  fastify.put('/api/news/drafts/:id', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const isAllowed = await canAuthorNews(req.user);
+      if (!isAllowed) return reply.status(403).send({ error: 'Forbidden' });
+
+      const [existing] = await pool.query('SELECT * FROM news_article_drafts WHERE id = ? LIMIT 1', [req.params.id]);
+      if (existing.length === 0) return reply.status(404).send({ error: 'Draft not found' });
+
+      const draft = existing[0];
+      if (!guards.isAdmin(req.user) && Number(draft.user_id) !== Number(req.user.id)) {
+        return reply.status(403).send({ error: 'Forbidden' });
+      }
+
+      const {
+        title = draft.title,
+        subtitle = draft.subtitle,
+        body = draft.body,
+        theme = draft.theme,
+        journalist_name = draft.journalist_name,
+        discord_prefix = draft.discord_prefix,
+        is_custom_prefix = draft.is_custom_prefix,
+        is_private = draft.is_private,
+        media_url = draft.media_url
+      } = req.body || {};
+
+      const safeBody = sanitizeRichText(body || '');
+
+      await pool.query(
+        `UPDATE news_article_drafts
+         SET title = ?, subtitle = ?, body = ?, theme = ?, journalist_name = ?,
+             discord_prefix = ?, is_custom_prefix = ?, is_private = ?, media_url = ?, updated_at = NOW()
+         WHERE id = ?`,
+        [
+          String(title || '').slice(0, 255),
+          subtitle ? String(subtitle).slice(0, 255) : null,
+          safeBody,
+          theme || 'ERT',
+          journalist_name ? String(journalist_name).slice(0, 100) : null,
+          discord_prefix ? String(discord_prefix).slice(0, 255) : null,
+          is_custom_prefix ? 1 : 0,
+          is_private ? 1 : 0,
+          media_url || null,
+          req.params.id
+        ]
+      );
+
+      const [updated] = await pool.query('SELECT * FROM news_article_drafts WHERE id = ?', [req.params.id]);
+      reply.send({ draft: updated[0] });
+    } catch (e) {
+      log.err('Update news draft failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to update news draft' });
+    }
+  });
+
+  // DELETE /api/news/drafts/:id - Delete draft
+  fastify.delete('/api/news/drafts/:id', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const isAllowed = await canAuthorNews(req.user);
+      if (!isAllowed) return reply.status(403).send({ error: 'Forbidden' });
+
+      const [existing] = await pool.query('SELECT user_id FROM news_article_drafts WHERE id = ? LIMIT 1', [req.params.id]);
+      if (existing.length === 0) return reply.status(404).send({ error: 'Draft not found' });
+
+      if (!guards.isAdmin(req.user) && Number(existing[0].user_id) !== Number(req.user.id)) {
+        return reply.status(403).send({ error: 'Forbidden' });
+      }
+
+      await pool.query('DELETE FROM news_article_drafts WHERE id = ?', [req.params.id]);
+      reply.send({ success: true });
+    } catch (e) {
+      log.err('Delete news draft failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to delete news draft' });
     }
   });
 };
