@@ -5,7 +5,9 @@
     "page": 126,
     "pdfPage": 128,
     "section": "Rules : Health and Damage",
-    "summary": "Severe wounds from fire, sunlight, or supernatural attacks. Mends slowly and requires Rouse Checks or days of rest."
+    "summary": "Severe wounds from fire, sunlight, or supernatural attacks. Mends slowly and requires Rouse Checks or days of rest.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "All Out Attack",
@@ -13,7 +15,9 @@
     "page": 301,
     "pdfPage": 303,
     "section": "Advanced Systems : Combat Maneuvers",
-    "summary": "Add +1 or +2 dice to a melee attack while sacrificing defense for the turn."
+    "summary": "Add +1 or +2 dice to a melee attack while sacrificing defense for the turn.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Animal Succulence",
@@ -21,7 +25,9 @@
     "page": 212,
     "pdfPage": 214,
     "section": "Vampires at Play : Feeding",
-    "summary": "Slaking hunger from animal vessels, penalties based on Blood Potency rating."
+    "summary": "Slaking hunger from animal vessels, penalties based on Blood Potency rating.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Animalism Discipline",
@@ -29,7 +35,9 @@
     "page": 244,
     "pdfPage": 246,
     "section": "Disciplines : Animalism",
-    "summary": "Supernatural mastery over beasts, communion with creatures, and directing the Beast outward."
+    "summary": "Supernatural mastery over beasts, communion with creatures, and directing the Beast outward.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Anarch Movement",
@@ -37,7 +45,9 @@
     "page": 56,
     "pdfPage": 58,
     "section": "Kindred Society : The Anarchs",
-    "summary": "Revolutionary faction rejecting elder Camarilla dominion, establishing Baronies and Free States."
+    "summary": "Revolutionary faction rejecting elder Camarilla dominion, establishing Baronies and Free States.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Armor and Protection",
@@ -45,7 +55,9 @@
     "page": 304,
     "pdfPage": 306,
     "section": "Advanced Systems : Armor and Gear",
-    "summary": "Converts aggravated physical damage from firearms into superficial damage, values and penalties."
+    "summary": "Converts aggravated physical damage from firearms into superficial damage, values and penalties.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Attributes Overview",
@@ -53,7 +65,9 @@
     "page": 154,
     "pdfPage": 156,
     "section": "Characters : Traits and Attributes",
-    "summary": "Nine traits across Physical, Social, and Mental pillars rating natural kindred capability from 1 to 5."
+    "summary": "Nine traits across Physical, Social, and Mental pillars rating natural kindred capability from 1 to 5.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Auspex Discipline",
@@ -61,7 +75,9 @@
     "page": 248,
     "pdfPage": 250,
     "section": "Disciplines : Auspex",
-    "summary": "Supernatural perception, aura sight, telepathy, premonitions, and clairvoyance."
+    "summary": "Supernatural perception, aura sight, telepathy, premonitions, and clairvoyance.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Automatic Feats and Difficulty",
@@ -69,7 +85,9 @@
     "page": 119,
     "pdfPage": 121,
     "section": "Rules : Tests and Difficulty",
-    "summary": "Difficulty ratings from 1 (routine) to 7+ (nearly impossible), automatic successes on uncontested pools."
+    "summary": "Difficulty ratings from 1 (routine) to 7+ (nearly impossible), automatic successes on uncontested pools.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Bane Severity",
@@ -77,7 +95,9 @@
     "page": 216,
     "pdfPage": 218,
     "section": "Vampires at Play : Blood Potency",
-    "summary": "The intensity of a clan ancestral curse scaling with Blood Potency from rating 1 to 6."
+    "summary": "The intensity of a clan ancestral curse scaling with Blood Potency from rating 1 to 6.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Bestial Failure",
@@ -85,7 +105,9 @@
     "page": 207,
     "pdfPage": 209,
     "section": "Vampires at Play : The Beast",
-    "summary": "Rolling a 1 on a Hunger die during a failed roll. The Beast lashes out causing compulsions or uncontrolled aggression."
+    "summary": "Rolling a 1 on a Hunger die during a failed roll. The Beast lashes out causing compulsions or uncontrolled aggression.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Blood Bond Levels and Rules",
@@ -93,7 +115,9 @@
     "page": 233,
     "pdfPage": 235,
     "section": "Vampires at Play : Blood Bond",
-    "summary": "Bonding through three steps of drinking kindred vitae, emotional servitude, duration, and breaking conditions."
+    "summary": "Bonding through three steps of drinking kindred vitae, emotional servitude, duration, and breaking conditions.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Blood Potency Chart and Effects",
@@ -101,7 +125,9 @@
     "page": 216,
     "pdfPage": 218,
     "section": "Vampires at Play : Blood Potency",
-    "summary": "Governs Blood Surge dice, Mend amount per Rouse, Power bonuses, Rouse reroll tiers, Bane Severity, and Feeding restrictions."
+    "summary": "Governs Blood Surge dice, Mend amount per Rouse, Power bonuses, Rouse reroll tiers, Bane Severity, and Feeding restrictions.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Blood Resonance and Dyscrasias",
@@ -109,7 +135,9 @@
     "page": 226,
     "pdfPage": 228,
     "section": "Vampires at Play : Resonance",
-    "summary": "Choleric, Melancholic, Phlegmatic, and Sanguine emotional states in mortals granting discipline bonuses."
+    "summary": "Choleric, Melancholic, Phlegmatic, and Sanguine emotional states in mortals granting discipline bonuses.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Blood Sorcery and Rituals",
@@ -117,7 +145,9 @@
     "page": 271,
     "pdfPage": 273,
     "section": "Disciplines : Blood Sorcery",
-    "summary": "Thaumaturgical manipulation of vitae, Corrosive Vitae, Cauldron of Blood, and ritual casting rules."
+    "summary": "Thaumaturgical manipulation of vitae, Corrosive Vitae, Cauldron of Blood, and ritual casting rules.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Blood Surge",
@@ -125,7 +155,9 @@
     "page": 216,
     "pdfPage": 218,
     "section": "Vampires at Play : Blood Potency",
-    "summary": "Calling upon vitae to add +1 to +6 dice to a single pool at the cost of one Rouse Check."
+    "summary": "Calling upon vitae to add +1 to +6 dice to a single pool at the cost of one Rouse Check.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Brujah Clan Overview",
@@ -133,7 +165,9 @@
     "page": 65,
     "pdfPage": 67,
     "section": "Clans : Brujah",
-    "summary": "The Rabble, warrior scholars and rebels, Celerity, Potence, Presence, Bane of violent temper."
+    "summary": "The Rabble, warrior scholars and rebels, Celerity, Potence, Presence, Bane of violent temper.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Caitiff Clanless",
@@ -141,7 +175,9 @@
     "page": 107,
     "pdfPage": 109,
     "section": "Clans : Caitiff",
-    "summary": "Clanless kindred possessing no inherent clan curse, free choice of disciplines, and severe social stigma."
+    "summary": "Clanless kindred possessing no inherent clan curse, free choice of disciplines, and severe social stigma.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Camarilla Structure and Traditions",
@@ -149,7 +185,9 @@
     "page": 51,
     "pdfPage": 53,
     "section": "Kindred Society : The Camarilla",
-    "summary": "The ivory tower, Prince, Primogen, Sheriff, Scourge, Keeper of Elysium, and the Six Traditions."
+    "summary": "The ivory tower, Prince, Primogen, Sheriff, Scourge, Keeper of Elysium, and the Six Traditions.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Celerity Discipline",
@@ -157,7 +195,9 @@
     "page": 252,
     "pdfPage": 254,
     "section": "Disciplines : Celerity",
-    "summary": "Superhuman speed, lightning reflexes, dodging bullets, and extra movement actions."
+    "summary": "Superhuman speed, lightning reflexes, dodging bullets, and extra movement actions.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Character Creation Guide",
@@ -165,7 +205,9 @@
     "page": 136,
     "pdfPage": 138,
     "section": "Characters : Creation Walkthrough",
-    "summary": "Step by step guide for attributes, skills, predator type, disciplines, advantages, and convictions."
+    "summary": "Step by step guide for attributes, skills, predator type, disciplines, advantages, and convictions.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Close Combat and Brawl",
@@ -173,7 +215,9 @@
     "page": 297,
     "pdfPage": 299,
     "section": "Advanced Systems : Physical Conflict",
-    "summary": "Contested rolls (Strength + Brawl vs Dexterity + Athletics), damage margins, and weapon bonuses."
+    "summary": "Contested rolls (Strength + Brawl vs Dexterity + Athletics), damage margins, and weapon bonuses.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Compulsions and Beast Manifestations",
@@ -181,7 +225,9 @@
     "page": 208,
     "pdfPage": 210,
     "section": "Vampires at Play : Compulsions",
-    "summary": "Hunger, Dominance, Harm, Paranoia, and Clan specific compulsions penalizing unrelated actions."
+    "summary": "Hunger, Dominance, Harm, Paranoia, and Clan specific compulsions penalizing unrelated actions.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Convictions and Touchstones",
@@ -189,7 +235,9 @@
     "page": 172,
     "pdfPage": 174,
     "section": "Characters : Convictions",
-    "summary": "Human anchors and moral codes shielding kindred from humanity degeneration and stains."
+    "summary": "Human anchors and moral codes shielding kindred from humanity degeneration and stains.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Coterie Types and Merits",
@@ -197,7 +245,9 @@
     "page": 195,
     "pdfPage": 197,
     "section": "Characters : Coteries",
-    "summary": "Shared domain, hunting territory, shared havens, and pooled background resources."
+    "summary": "Shared domain, hunting territory, shared havens, and pooled background resources.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Critical Wins and Messy Crits",
@@ -205,7 +255,9 @@
     "page": 120,
     "pdfPage": 122,
     "section": "Rules : Rolling the Dice",
-    "summary": "Pairs of 10s granting 4 successes total, messy critical effects when rolled on hunger dice."
+    "summary": "Pairs of 10s granting 4 successes total, messy critical effects when rolled on hunger dice.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Damage Types and Healing",
@@ -213,7 +265,9 @@
     "page": 126,
     "pdfPage": 128,
     "section": "Rules : Damage and Healing",
-    "summary": "Superficial damage (halved for vampires) versus Aggravated damage, tracker overflow, and torpor."
+    "summary": "Superficial damage (halved for vampires) versus Aggravated damage, tracker overflow, and torpor.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Daysleep and Waking During Day",
@@ -221,7 +275,9 @@
     "page": 219,
     "pdfPage": 221,
     "section": "Vampires at Play : Daysleep",
-    "summary": "Humanity rating dictating dice pools during daytime, waking to danger, and Rouse requirements."
+    "summary": "Humanity rating dictating dice pools during daytime, waking to danger, and Rouse requirements.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Degeneration and Humanity Loss",
@@ -229,7 +285,9 @@
     "page": 239,
     "pdfPage": 241,
     "section": "Vampires at Play : Humanity",
-    "summary": "Remorse tests, clearing stains, losing humanity points, and falling toward the Beast."
+    "summary": "Remorse tests, clearing stains, losing humanity points, and falling toward the Beast.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Diablerie Procedure",
@@ -237,7 +295,9 @@
     "page": 234,
     "pdfPage": 236,
     "section": "Vampires at Play : Diablerie",
-    "summary": "Draining kindred soul, contested rolls, lowering generation, black veins in aura, and humanity loss."
+    "summary": "Draining kindred soul, contested rolls, lowering generation, black veins in aura, and humanity loss.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Difficulty Ladder",
@@ -245,7 +305,9 @@
     "page": 119,
     "pdfPage": 121,
     "section": "Rules : Difficulty Ratings",
-    "summary": "Guidelines for setting test difficulties from Routine (1) to Hard (5) and Nearly Impossible (7)."
+    "summary": "Guidelines for setting test difficulties from Routine (1) to Hard (5) and Nearly Impossible (7).",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Dominate Discipline",
@@ -253,7 +315,9 @@
     "page": 254,
     "pdfPage": 256,
     "section": "Disciplines : Dominate",
-    "summary": "Hypnotic mind control, Cloud Memory, Mesmerize, The Forgetful Mind, and Terminal Decree."
+    "summary": "Hypnotic mind control, Cloud Memory, Mesmerize, The Forgetful Mind, and Terminal Decree.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Elysium Rules and Sanctuary",
@@ -261,7 +325,9 @@
     "page": 317,
     "pdfPage": 319,
     "section": "Storytelling : Elysium",
-    "summary": "Sacred truce, prohibition of weapons and disciplines, domain etiquette, and Keeper duties."
+    "summary": "Sacred truce, prohibition of weapons and disciplines, domain etiquette, and Keeper duties.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Experience Point Spending",
@@ -269,7 +335,9 @@
     "page": 151,
     "pdfPage": 153,
     "section": "Characters : Advancement",
-    "summary": "Costs for attributes, skills, disciplines, rituals, blood sorcery, and merits with earned XP."
+    "summary": "Costs for attributes, skills, disciplines, rituals, blood sorcery, and merits with earned XP.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Feeding Methods and Slaking",
@@ -277,7 +345,9 @@
     "page": 211,
     "pdfPage": 213,
     "section": "Vampires at Play : Feeding",
-    "summary": "Slaking hunger, blood bags, hunting pools, biting humans, and the ecstasy of the Kiss."
+    "summary": "Slaking hunger, blood bags, hunting pools, biting humans, and the ecstasy of the Kiss.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Fire and Burning Damage",
@@ -285,7 +355,9 @@
     "page": 221,
     "pdfPage": 223,
     "section": "Vampires at Play : Fire",
-    "summary": "Aggravated damage per turn based on fire intensity, terror frenzy tests, and soak rules."
+    "summary": "Aggravated damage per turn based on fire intensity, terror frenzy tests, and soak rules.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Fortitude Discipline",
@@ -293,7 +365,9 @@
     "page": 258,
     "pdfPage": 260,
     "section": "Disciplines : Fortitude",
-    "summary": "Supernatural resilience, soaking superficial and aggravated damage, resisting sunlight and mind probes."
+    "summary": "Supernatural resilience, soaking superficial and aggravated damage, resisting sunlight and mind probes.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Frenzy Tests and Resisting the Beast",
@@ -301,7 +375,9 @@
     "page": 219,
     "pdfPage": 221,
     "section": "Vampires at Play : Frenzy",
-    "summary": "Fury frenzy, hunger frenzy, terror frenzy (Rötschreck), willpower pools, and rider riding the wave."
+    "summary": "Fury frenzy, hunger frenzy, terror frenzy (Rötschreck), willpower pools, and rider riding the wave.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Gangrel Clan Overview",
@@ -309,7 +385,9 @@
     "page": 72,
     "pdfPage": 74,
     "section": "Clans : Gangrel",
-    "summary": "The Outlaws and Beasts, Animalism, Fortitude, Protean, and feral animal features upon frenzy."
+    "summary": "The Outlaws and Beasts, Animalism, Fortitude, Protean, and feral animal features upon frenzy.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Generation Chart and Maximums",
@@ -317,7 +395,9 @@
     "page": 214,
     "pdfPage": 216,
     "section": "Vampires at Play : Generation",
-    "summary": "Distance from Caine from 4th to 16th generation, Blood Potency caps, and starting attributes."
+    "summary": "Distance from Caine from 4th to 16th generation, Blood Potency caps, and starting attributes.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Ghouls and Retainers Creation",
@@ -325,7 +405,9 @@
     "page": 234,
     "pdfPage": 236,
     "section": "Vampires at Play : Ghouls",
-    "summary": "Feeding mortal vitae, granting level 1 discipline power, longevity, and blood addiction."
+    "summary": "Feeding mortal vitae, granting level 1 discipline power, longevity, and blood addiction.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Haven Merits and Trappings",
@@ -333,7 +415,9 @@
     "page": 188,
     "pdfPage": 190,
     "section": "Characters : Havens",
-    "summary": "Haven ratings, security systems, hidden armories, luxury, occult libraries, and weaknesses."
+    "summary": "Haven ratings, security systems, hidden armories, luxury, occult libraries, and weaknesses.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Health Tracker and Wounds",
@@ -341,7 +425,9 @@
     "page": 126,
     "pdfPage": 128,
     "section": "Rules : Health System",
-    "summary": "Health boxes (Stamina + 3), tracking superficial and aggravated damage, and impairment penalties."
+    "summary": "Health boxes (Stamina + 3), tracking superficial and aggravated damage, and impairment penalties.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Humanity Tracker and Loss",
@@ -349,7 +435,9 @@
     "page": 236,
     "pdfPage": 238,
     "section": "Vampires at Play : Humanity",
-    "summary": "Rating from 10 to 0, remorse tests, stains, torpor waking times, and becoming a Wight at 0."
+    "summary": "Rating from 10 to 0, remorse tests, stains, torpor waking times, and becoming a Wight at 0.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Hunger Mechanics and Dice",
@@ -357,7 +445,9 @@
     "page": 203,
     "pdfPage": 205,
     "section": "Vampires at Play : Hunger",
-    "summary": "Replacing standard dice with red hunger dice, tracking hunger from 0 to 5, and the relentless Beast."
+    "summary": "Replacing standard dice with red hunger dice, tracking hunger from 0 to 5, and the relentless Beast.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Hunting and Predator Rolls",
@@ -365,7 +455,9 @@
     "page": 211,
     "pdfPage": 213,
     "section": "Vampires at Play : Hunting",
-    "summary": "Hunting rolls by predator type, hunting grounds, hunting difficulties, and domain trespassing."
+    "summary": "Hunting rolls by predator type, hunting grounds, hunting difficulties, and domain trespassing.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Impairment from Physical or Mental Damage",
@@ -373,7 +465,9 @@
     "page": 126,
     "pdfPage": 128,
     "section": "Rules : Impairment",
-    "summary": "Minus 2 penalty to all physical or mental pools when health or willpower trackers fill completely."
+    "summary": "Minus 2 penalty to all physical or mental pools when health or willpower trackers fill completely.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Initiative and Turn Order",
@@ -381,7 +475,9 @@
     "page": 298,
     "pdfPage": 300,
     "section": "Advanced Systems : Initiative",
-    "summary": "Close combat versus ranged weapon order, declaring actions, and resolving simultaneous attacks."
+    "summary": "Close combat versus ranged weapon order, declaring actions, and resolving simultaneous attacks.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Kindred Biology and Physiology",
@@ -389,7 +485,9 @@
     "page": 218,
     "pdfPage": 220,
     "section": "Vampires at Play : Physiology",
-    "summary": "Blushing of health, heartbeat simulation, digesting food, sexual intercourse, and breathing."
+    "summary": "Blushing of health, heartbeat simulation, digesting food, sexual intercourse, and breathing.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Loresheets Compendium",
@@ -397,7 +495,9 @@
     "page": 382,
     "pdfPage": 384,
     "section": "Loresheets : Bloodlines and Lore",
-    "summary": "Heritage backgrounds from First City lore, Golconda, Clan legends, Theo Bell, and Amici Noctis."
+    "summary": "Heritage backgrounds from First City lore, Golconda, Clan legends, Theo Bell, and Amici Noctis.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Malkavian Clan Overview",
@@ -405,7 +505,9 @@
     "page": 78,
     "pdfPage": 80,
     "section": "Clans : Malkavian",
-    "summary": "The Lunatics and Seers, Auspex, Dominate, Obfuscate, Cobweb connection, and delusion banes."
+    "summary": "The Lunatics and Seers, Auspex, Dominate, Obfuscate, Cobweb connection, and delusion banes.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Masquerade Enforcing and Breaches",
@@ -413,7 +515,9 @@
     "page": 55,
     "pdfPage": 57,
     "section": "Kindred Society : The Masquerade",
-    "summary": "The First Tradition, covering tracks from mortal eyes, cellphone bans, and Scourge hunts."
+    "summary": "The First Tradition, covering tracks from mortal eyes, cellphone bans, and Scourge hunts.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Mending Damage with Vitae",
@@ -421,7 +525,9 @@
     "page": 218,
     "pdfPage": 220,
     "section": "Vampires at Play : Healing",
-    "summary": "Superficial damage mended per Rouse Check based on Blood Potency, aggravated damage overnight."
+    "summary": "Superficial damage mended per Rouse Check based on Blood Potency, aggravated damage overnight.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Merits and Flaws Master List",
@@ -429,7 +535,9 @@
     "page": 179,
     "pdfPage": 181,
     "section": "Characters : Advantages",
-    "summary": "Linguistics, Looks, Substance Use, Haven, Herd, Retainers, Resources, and Mythic bans."
+    "summary": "Linguistics, Looks, Substance Use, Haven, Herd, Retainers, Resources, and Mythic bans.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Messy Critical Outcome",
@@ -437,7 +545,9 @@
     "page": 207,
     "pdfPage": 209,
     "section": "Vampires at Play : The Beast",
-    "summary": "Critical success achieved via at least one 10 on a Hunger die, triggering predatory compromises."
+    "summary": "Critical success achieved via at least one 10 on a Hunger die, triggering predatory compromises.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Mortals and Police Antagonists",
@@ -445,7 +555,9 @@
     "page": 370,
     "pdfPage": 372,
     "section": "Antagonists : Mortals",
-    "summary": "Stat blocks for citizens, thugs, detectives, police swat, ghouls, and vampire hunters."
+    "summary": "Stat blocks for citizens, thugs, detectives, police swat, ghouls, and vampire hunters.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Nosferatu Clan Overview",
@@ -453,7 +565,9 @@
     "page": 84,
     "pdfPage": 86,
     "section": "Clans : Nosferatu",
-    "summary": "The Sewer Rats, Animalism, Obfuscate, Potence, hideous disfigurement, and information broking."
+    "summary": "The Sewer Rats, Animalism, Obfuscate, Potence, hideous disfigurement, and information broking.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Obfuscate Discipline",
@@ -461,7 +575,9 @@
     "page": 260,
     "pdfPage": 262,
     "section": "Disciplines : Obfuscate",
-    "summary": "Stealth and illusion, Cloak of Shadows, Unseen Presence, Ghost in the Machine, and Vanish."
+    "summary": "Stealth and illusion, Cloak of Shadows, Unseen Presence, Ghost in the Machine, and Vanish.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Potence Discipline",
@@ -469,7 +585,9 @@
     "page": 263,
     "pdfPage": 265,
     "section": "Disciplines : Potence",
-    "summary": "Supernatural brute strength, Lethal Body, Soaring Leap, Prowess, and Fist of Caine."
+    "summary": "Supernatural brute strength, Lethal Body, Soaring Leap, Prowess, and Fist of Caine.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Predator Types Master Listing",
@@ -477,7 +595,9 @@
     "page": 175,
     "pdfPage": 177,
     "section": "Characters : Predator Types",
-    "summary": "Alleycat, Bagger, Blood Leech, Cleaver, Consensualist, Farmer, Osiris, Sandman, Scene Queen, Siren."
+    "summary": "Alleycat, Bagger, Blood Leech, Cleaver, Consensualist, Farmer, Osiris, Sandman, Scene Queen, Siren.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Presence Discipline",
@@ -485,7 +605,9 @@
     "page": 266,
     "pdfPage": 268,
     "section": "Disciplines : Presence",
-    "summary": "Awe, Daunt, Lingering Kiss, Dread Gaze, Entrancement, and Majesty."
+    "summary": "Awe, Daunt, Lingering Kiss, Dread Gaze, Entrancement, and Majesty.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Protean Discipline",
@@ -493,7 +615,9 @@
     "page": 269,
     "pdfPage": 271,
     "section": "Disciplines : Protean",
-    "summary": "Shapeshifting, Eyes of the Beast, Weight of the Feather, Feral Weapons, Earth Meld, and Mist Form."
+    "summary": "Shapeshifting, Eyes of the Beast, Weight of the Feather, Feral Weapons, Earth Meld, and Mist Form.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Ranged Combat and Firearms",
@@ -501,7 +625,9 @@
     "page": 299,
     "pdfPage": 301,
     "section": "Advanced Systems : Ranged Combat",
-    "summary": "Firearms pools (Composure + Firearms), range bands, rate of fire, cover modifiers, and ammunition."
+    "summary": "Firearms pools (Composure + Firearms), range bands, rate of fire, cover modifiers, and ammunition.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Remorse Roll End of Session",
@@ -509,7 +635,9 @@
     "page": 238,
     "pdfPage": 240,
     "section": "Vampires at Play : Remorse",
-    "summary": "Rolling unmarked humanity boxes minus stains. One success retains humanity; zero lowers rating by 1."
+    "summary": "Rolling unmarked humanity boxes minus stains. One success retains humanity; zero lowers rating by 1.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Resisting Sunlight and Daylight",
@@ -517,7 +645,9 @@
     "page": 221,
     "pdfPage": 223,
     "section": "Vampires at Play : Sunlight",
-    "summary": "Aggravated damage per turn from sunlight based on skin exposure, weather, and blood potency."
+    "summary": "Aggravated damage per turn from sunlight based on skin exposure, weather, and blood potency.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Rituals Blood Sorcery List",
@@ -525,7 +655,9 @@
     "page": 274,
     "pdfPage": 276,
     "section": "Disciplines : Blood Sorcery Rituals",
-    "summary": "Blood Walk, Clinging of the Insect, Ward against Ghouls, Scry the Soul, and ritual casting times."
+    "summary": "Blood Walk, Clinging of the Insect, Ward against Ghouls, Scry the Soul, and ritual casting times.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Rouse Checks Procedure",
@@ -533,7 +665,9 @@
     "page": 211,
     "pdfPage": 213,
     "section": "Vampires at Play : Rouse Checks",
-    "summary": "Single die roll on 6 to 10 success; on 1 to 5 hunger increases by 1 box."
+    "summary": "Single die roll on 6 to 10 success; on 1 to 5 hunger increases by 1 box.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Second Inquisition Overview",
@@ -541,7 +675,9 @@
     "page": 360,
     "pdfPage": 362,
     "section": "Storytelling : The Second Inquisition",
-    "summary": "Global intelligence coalition hunting kindred via financial records, drones, and black sites."
+    "summary": "Global intelligence coalition hunting kindred via financial records, drones, and black sites.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Skills Master List",
@@ -549,7 +685,9 @@
     "page": 159,
     "pdfPage": 161,
     "section": "Characters : Skills",
-    "summary": "Athletics, Brawl, Craft, Drive, Firearms, Larceny, Melee, Stealth, Survival, and specialties."
+    "summary": "Athletics, Brawl, Craft, Drive, Firearms, Larceny, Melee, Stealth, Survival, and specialties.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Stains and Violations",
@@ -557,7 +695,9 @@
     "page": 236,
     "pdfPage": 238,
     "section": "Vampires at Play : Stains",
-    "summary": "Marks on the soul from violating chronicle tenets or convictions, impairing conscience."
+    "summary": "Marks on the soul from violating chronicle tenets or convictions, impairing conscience.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Teamwork and Aiding Rolls",
@@ -565,7 +705,9 @@
     "page": 122,
     "pdfPage": 124,
     "section": "Rules : Teamwork",
-    "summary": "Teamwork rules: Secondary helpers rolling to grant +1 die or margin successes to primary actor."
+    "summary": "Teamwork rules: Secondary helpers rolling to grant +1 die or margin successes to primary actor.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Thin Blood Alchemy Discipline",
@@ -573,7 +715,9 @@
     "page": 282,
     "pdfPage": 284,
     "section": "Disciplines : Thin Blood Alchemy",
-    "summary": "Formula distillation methods (Athanor Corporis, Calcinatio, Fixatio) mimicking any discipline."
+    "summary": "Formula distillation methods (Athanor Corporis, Calcinatio, Fixatio) mimicking any discipline.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Toreador Clan Overview",
@@ -581,7 +725,9 @@
     "page": 90,
     "pdfPage": 92,
     "section": "Clans : Toreador",
-    "summary": "The Divas and Artists, Auspex, Celerity, Presence, aesthetic fixation bane, and high society."
+    "summary": "The Divas and Artists, Auspex, Celerity, Presence, aesthetic fixation bane, and high society.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Torpor States and Awakening",
@@ -589,7 +735,9 @@
     "page": 223,
     "pdfPage": 225,
     "section": "Vampires at Play : Torpor",
-    "summary": "Comatose kindred hibernation, duration chart based on humanity, and waking via ancient blood."
+    "summary": "Comatose kindred hibernation, duration chart based on humanity, and waking via ancient blood.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Touchstones Protection Rules",
@@ -597,7 +745,9 @@
     "page": 173,
     "pdfPage": 175,
     "section": "Characters : Touchstones",
-    "summary": "Living mortal tethered to conviction, catastrophic stains accrued if injured or killed."
+    "summary": "Living mortal tethered to conviction, catastrophic stains accrued if injured or killed.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Tremere Clan Overview",
@@ -605,7 +755,9 @@
     "page": 96,
     "pdfPage": 98,
     "section": "Clans : Tremere",
-    "summary": "The Warlocks, Auspex, Blood Sorcery, Dominate, shattered pyramid, and inability to blood bond kindred."
+    "summary": "The Warlocks, Auspex, Blood Sorcery, Dominate, shattered pyramid, and inability to blood bond kindred.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "True Faith Powers and Effects",
@@ -613,7 +765,9 @@
     "page": 410,
     "pdfPage": 412,
     "section": "Antagonists : True Faith",
-    "summary": "Holy symbols, divine intervention repelling vampires, and aggravated burn effects."
+    "summary": "Holy symbols, divine intervention repelling vampires, and aggravated burn effects.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Ventrue Clan Overview",
@@ -621,7 +775,9 @@
     "page": 102,
     "pdfPage": 104,
     "section": "Clans : Ventrue",
-    "summary": "The Blue Bloods and Kings, Dominate, Fortitude, Presence, and rarefied feeding preferences."
+    "summary": "The Blue Bloods and Kings, Dominate, Fortitude, Presence, and rarefied feeding preferences.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Weapons and Firearms Tables",
@@ -629,7 +785,9 @@
     "page": 304,
     "pdfPage": 306,
     "section": "Advanced Systems : Weapons",
-    "summary": "Damage ratings for knives, swords, pistols, rifles, shotguns, stakes, and automatic bursts."
+    "summary": "Damage ratings for knives, swords, pistols, rifles, shotguns, stakes, and automatic bursts.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
     "topic": "Willpower Spending and Recovery",
@@ -637,54 +795,938 @@
     "page": 126,
     "pdfPage": 128,
     "section": "Rules : Willpower",
-    "summary": "Rerolling up to three regular dice, resisting frenzy, superficial vs aggravated willpower damage."
+    "summary": "Rerolling up to three regular dice, resisting frenzy, superficial vs aggravated willpower damage.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
-    "topic": "Spectre Possession (Hostile)",
-    "category": "Antagonists and Entities",
-    "page": 377,
-    "pdfPage": 379,
-    "section": "Antagonists : Creatures of Horror",
-    "summary": "Rules for hostile spirits (spectres and wraiths) possessing mortals or vampires. Spirit uses its own Mental and Social attributes and Skills, host provides Physical attributes. Host is conscious but paralyzed, no memory access."
+    "topic": "Advantages and Flaws",
+    "category": "Character Creation",
+    "page": 179,
+    "pdfPage": 181,
+    "section": "Characters : Advantages",
+    "summary": "Rules for purchasing merits, flaws, and backgrounds during character creation and chronicle progression.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
-    "topic": "Host Spirit Ceremony",
-    "category": "Oblivion Ceremonies",
-    "page": 208,
-    "pdfPage": 210,
-    "section": "Oblivion Ceremonies : Level 3",
-    "summary": "Level 3 Oblivion ceremony where a vampire voluntarily allows a wraith to possess their body. Heals all Superficial and Aggravated Willpower damage upon departure."
+    "topic": "Backgrounds Overview",
+    "category": "Character Creation",
+    "page": 184,
+    "pdfPage": 186,
+    "section": "Characters : Backgrounds",
+    "summary": "Foundations and mortal anchors: Allies, Contacts, Fame, Haven, Herd, Influence, Mask, Mawla, Resources, Retainers, and Status.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
-    "topic": "Exorcism Ceremony",
-    "category": "Oblivion Ceremonies",
-    "page": 207,
-    "pdfPage": 209,
-    "section": "Oblivion Ceremonies : Level 3",
-    "summary": "Level 3 Oblivion ceremony to banish and expel a possessing spirit or spectre from a person or location via contested Resolve + Oblivion roll."
+    "topic": "Allies Background",
+    "category": "Backgrounds and Merits",
+    "page": 184,
+    "pdfPage": 186,
+    "section": "Characters : Backgrounds",
+    "summary": "Mortals who support the character. Rated from 1 to 4 dots for Effectiveness and 1 to 3 dots for Reliability. Enemy flaw.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
   },
   {
-    "topic": "Puppeteers (Possessing Ghosts)",
-    "category": "Antagonists and Entities",
+    "topic": "Contacts Background",
+    "category": "Backgrounds and Merits",
+    "page": 185,
+    "pdfPage": 187,
+    "section": "Characters : Backgrounds",
+    "summary": "Mortals who provide information, items, or services. Rated 1 to 3 dots based on influence and sphere of competence.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
+  },
+  {
+    "topic": "Fame Background",
+    "category": "Backgrounds and Merits",
+    "page": 185,
+    "pdfPage": 187,
+    "section": "Characters : Backgrounds",
+    "summary": "Prominence and recognition in mortal or Kindred society rated 1 to 5 dots. Dark Secret and Infamy flaws.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
+  },
+  {
+    "topic": "Influence Background",
+    "category": "Backgrounds and Merits",
+    "page": 186,
+    "pdfPage": 188,
+    "section": "Characters : Backgrounds",
+    "summary": "Political, social, or economic sway over mortal institutions rated 1 to 5 dots. Disliked and Despised flaws.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
+  },
+  {
+    "topic": "Haven Background",
+    "category": "Backgrounds and Merits",
+    "page": 188,
+    "pdfPage": 190,
+    "section": "Characters : Backgrounds",
+    "summary": "Safe, private daytime shelter rated 1 to 3 dots with specialized merits including Armory, Cell, Watchmen, Laboratory, Library, Luxury, Surgery, and Warding.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
+  },
+  {
+    "topic": "Herd Background",
+    "category": "Backgrounds and Merits",
+    "page": 187,
+    "pdfPage": 189,
+    "section": "Characters : Backgrounds",
+    "summary": "Accessible kine vessels for safe feeding without hunting tests, rated 1 to 5 dots. Obvious Predator flaw.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
+  },
+  {
+    "topic": "Mask Background",
+    "category": "Backgrounds and Merits",
+    "page": 188,
+    "pdfPage": 190,
+    "section": "Characters : Backgrounds",
+    "summary": "False mortal identities, papers, and credentials rated 1 to 2 dots. Zeroed and Cobbler merits. Known Corpse and Blankbody flaws.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
+  },
+  {
+    "topic": "Mawla Background",
+    "category": "Backgrounds and Merits",
+    "page": 192,
+    "pdfPage": 194,
+    "section": "Characters : Backgrounds",
+    "summary": "A vampire mentor or patron providing guidance, favors, and protection rated 1 to 5 dots. Adversary flaw.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
+  },
+  {
+    "topic": "Resources Background",
+    "category": "Backgrounds and Merits",
+    "page": 192,
+    "pdfPage": 194,
+    "section": "Characters : Backgrounds",
+    "summary": "Liquid wealth, monthly cashflow, assets, and standard of living rated 1 to 5 dots. Destitute flaw.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
+  },
+  {
+    "topic": "Retainers Background",
+    "category": "Backgrounds and Merits",
+    "page": 193,
+    "pdfPage": 195,
+    "section": "Characters : Backgrounds",
+    "summary": "Mortal or ghoul servants bound by blood, money, or loyalty rated 1 to 3 dots. Stalkers flaw.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
+  },
+  {
+    "topic": "Status Background",
+    "category": "Backgrounds and Merits",
+    "page": 193,
+    "pdfPage": 195,
+    "section": "Characters : Backgrounds",
+    "summary": "Formal standing and reputation within vampire society or sect rated 1 to 5 dots. Suspect and Shunned flaws.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
+  },
+  {
+    "topic": "Coterie Domain and Backgrounds",
+    "category": "Coteries",
+    "page": 195,
+    "pdfPage": 197,
+    "section": "Characters : Coterie Creation",
+    "summary": "Rules for pooled coterie backgrounds, shared haven, hunting territory, Chasse, Lien, and Portillon ratings.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
+  },
+  {
+    "topic": "Blush of Life",
+    "category": "Blood and Hunger",
+    "page": 218,
+    "pdfPage": 220,
+    "section": "Vampires at Play : The Blood",
+    "summary": "Rousing the blood to mimic mortal vitality: heartbeat, warm skin, dilated pupils, sex, and passing medical inspection.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
+  },
+  {
+    "topic": "Eating Food and Mortal Digestion",
+    "category": "Blood and Hunger",
+    "page": 218,
+    "pdfPage": 220,
+    "section": "Vampires at Play : Feeding",
+    "summary": "Inability to digest solid food without the Eat Food merit. Difficulty 3 Stamina + Resolve test to keep food down before regurgitating.",
+    "book": "Corebook",
+    "file": "Vampire-the-Masquerade-1.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Alternative Clan Banes",
+    "category": "Rules and Systems",
+    "page": 154,
+    "pdfPage": 156,
+    "section": "Alternative Systems : Variant Clan Banes",
+    "summary": "Variant banes for all 13 clans reflecting regional, generational, and physiological deviations.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Alternative Clan Compulsions",
+    "category": "Rules and Systems",
+    "page": 158,
+    "pdfPage": 160,
+    "section": "Alternative Systems : Variant Compulsions",
+    "summary": "Optional thematic compulsions triggered on bestial failures and messy criticals.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Banu Haqim Clan Overview",
+    "category": "Clans and Bloodlines",
+    "page": 14,
+    "pdfPage": 16,
+    "section": "The Clans : Banu Haqim",
+    "summary": "Judges and viziers of Caine, Blood Sorcery and Celerity masters, addiction to Kindred vitae.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Caitiff Merits and Flaws",
+    "category": "Merits and Flaws",
+    "page": 121,
+    "pdfPage": 123,
+    "section": "Character Options : Caitiff Advantages",
+    "summary": "Unique Clanless merits and flaws, bastard bloodline perks, and social penalties.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Disciplines Compendium",
+    "category": "Disciplines and Powers",
+    "page": 94,
+    "pdfPage": 96,
+    "section": "Character Options : Expanded Disciplines",
+    "summary": "Expanded powers across all twelve core disciplines, including new level 1 to 5 amalgams.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Grim Reaper Predator Type",
+    "category": "Predator Types",
+    "page": 138,
+    "pdfPage": 140,
+    "section": "Character Options : Predator Types",
+    "summary": "Feeding inside hospice care and end of life facilities, preying upon mortals close to death.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Hecata Clan and 11 Bloodlines",
+    "category": "Clans and Bloodlines",
+    "page": 26,
+    "pdfPage": 28,
+    "section": "The Clans : Hecata",
+    "summary": "Clan of Death reuniting Giovanni, Harbingers, Samedi, Nagaraja, Lamia, Putanesca, and Rossellini.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Lasombra Clan Overview",
+    "category": "Clans and Bloodlines",
+    "page": 44,
+    "pdfPage": 46,
+    "section": "The Clans : Lasombra",
+    "summary": "Magisters of shadow, social Darwinists, masters of Oblivion and Dominate, distorted reflections.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Ministry Clan Overview",
+    "category": "Clans and Bloodlines",
+    "page": 54,
+    "pdfPage": 56,
+    "section": "The Clans : The Ministry",
+    "summary": "Tempters and liberators of the soul, shapeshifters, presence and protean amalgams, severe light sensitivity.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Montero Predator Type",
+    "category": "Predator Types",
+    "page": 140,
+    "pdfPage": 142,
+    "section": "Character Options : Predator Types",
+    "summary": "Using herds or packs of retainers to corral and drive prey directly into the feeding trap.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Oblivion Ceremonies Compendium",
+    "category": "Rituals and Ceremonies",
+    "page": 104,
+    "pdfPage": 106,
+    "section": "Character Options : Ceremonies",
+    "summary": "Complete collection of level 1 to 5 necromantic ceremonies for summoning spirits and dead matter.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Players Guide Loresheets",
+    "category": "Loresheets",
+    "page": 192,
+    "pdfPage": 194,
+    "section": "Character Options : Loresheets",
+    "summary": "Comprehensive collection of descendant, bloodline, historical, and sect loresheets.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Pursuer Predator Type",
+    "category": "Predator Types",
+    "page": 142,
+    "pdfPage": 144,
+    "section": "Character Options : Predator Types",
+    "summary": "Stalking prey methodically across cities, calculating habits and routines before vanishing them.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Ravnos Clan Overview",
+    "category": "Clans and Bloodlines",
+    "page": 64,
+    "pdfPage": 66,
+    "section": "The Clans : Ravnos",
+    "summary": "Daredevils and illusionists, chimerstry protean amalgams, compelled into wandering by the doombane.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Salubri Clan Overview",
+    "category": "Clans and Bloodlines",
+    "page": 74,
+    "pdfPage": 76,
+    "section": "The Clans : Salubri",
+    "summary": "Healers and watchers bearing the third eye, Obeah amalgams, hunted for their delectable sweet blood.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Thin blood Alchemy Formulae",
+    "category": "Disciplines and Powers",
+    "page": 106,
+    "pdfPage": 108,
+    "section": "Character Options : Thin blood Alchemy",
+    "summary": "Expanded recipes and distillation methods across Athanor Corporis, Calcinatio, and Fixatio.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Trapdoor Predator Type",
+    "category": "Predator Types",
+    "page": 144,
+    "pdfPage": 146,
+    "section": "Character Options : Predator Types",
+    "summary": "Luring victims into custom traps, mazes, secret havens, and underground nightclubs.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Tzimisce Clan Overview",
+    "category": "Clans and Bloodlines",
+    "page": 82,
+    "pdfPage": 84,
+    "section": "The Clans : Tzimisce",
+    "summary": "Dragons of the Old World, Vicissitude fleshcrafters, possessive landlords bounded to native soil.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Cults of the Blood Gods",
+    "topic": "Ashfinders Cult",
+    "category": "Setting and Lore",
+    "page": 180,
+    "pdfPage": 181,
+    "section": "Mortal and Kindred Cults : Ashfinders",
+    "summary": "Thin blood cult consuming ashes of incinerated elders to achieve temporary full vampire powers.",
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Cults of the Blood Gods",
+    "topic": "Church of Caine",
+    "category": "Setting and Lore",
+    "page": 72,
+    "pdfPage": 73,
+    "section": "Cults of Caine : Church of Caine",
+    "summary": "Heresy preaching devotion to the First Murderer as a dark divinity, sacraments, and doctrines.",
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Cults of the Blood Gods",
+    "topic": "Church of Set",
+    "category": "Setting and Lore",
+    "page": 148,
+    "pdfPage": 149,
+    "section": "Cults of the Methuselahs : Church of Set",
+    "summary": "Faith of the Ministry venerating Set as cosmic liberator through temptation and shattered moralities.",
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Cults of the Blood Gods",
+    "topic": "Cult Loresheets",
+    "category": "Loresheets",
+    "page": 222,
+    "pdfPage": 223,
+    "section": "Character Options : Cult Loresheets",
+    "summary": "Loresheets for Church of Caine, Bahari, Mithraic Mysteries, Cleopatras, Harbingers, and Gorgons.",
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Cults of the Blood Gods",
+    "topic": "Harbingers of Ashur Bloodline",
+    "category": "Clans and Bloodlines",
+    "page": 38,
+    "pdfPage": 39,
+    "section": "The Hecata : Harbingers of Ashur",
+    "summary": "Masked wraith:summoning necromancers seeking vengeance against the Giovanni patricians.",
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Cults of the Blood Gods",
+    "topic": "Hecata Bane and Compulsion",
+    "category": "Clans and Bloodlines",
+    "page": 66,
+    "pdfPage": 67,
+    "section": "The Hecata : Bane and Compulsion",
+    "summary": "The Painful Kiss: feeding causes excruciating agony and mortal trauma, Morbid Curiosity compulsion.",
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Cults of the Blood Gods",
+    "topic": "Mithraic Mysteries",
+    "category": "Setting and Lore",
+    "page": 136,
+    "pdfPage": 137,
+    "section": "Cults of the Methuselahs : Mithraism",
+    "summary": "Soldier cult dedicated to the ancient Prince of London Mithras, oaths, grades, and loyalties.",
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Cults of the Blood Gods",
+    "topic": "Nagaraja Bloodline",
+    "category": "Clans and Bloodlines",
+    "page": 42,
+    "pdfPage": 43,
+    "section": "The Hecata : Nagaraja",
+    "summary": "Cannibalistic flesh:eating necromancers requiring raw mortal flesh to slake their hunger.",
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Cults of the Blood Gods",
+    "topic": "Oblivion Ceremonies Level 1 to 5",
+    "category": "Rituals and Ceremonies",
+    "page": 206,
+    "pdfPage": 207,
+    "section": "Disciplines : Oblivion Ceremonies",
+    "summary": "Necromantic rites: The Mind Machine, Compel Spirit, Feast of Ashes, Shroud Mastery, Lazarene Blessing.",
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Cults of the Blood Gods",
+    "topic": "Promise of 1528",
+    "category": "Setting and Lore",
+    "page": 14,
+    "pdfPage": 15,
+    "section": "The Hecata : History",
+    "summary": "Historic treaty between the Venetian Giovanni and the Camarilla establishing mutual non:interference.",
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Cults of the Blood Gods",
+    "topic": "Samedi Bloodline",
+    "category": "Clans and Bloodlines",
+    "page": 40,
+    "pdfPage": 41,
+    "section": "The Hecata : Samedi",
+    "summary": "Corpse:faced necromancers steeped in Vodou, baron traditions, decay, and rot spirits.",
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Cults of the Blood Gods",
+    "topic": "The Bahari (Cult of Lilith)",
+    "category": "Setting and Lore",
+    "page": 122,
+    "pdfPage": 123,
+    "section": "Cults of the Methuselahs : The Bahari",
+    "summary": "Worshippers of the Dark Mother Lilith, enlightenment through sacred torment and botanical transmutations.",
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Camarilla",
+    "topic": "Banu Haqim Camarilla Integration",
+    "category": "Clans and Bloodlines",
+    "page": 92,
+    "pdfPage": 93,
+    "section": "The Ivory Tower : Banu Haqim",
+    "summary": "Assamite schismatics petitioning the Camarilla for membership following the Ur Shulgi awakening.",
+    "file": "Vampire-the-Masquerade-V5-Camarilla-2018.pdf"
+  },
+  {
+    "book": "Camarilla",
+    "topic": "Blood Sorcery Camarilla Rituals",
+    "category": "Rituals and Ceremonies",
+    "page": 168,
+    "pdfPage": 169,
+    "section": "Disciplines : Camarilla Rituals",
+    "summary": "Tremere and Banu Haqim civic and defense rituals: Truth of Blood, Cohesive Haven, Ward Against Spirits.",
+    "file": "Vampire-the-Masquerade-V5-Camarilla-2018.pdf"
+  },
+  {
+    "book": "Camarilla",
+    "topic": "Camarilla Loresheets",
+    "category": "Loresheets",
+    "page": 176,
+    "pdfPage": 177,
+    "section": "Character Options : Camarilla Loresheets",
+    "summary": "Inner Circle, Justicars, Archons, Descendants of Hardestadt and Rafael de Corazon, Ashirra Alliance.",
+    "file": "Vampire-the-Masquerade-V5-Camarilla-2018.pdf"
+  },
+  {
+    "book": "Camarilla",
+    "topic": "Court Officers and Structure",
+    "category": "Setting and Lore",
+    "page": 54,
+    "pdfPage": 55,
+    "section": "The Court : Titles and Hierarchy",
+    "summary": "Political offices: Prince, Seneschal, Primogen, Sheriff, Scourge, Keeper of Elysium, and Harpy.",
+    "file": "Vampire-the-Masquerade-V5-Camarilla-2018.pdf"
+  },
+  {
+    "book": "Camarilla",
+    "topic": "FIRSTLIGHT and Second Inquisition",
+    "category": "Setting and Lore",
+    "page": 112,
+    "pdfPage": 113,
+    "section": "The Second Inquisition : Operations",
+    "summary": "Global clandestine coalition of intelligence services executing digital purges and tactical strikes.",
+    "file": "Vampire-the-Masquerade-V5-Camarilla-2018.pdf"
+  },
+  {
+    "book": "Camarilla",
+    "topic": "The Ashirra Alliance",
+    "category": "Setting and Lore",
+    "page": 194,
+    "pdfPage": 195,
+    "section": "Loresheets : Ashirra Alliance",
+    "summary": "The historic treaty between the Camarilla and the Islamic Kindred domains of the Middle East.",
+    "file": "Vampire-the-Masquerade-V5-Camarilla-2018.pdf"
+  },
+  {
+    "book": "Camarilla",
+    "topic": "The Traditions of Caine",
+    "category": "Rules and Systems",
+    "page": 28,
+    "pdfPage": 29,
+    "section": "The Laws of the Ivory Tower",
+    "summary": "The six foundational laws: Masquerade, Domain, Progeny, Accounting, Hospitality, and Destruction.",
+    "file": "Vampire-the-Masquerade-V5-Camarilla-2018.pdf"
+  },
+  {
+    "book": "Anarch",
+    "topic": "Anarch Loresheets",
+    "category": "Loresheets",
+    "page": 176,
+    "pdfPage": 177,
+    "section": "Character Options : Anarch Loresheets",
+    "summary": "The Anarch Movement, Free State Revolutionary, The Ministry, Descendant of Tyler, Salvador Garcia.",
+    "file": "Anarch-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Anarch",
+    "topic": "Anarch Street Warfare and Tactics",
+    "category": "Rules and Systems",
+    "page": 92,
+    "pdfPage": 93,
+    "section": "The Spark : Guerrilla Tactics",
+    "summary": "Urban sabotage, subverting mortal protests, cellphone security, and hit and run sweeps against elders.",
+    "file": "Anarch-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Anarch",
+    "topic": "Baronies and Gang Structures",
+    "category": "Setting and Lore",
+    "page": 54,
+    "pdfPage": 55,
+    "section": "The Movement : Baronies",
+    "summary": "Autonomous Anarch domains governed by Barons, gang councils, commune consensus, and sweeps.",
+    "file": "Anarch-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Anarch",
+    "topic": "Free States and Independent Communes",
+    "category": "Setting and Lore",
+    "page": 32,
+    "pdfPage": 33,
+    "section": "The Free States : Autonomy",
+    "summary": "Egalitarian vampire territories rejecting Prince titles, feudal tithes, and Ivory Tower traditions.",
+    "file": "Anarch-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Anarch",
+    "topic": "Los Angeles Free State",
+    "category": "Setting and Lore",
+    "page": 138,
+    "pdfPage": 139,
+    "section": "Cities of the Free : Los Angeles",
+    "summary": "History and status of the California Free State following the historic revolt and modern power struggles.",
+    "file": "Anarch-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Anarch",
+    "topic": "The Ministry in the Anarchs",
+    "category": "Clans and Bloodlines",
+    "page": 74,
+    "pdfPage": 75,
+    "section": "The Movement : The Ministry",
+    "summary": "Followers of Set joining the Anarch revolution, selling liberation, narcotics, faith, and vice.",
+    "file": "Anarch-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Sabbat",
+    "topic": "Antitribu Clans in the Sabbat",
+    "category": "Clans and Bloodlines",
+    "page": 114,
+    "pdfPage": 115,
+    "section": "Burn Brightly : Antitribu",
+    "summary": "The anti:clans waging holy war against their treacherous Antediluvian sires and mortal pawns.",
+    "file": "Vampire-The-Masquerade-V5-Sabbat-The-Black-Hand-Definitive-Edition.pdf"
+  },
+  {
+    "book": "Sabbat",
+    "topic": "Gehenna War Frontlines",
+    "category": "Setting and Lore",
+    "page": 144,
+    "pdfPage": 145,
+    "section": "The Gehenna War : Active Fronts",
+    "summary": "Frontline crusade operations across the Middle East, Alamut, Russia, Mexico City, and South America.",
+    "file": "Vampire-The-Masquerade-V5-Sabbat-The-Black-Hand-Definitive-Edition.pdf"
+  },
+  {
+    "book": "Sabbat",
+    "topic": "Pack Patterns and Ductus Roles",
+    "category": "Setting and Lore",
+    "page": 60,
+    "pdfPage": 61,
+    "section": "Apostates of a Cruel Church : Packs",
+    "summary": "The monastic cell structure: Ductus, Pack Priest, war packs, scout packs, and shock troops.",
+    "file": "Vampire-The-Masquerade-V5-Sabbat-The-Black-Hand-Definitive-Edition.pdf"
+  },
+  {
+    "book": "Sabbat",
+    "topic": "Path of Caine",
+    "category": "Rules and Systems",
+    "page": 24,
+    "pdfPage": 25,
+    "section": "Paths of Enlightenment : Path of Caine",
+    "summary": "Theological code mastering the Beast through discipline, rejecting mortal morality, emulating the Dark Father.",
+    "file": "Vampire-The-Masquerade-V5-Sabbat-The-Black-Hand-Definitive-Edition.pdf"
+  },
+  {
+    "book": "Sabbat",
+    "topic": "Path of Cathari (Albigensians)",
+    "category": "Rules and Systems",
+    "page": 28,
+    "pdfPage": 29,
+    "section": "Paths of Enlightenment : Path of Cathari",
+    "summary": "Belief that the material world is evil and vampires are demonic heralds designed to gorge on corruption.",
+    "file": "Vampire-The-Masquerade-V5-Sabbat-The-Black-Hand-Definitive-Edition.pdf"
+  },
+  {
+    "book": "Sabbat",
+    "topic": "Path of Death and the Soul",
+    "category": "Rules and Systems",
+    "page": 30,
+    "pdfPage": 31,
+    "section": "Paths of Enlightenment : Path of Death",
+    "summary": "Cold clinical exploration of necrophysics, extinguishing compassion to study mortality and souls.",
+    "file": "Vampire-The-Masquerade-V5-Sabbat-The-Black-Hand-Definitive-Edition.pdf"
+  },
+  {
+    "book": "Sabbat",
+    "topic": "Path of Power and the Inner Voice",
+    "category": "Rules and Systems",
+    "page": 32,
+    "pdfPage": 33,
+    "section": "Paths of Enlightenment : Path of Power",
+    "summary": "Doctrine of pure conquest, ruthless will, domination, and personal apex supremacy.",
+    "file": "Vampire-The-Masquerade-V5-Sabbat-The-Black-Hand-Definitive-Edition.pdf"
+  },
+  {
+    "book": "Sabbat",
+    "topic": "Path of the Sun",
+    "category": "Rules and Systems",
+    "page": 34,
+    "pdfPage": 35,
+    "section": "Paths of Enlightenment : Path of the Sun",
+    "summary": "Apocalyptic Thin blood path believing they are holy harbingers sent to purge elder vampires.",
+    "file": "Vampire-The-Masquerade-V5-Sabbat-The-Black-Hand-Definitive-Edition.pdf"
+  },
+  {
+    "book": "Sabbat",
+    "topic": "Sabbat Loresheets",
+    "category": "Loresheets",
     "page": 212,
-    "pdfPage": 214,
-    "section": "Cults of the Blood Gods : Ghost Antagonists",
-    "summary": "Wraiths specialized in hostile physical possession, riding mortal or kindred vessels to experience physical sensation or enact vendettas."
+    "pdfPage": 213,
+    "section": "Character Options : Sabbat Loresheets",
+    "summary": "Loresheets for Black Hand zealots, Inquisition survivors, Sabbat defectors, and ancient crusade packs.",
+    "file": "Vampire-The-Masquerade-V5-Sabbat-The-Black-Hand-Definitive-Edition.pdf"
   },
   {
-    "topic": "Fetters and Ghost Mechanics",
-    "category": "Antagonists and Entities",
+    "book": "Sabbat",
+    "topic": "The Ritae and The Vaulderie",
+    "category": "Rituals and Ceremonies",
+    "page": 81,
+    "pdfPage": 82,
+    "section": "Apostates of a Cruel Church : Ritae",
+    "summary": "Sacred pack rites: The Vaulderie blood chalice shattering individual blood bonds to create the Vinculum.",
+    "file": "Vampire-The-Masquerade-V5-Sabbat-The-Black-Hand-Definitive-Edition.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Predator Types Compendium",
+    "category": "Character Options",
+    "page": 136,
+    "pdfPage": 138,
+    "section": "Character Options : Predator Types",
+    "summary": "Overview of all predator types: hunting pools, feeding disciplines, humanity impact, and bonus advantages.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Coterie Types and Domain Systems",
+    "category": "Rules and Systems",
+    "page": 182,
+    "pdfPage": 184,
+    "section": "Coteries : Building Groups",
+    "summary": "Coterie archetypes, shared advantage pools, collective flaws, Chasse, Lien, and Portillon ratings.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Cults of the Blood Gods",
+    "topic": "Mortuary Services and Feeding",
+    "category": "Rules and Systems",
+    "page": 98,
+    "pdfPage": 99,
+    "section": "The Business of Death : Feeding",
+    "summary": "Graverobber and Extortionist hunting mechanics: preying on mourners, body disposal, and funeral homes.",
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Camarilla",
+    "topic": "The Six Traditions of Caine",
+    "category": "Rules and Systems",
+    "page": 28,
+    "pdfPage": 29,
+    "section": "Laws of the Ivory Tower : Traditions",
+    "summary": "Masquerade, Domain, Progeny, Accounting, Hospitality, and Destruction: enforcement and Prince judgments.",
+    "file": "Vampire-the-Masquerade-V5-Camarilla-2018.pdf"
+  },
+  {
+    "book": "Camarilla",
+    "topic": "The First Tradition: The Masquerade",
+    "category": "Rules and Systems",
+    "page": 30,
+    "pdfPage": 31,
+    "section": "Laws of the Ivory Tower : The Masquerade",
+    "summary": "Thou shalt not reveal thy true nature to those not of the Blood. Doing so forfeits all claims to protection.",
+    "file": "Vampire-the-Masquerade-V5-Camarilla-2018.pdf"
+  },
+  {
+    "book": "Camarilla",
+    "topic": "The Second Tradition: The Domain",
+    "category": "Rules and Systems",
+    "page": 34,
+    "pdfPage": 35,
+    "section": "Laws of the Ivory Tower : The Domain",
+    "summary": "Thy domain is thine own concern. All others owe thee respect while in it. None may challenge thy word in thy domain.",
+    "file": "Vampire-the-Masquerade-V5-Camarilla-2018.pdf"
+  },
+  {
+    "book": "Camarilla",
+    "topic": "The Third Tradition: The Progeny",
+    "category": "Rules and Systems",
+    "page": 38,
+    "pdfPage": 39,
+    "section": "Laws of the Ivory Tower : The Progeny",
+    "summary": "Thou shalt only sire another with permission of thine Elder. If thou createst another without leave, both shall be slain.",
+    "file": "Vampire-the-Masquerade-V5-Camarilla-2018.pdf"
+  },
+  {
+    "book": "Camarilla",
+    "topic": "The Fourth Tradition: The Accounting",
+    "category": "Rules and Systems",
+    "page": 42,
+    "pdfPage": 43,
+    "section": "Laws of the Ivory Tower : The Accounting",
+    "summary": "Those thou createst are thine own childer. Until released, their sins fall upon thy head and thou shalt answer for them.",
+    "file": "Vampire-the-Masquerade-V5-Camarilla-2018.pdf"
+  },
+  {
+    "book": "Camarilla",
+    "topic": "The Fifth Tradition: Hospitality",
+    "category": "Rules and Systems",
+    "page": 46,
+    "pdfPage": 47,
+    "section": "Laws of the Ivory Tower : Hospitality",
+    "summary": "Honor one anothers domain. When coming to a foreign city, present thyself unto him who ruleth there.",
+    "file": "Vampire-the-Masquerade-V5-Camarilla-2018.pdf"
+  },
+  {
+    "book": "Camarilla",
+    "topic": "The Sixth Tradition: Destruction",
+    "category": "Rules and Systems",
+    "page": 50,
+    "pdfPage": 51,
+    "section": "Laws of the Ivory Tower : Destruction",
+    "summary": "Thou art forbidden to destroy another of thy kind. The right of destruction belongeth only unto thine Elder or Prince.",
+    "file": "Vampire-the-Masquerade-V5-Camarilla-2018.pdf"
+  },
+  {
+    "book": "Camarilla",
+    "topic": "Camarilla Court Harpy and Boons",
+    "category": "Setting and Lore",
+    "page": 84,
+    "pdfPage": 85,
+    "section": "The Court : Harpys Role",
+    "summary": "Harpies track social standing, public mockery, scandals, debts, and the registration of trivial, minor, and major boons.",
+    "file": "Vampire-the-Masquerade-V5-Camarilla-2018.pdf"
+  },
+  {
+    "book": "Camarilla",
+    "topic": "Camarilla Sheriff and Scourge Enforcement",
+    "category": "Setting and Lore",
+    "page": 72,
+    "pdfPage": 73,
+    "section": "The Court : Enforcers",
+    "summary": "The Sheriff investigates violations and detains kindred. The Scourge patrols borders and destroys unsanctioned thin bloods.",
+    "file": "Vampire-the-Masquerade-V5-Camarilla-2018.pdf"
+  },
+  {
+    "book": "Camarilla",
+    "topic": "Second Inquisition Blankbody Tiers",
+    "category": "Setting and Lore",
+    "page": 128,
+    "pdfPage": 129,
+    "section": "The Second Inquisition : Threat Assessment",
+    "summary": "Inquisition threat levels for blankbodies, safe communication protocols, burn bags, counter surveillance, and kill squads.",
+    "file": "Vampire-the-Masquerade-V5-Camarilla-2018.pdf"
+  },
+  {
+    "book": "Cults of the Blood Gods",
+    "topic": "Extortionist Predator Type",
+    "category": "Predator Types",
+    "page": 98,
+    "pdfPage": 99,
+    "section": "The Business of Death : Predator Types",
+    "summary": "Coercing mortals into feeding arrangements through debt, blackmail, protection rackets, or institutional leverage.",
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Cults of the Blood Gods",
+    "topic": "Graverobber Predator Type",
+    "category": "Predator Types",
+    "page": 99,
+    "pdfPage": 100,
+    "section": "The Business of Death : Predator Types",
+    "summary": "Feeding on mourners at graveyards, mortuary personnel, autopsy tables, and fresh corpses before full coagulation.",
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Cults of the Blood Gods",
+    "topic": "Feeding on the Dead and Embalmed Vitae",
+    "category": "Rules and Systems",
+    "page": 202,
+    "pdfPage": 203,
+    "section": "Disciplines : Necromantic Feeding",
+    "summary": "Drinking blood from recently deceased corpses within minutes of death or treated with Oblivion sacraments to slake hunger.",
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Cults of the Blood Gods",
+    "topic": "The Shroud and Spirit Manifestations",
+    "category": "Rules and Systems",
     "page": 204,
-    "pdfPage": 206,
-    "section": "Cults of the Blood Gods : The Underworld",
-    "summary": "Objects, locations, or people anchoring a spirit to the living world. Destruction or resolution of fetters banishes the ghost."
+    "pdfPage": 205,
+    "section": "Disciplines : Oblivion and The Underworld",
+    "summary": "The membrane separating the living world from the Shadowlands, localized density, ghostly anchors, and spiritual hazards.",
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf"
   },
   {
-    "topic": "Lupines and Werewolves",
-    "category": "Antagonists and Entities",
-    "page": 376,
-    "pdfPage": 378,
-    "section": "Antagonists : Creatures of Horror",
-    "summary": "Lupines in Crinos battle form, unhalved aggravated claw damage, turn by turn regeneration, vulnerability to pure silver."
+    "book": "Anarch",
+    "topic": "Anarch Sweeps and Feeding Patrols",
+    "category": "Rules and Systems",
+    "page": 92,
+    "pdfPage": 93,
+    "section": "The Spark : Guerrilla Tactics",
+    "summary": "Roadside Killer hunting, highway ambushes, sweeping mortal territory, and evading Camarilla sheriffs.",
+    "file": "Anarch-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Anarch",
+    "topic": "Roadside Killer Predator Type",
+    "category": "Predator Types",
+    "page": 182,
+    "pdfPage": 183,
+    "section": "Character Options : Predator Types",
+    "summary": "Feeding on travelers, hitchhikers, truckers, and lone drivers along desolate highways and rest stops.",
+    "file": "Anarch-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Anarch",
+    "topic": "Anarch Cellphone and Digital Hygiene",
+    "category": "Rules and Systems",
+    "page": 110,
+    "pdfPage": 111,
+    "section": "The Spark : Operational Security",
+    "summary": "Strict communication discipline: burner phones, dead drops, encrypted mesh nets, and preventing Second Inquisition geo tracking.",
+    "file": "Anarch-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Anarch",
+    "topic": "Guerrilla Street Warfare and Urban Sabotage",
+    "category": "Rules and Systems",
+    "page": 96,
+    "pdfPage": 97,
+    "section": "The Spark : Street Tactics",
+    "summary": "Coordinating flash mobs, cutting municipal power grids, molotov ambushes against elders havens, and rapid redeployment.",
+    "file": "Anarch-Vampire-the-Masquerade-5th-Edition.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Advanced Modular Combat Systems",
+    "category": "Rules and Systems",
+    "page": 170,
+    "pdfPage": 172,
+    "section": "Alternative Systems : Combat Options",
+    "summary": "Optional tactical combat rules: flanking, cover, called shots, weapon modifications, and environmental hazards.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Players Guide",
+    "topic": "Convictions and Touchstones Variants",
+    "category": "Rules and Systems",
+    "page": 162,
+    "pdfPage": 164,
+    "section": "Alternative Systems : Morality",
+    "summary": "Alternative conviction pairings, philosophical touchstones, institutional touchstones, and chronicling remorse.",
+    "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+  },
+  {
+    "book": "Corebook",
+    "topic": "Hunting Difficulty and Domain Chasse",
+    "category": "Rules and Systems",
+    "page": 221,
+    "pdfPage": 223,
+    "section": "Vampires at Play : Hunting in Domain",
+    "summary": "Baseline hunting tests vs Difficulty determined by domain Chasse, mortal population density, and police presence.",
+    "file": "Vampire-the-Masquerade-1.pdf"
   }
 ]

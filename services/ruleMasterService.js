@@ -78,6 +78,15 @@ const CANDIDATE_MODELS = [
   'gemini-3.8-flash',
 ];
 
+const BOOK_FILE_MAP = {
+  'Corebook': 'Vampire-the-Masquerade-1.pdf',
+  'Players Guide': 'Vampire-The-Masquerade-V5-Players-Guide.pdf',
+  'Cults of the Blood Gods': 'Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf',
+  'Camarilla': 'Vampire-the-Masquerade-V5-Camarilla-2018.pdf',
+  'Anarch': 'Anarch-Vampire-the-Masquerade-5th-Edition.pdf',
+  'Sabbat': 'Vampire-The-Masquerade-V5-Sabbat-The-Black-Hand-Definitive-Edition.pdf'
+};
+
 const STOP_WORDS = new Set([
   'the', 'is', 'at', 'which', 'on', 'and', 'a', 'an', 'in', 'of', 'to', 'for', 'with',
   'what', 'how', 'does', 'can', 'are', 'about', 'rules', 'rule', 'vampire', 'v5', 'tell', 'me'
@@ -201,7 +210,7 @@ function retrieveGroundedContext(query) {
     }
   }
 
-  // 3. Check Corebook Subject Index
+  // 3. Check Subject Index (All Books: Corebook, Players Guide, Cults, Camarilla, Anarch, Sabbat)
   if (subjectIndex && subjectIndex.length) {
     const scored = subjectIndex.map(item => {
       let score = 0;
@@ -218,14 +227,113 @@ function retrieveGroundedContext(query) {
     }).filter(x => x.score > 0).sort((a, b) => b.score - a.score);
 
     for (const { item } of scored.slice(0, 5)) {
-      matchedSnippets.push(`Topic: ${item.topic} (Section: ${item.section}). Book: Corebook, Print Page ${item.page} (PDF Page ${item.pdfPage}). Summary: ${item.summary}`);
+      const bookName = item.book || 'Corebook';
+      const fileName = item.file || BOOK_FILE_MAP[bookName] || 'Vampire-the-Masquerade-1.pdf';
+      matchedSnippets.push(`Topic: ${item.topic} (Section: ${item.section}). Book: ${bookName}, Print Page ${item.page} (PDF Page ${item.pdfPage}). Summary: ${item.summary}`);
       matchedCitations.push({
         title: item.topic,
-        book: 'Corebook',
+        book: bookName,
         page: item.page,
         pdfPage: item.pdfPage,
-        file: 'Vampire-the-Masquerade-1.pdf'
+        file: fileName
       });
+    }
+  }
+
+  // 4. Check Advantages, Backgrounds, Merits, and Flaws in rulesCatalog
+  if (rulesCatalog.advantages) {
+    for (const [advId, adv] of Object.entries(rulesCatalog.advantages)) {
+      const advNameLower = adv.name.toLowerCase();
+      const advCatLower = (adv.category || '').toLowerCase();
+      const isExactMatch = lowerQuery.includes(advNameLower) || tokens.some(t => advNameLower === t);
+      const isKeywordMatch = tokens.some(t => advNameLower.includes(t) || advCatLower.includes(t));
+
+      if (isExactMatch || isKeywordMatch) {
+        let details = `${adv.type || 'Advantage'} [${adv.name}] (${adv.category || 'General'}): Dots: ${adv.dots || 'Variable'}.`;
+        if (adv.description) {
+          details += ` Mechanics: ${adv.description}`;
+        }
+        if (adv.source || adv.book) {
+          const book = adv.book || 'Corebook';
+          const page = adv.page || 184;
+          const pdfPage = adv.pdfPage || (page + 2);
+          details += ` Source: ${adv.source || `${book}, p. ${page}`}`;
+          matchedCitations.push({
+            title: `${adv.name} (${adv.category || adv.type || 'Advantage'})`,
+            book: book,
+            page: page,
+            pdfPage: pdfPage,
+            file: BOOK_FILE_MAP[book] || 'Vampire-the-Masquerade-1.pdf'
+          });
+        }
+        if (isExactMatch) {
+          matchedSnippets.unshift(details);
+        } else {
+          matchedSnippets.push(details);
+        }
+      }
+    }
+  }
+
+  // 5. Check Predator Types in rulesCatalog
+  if (rulesCatalog.predatorTypes) {
+    for (const [ptKey, pt] of Object.entries(rulesCatalog.predatorTypes)) {
+      const ptNameLower = pt.name.toLowerCase();
+      const ptMatches = tokens.some(t => ptNameLower.includes(t)) || lowerQuery.includes(ptNameLower);
+      if (ptMatches) {
+        let details = `Predator Type [${pt.name}]: Book ${pt.book}, Print Page ${pt.page} (PDF Page ${pt.pdfPage}). Hunting Rolls: ${pt.rolls || 'None'}. Disciplines: ${pt.disciplines?.join(', ') || 'None'}. Specialties: ${pt.specialties?.join(', ') || 'None'}. ${pt.desc || ''}`;
+        matchedSnippets.unshift(details);
+        matchedCitations.unshift({
+          title: `${pt.name} (Predator Type)`,
+          book: pt.book,
+          page: pt.page,
+          pdfPage: pt.pdfPage,
+          file: pt.file || BOOK_FILE_MAP[pt.book] || 'Vampire-the-Masquerade-1.pdf'
+        });
+      }
+    }
+  }
+
+  // 6. Check Coteries in rulesCatalog
+  if (rulesCatalog.coteries) {
+    for (const [cotName, cot] of Object.entries(rulesCatalog.coteries)) {
+      const cotLower = cotName.toLowerCase();
+      const cotMatches = tokens.some(t => cotLower.includes(t)) || lowerQuery.includes(cotLower);
+      if (cotMatches) {
+        const domainStr = cot.domain ? Object.entries(cot.domain).map(([k, v]) => `${k}: ${v}`).join(', ') : 'None';
+        const reqStr = cot.required ? Object.entries(cot.required).map(([k, v]) => `${k} ${v}`).join(', ') : 'None';
+        let details = `Coterie Type [${cot.name}]: Book ${cot.book}, Print Page ${cot.page} (PDF Page ${cot.pdfPage}). Domain: ${domainStr}. Required: ${reqStr}. Notes: ${cot.notes || ''}`;
+        matchedSnippets.push(details);
+        matchedCitations.push({
+          title: `${cot.name} (Coterie)`,
+          book: cot.book,
+          page: cot.page,
+          pdfPage: cot.pdfPage,
+          file: BOOK_FILE_MAP[cot.book] || 'Vampire-the-Masquerade-1.pdf'
+        });
+      }
+    }
+  }
+
+  // 7. Check Alternative Clan Banes & Compulsions in rulesCatalog
+  if (rulesCatalog.alternativeClanBanes) {
+    for (const [clanName, baneData] of Object.entries(rulesCatalog.alternativeClanBanes)) {
+      const clanLower = clanName.toLowerCase();
+      const baneLower = (baneData.baneName || '').toLowerCase();
+      const compLower = (baneData.compulsionName || '').toLowerCase();
+      const matches = tokens.some(t => clanLower.includes(t) || baneLower.includes(t) || compLower.includes(t)) ||
+                      (lowerQuery.includes('bane') && lowerQuery.includes(clanLower));
+      if (matches) {
+        let details = `Alternative Bane and Compulsion [${clanName}]: Book ${baneData.book}, Print Page ${baneData.page} (PDF Page ${baneData.pdfPage}). Variant Bane (${baneData.baneName}): ${baneData.bane}. Variant Compulsion (${baneData.compulsionName}): ${baneData.compulsion}.`;
+        matchedSnippets.unshift(details);
+        matchedCitations.unshift({
+          title: `${clanName} Variant Bane`,
+          book: baneData.book,
+          page: baneData.page,
+          pdfPage: baneData.pdfPage,
+          file: BOOK_FILE_MAP[baneData.book] || 'Vampire-The-Masquerade-V5-Players-Guide.pdf'
+        });
+      }
     }
   }
 
@@ -491,20 +599,75 @@ Output JSON only:`;
     }
   }
 
-  // 3. Search subject index
+  // 3. Search subject index (All Books: Corebook, Players Guide, Cults, Camarilla, Anarch, Sabbat)
   if (subjectIndex) {
     for (const item of subjectIndex) {
       const topLower = item.topic.toLowerCase();
       const sumLower = (item.summary || '').toLowerCase();
       const matches = Array.from(keywords).some(k => topLower.includes(k.toLowerCase()) || sumLower.includes(k.toLowerCase()));
       if (matches) {
-        evidenceSnippets.push(`[INDEX: ${item.topic}] Section: ${item.section}. Book: Corebook p. ${item.page} (PDF p. ${item.pdfPage}). Summary: "${item.summary}"`);
+        const bookName = item.book || 'Corebook';
+        const fileName = item.file || BOOK_FILE_MAP[bookName] || 'Vampire-the-Masquerade-1.pdf';
+        evidenceSnippets.push(`[INDEX: ${item.topic}] Section: ${item.section}. Book: ${bookName} p. ${item.page} (PDF p. ${item.pdfPage}). Summary: "${item.summary}"`);
         deepCitations.push({
           title: item.topic,
-          book: 'Corebook',
+          book: bookName,
           page: item.page,
           pdfPage: item.pdfPage,
-          file: 'Vampire-the-Masquerade-1.pdf'
+          file: fileName
+        });
+      }
+    }
+  }
+
+  // 3b. Search Predator Types in rulesCatalog
+  if (rulesCatalog.predatorTypes) {
+    for (const [ptKey, pt] of Object.entries(rulesCatalog.predatorTypes)) {
+      const ptNameLower = pt.name.toLowerCase();
+      if (Array.from(keywords).some(k => ptNameLower.includes(k.toLowerCase())) || trimmedQuestion.toLowerCase().includes(ptNameLower)) {
+        evidenceSnippets.push(`[PREDATOR TYPE: ${pt.name}] Book: ${pt.book} p. ${pt.page} (PDF p. ${pt.pdfPage}). Hunting Rolls: ${pt.rolls}. Disciplines: ${pt.disciplines?.join(', ')}. Specialties: ${pt.specialties?.join(', ')}. Details: ${pt.desc}`);
+        deepCitations.push({
+          title: `${pt.name} (Predator Type)`,
+          book: pt.book,
+          page: pt.page,
+          pdfPage: pt.pdfPage,
+          file: pt.file || BOOK_FILE_MAP[pt.book] || 'Vampire-the-Masquerade-1.pdf'
+        });
+      }
+    }
+  }
+
+  // 3c. Search Alternative Clan Banes & Compulsions
+  if (rulesCatalog.alternativeClanBanes) {
+    for (const [clanName, baneData] of Object.entries(rulesCatalog.alternativeClanBanes)) {
+      const clanLower = clanName.toLowerCase();
+      const baneLower = (baneData.baneName || '').toLowerCase();
+      if (Array.from(keywords).some(k => clanLower.includes(k.toLowerCase()) || baneLower.includes(k.toLowerCase()))) {
+        evidenceSnippets.push(`[VARIANT BANE: ${clanName}] Book: ${baneData.book} p. ${baneData.page} (PDF p. ${baneData.pdfPage}). Alternative Bane (${baneData.baneName}): ${baneData.bane}. Alternative Compulsion (${baneData.compulsionName}): ${baneData.compulsion}.`);
+        deepCitations.push({
+          title: `${clanName} Variant Bane`,
+          book: baneData.book,
+          page: baneData.page,
+          pdfPage: baneData.pdfPage,
+          file: BOOK_FILE_MAP[baneData.book] || 'Vampire-The-Masquerade-V5-Players-Guide.pdf'
+        });
+      }
+    }
+  }
+
+  // 3d. Search Coteries in rulesCatalog
+  if (rulesCatalog.coteries) {
+    for (const [cotName, cot] of Object.entries(rulesCatalog.coteries)) {
+      const cotLower = cotName.toLowerCase();
+      if (Array.from(keywords).some(k => cotLower.includes(k.toLowerCase()))) {
+        const domainStr = cot.domain ? Object.entries(cot.domain).map(([k, v]) => `${k}: ${v}`).join(', ') : 'None';
+        evidenceSnippets.push(`[COTERIE TYPE: ${cot.name}] Book: ${cot.book} p. ${cot.page} (PDF p. ${cot.pdfPage}). Domain: ${domainStr}. Required: ${JSON.stringify(cot.required || {})}. Notes: ${cot.notes || ''}`);
+        deepCitations.push({
+          title: `${cot.name} (Coterie)`,
+          book: cot.book,
+          page: cot.page,
+          pdfPage: cot.pdfPage,
+          file: BOOK_FILE_MAP[cot.book] || 'Vampire-the-Masquerade-1.pdf'
         });
       }
     }

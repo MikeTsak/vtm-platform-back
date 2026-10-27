@@ -53,8 +53,8 @@ function allowedDots(dotsText) {
   const count = (s) => (s.match(/•/g) || []).length;
   if (/thin-blood/i.test(text)) return [1, 2, 3, 4, 5];
   if (text.includes('+')) { const lo = count(text) || 1; return Array.from({ length: 6 - lo }, (_, i) => lo + i); }
-  if (text.includes('-')) {
-    const [a, b] = text.split('-').map(count);
+  if (text.includes('-') || /\bto\b/i.test(text)) {
+    const [a, b] = text.split(/\s*(?:-|\bto\b)\s*/i).map(count);
     return Array.from({ length: Math.max(0, b - a + 1) }, (_, i) => a + i);
   }
   return text.split(/\bor\b/).map(count).filter(Boolean);
