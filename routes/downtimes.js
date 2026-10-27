@@ -35,7 +35,21 @@ function compareSceneIds(a, b) {
 }
 
 module.exports = async function (fastify, opts) {
-  const { pool, log, authRequired, requireAdmin, broadcastNtfyAlert } = opts;
+  const { pool, log, authRequired, requireAdmin, imageClient, sharp, uploadLimiter, broadcastNtfyAlert } = opts;
+
+  function formatResolutionImages(row) {
+    if (Array.isArray(row.resolution_images)) return row.resolution_images;
+    if (typeof row.resolution_images === 'string') {
+      try {
+        const parsed = JSON.parse(row.resolution_images);
+        if (Array.isArray(parsed)) return parsed;
+      } catch (_) {}
+    }
+    if (row.resolution_image_url) {
+      return [{ url: row.resolution_image_url, name: row.resolution_image_name || 'Resolution Attachment' }];
+    }
+    return [];
+  }
 
   /* -------------------- Downtimes -------------------- */
   // My quota this cycle
@@ -286,6 +300,11 @@ module.exports = async function (fastify, opts) {
         r.gm_resolution = null;
         r.gm_notes = null;
         r.resolved_by_name = null;
+        r.resolution_image_url = null;
+        r.resolution_image_name = null;
+        r.resolution_images = [];
+      } else {
+        r.resolution_images = formatResolutionImages(r);
       }
 
       if (r.status && r.status.toLowerCase().startsWith('approved')) {
@@ -402,12 +421,74 @@ module.exports = async function (fastify, opts) {
        WHERE role = 'admin' 
        ORDER BY display_name ASC`
     );
+    rows.forEach(r => {
+      r.resolution_images = formatResolutionImages(r);
+    });
     log.adm('Admin downtimes list', { count: rows.length });
     reply.send({ downtimes: rows, admins: adminRows });
   });
 
+  // POST /api/admin/downtimes/upload-image: Upload image via Mike's PHP image service
+  fastify.post('/api/admin/downtimes/upload-image', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      if (!imageClient || typeof imageClient.uploadImage !== 'function') {
+        log.err('Image client not configured for downtime upload');
+        return reply.status(500).send({ error: 'Image service not configured' });
+      }
+
+      const file = await req.file();
+      if (!file) return reply.status(400).send({ error: 'File is required' });
+      if (!(file.mimetype || '').startsWith('image/')) {
+        return reply.status(400).send({ error: 'Only image files can be attached' });
+      }
+
+      const rawBuffer = await file.toBuffer();
+      if (file.file?.truncated || rawBuffer.length > 20 * 1024 * 1024) {
+        return reply.status(400).send({ error: 'Image too large (max 20MB)' });
+      }
+
+      let buffer = rawBuffer;
+      let ext = (file.filename || '').split('.').pop().toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
+
+      if (sharp) {
+        try {
+          await sharp(rawBuffer).metadata();
+        } catch {
+          return reply.status(400).send({ error: 'File is not a valid image' });
+        }
+      }
+
+      const uploadFilename = `downtime_resolution_${Date.now()}.${ext}`;
+      const result = await imageClient.uploadImage(buffer, uploadFilename);
+      if (!result?.success) {
+        throw new Error(result?.error || 'CDN upload failed');
+      }
+
+      const originalName = (file.filename || `resolution_${Date.now()}.${ext}`).trim();
+      log.adm('Downtime resolution image uploaded', { admin_id: req.user.id, url: result.url, filename: originalName });
+      reply.send({
+        success: true,
+        url: result.url,
+        name: originalName,
+      });
+    } catch (e) {
+      log.err('Downtime resolution image upload failed', { message: e.message });
+      reply.status(500).send({ error: e.message || 'Failed to upload image' });
+    }
+  });
+
   fastify.patch('/api/admin/downtimes/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
-    const { status, gm_notes, gm_resolution, scene_id, scene_title, resolved_by } = req.body;
+    const {
+      status,
+      gm_notes,
+      gm_resolution,
+      scene_id,
+      scene_title,
+      resolved_by,
+      resolution_image_url,
+      resolution_image_name,
+      resolution_images,
+    } = req.body;
     const allowed = [
       'submitted',
       'approved',
@@ -441,6 +522,39 @@ module.exports = async function (fastify, opts) {
     if (typeof gm_resolution === 'string') { fields.push('gm_resolution=?'); vals.push(gm_resolution); }
     if (scene_id !== undefined) { fields.push('scene_id=?'); vals.push(scene_id || null); }
     if (scene_title !== undefined) { fields.push('scene_title=?'); vals.push(scene_title || null); }
+
+    if (resolution_images !== undefined) {
+      let list = [];
+      if (Array.isArray(resolution_images)) {
+        list = resolution_images;
+      } else if (typeof resolution_images === 'string') {
+        try {
+          const parsed = JSON.parse(resolution_images);
+          if (Array.isArray(parsed)) list = parsed;
+        } catch (_) {}
+      }
+      const jsonStr = list.length > 0 ? JSON.stringify(list) : null;
+      fields.push('resolution_images=?');
+      vals.push(jsonStr);
+
+      if (resolution_image_url === undefined) {
+        fields.push('resolution_image_url=?');
+        vals.push(list[0]?.url || null);
+      }
+      if (resolution_image_name === undefined) {
+        fields.push('resolution_image_name=?');
+        vals.push(list[0]?.name || null);
+      }
+    }
+
+    if (resolution_image_url !== undefined) {
+      fields.push('resolution_image_url=?');
+      vals.push(resolution_image_url || null);
+    }
+    if (resolution_image_name !== undefined) {
+      fields.push('resolution_image_name=?');
+      vals.push(resolution_image_name || null);
+    }
 
     // auto-set resolved_at and resolved_by when marking resolved
     const isNowResolved = normalizedStatus && FINAL_STATUSES.includes(normalizedStatus.toLowerCase());
@@ -488,6 +602,7 @@ module.exports = async function (fastify, opts) {
        WHERE d.id = ?`,
       [req.params.id]
     );
+    rows[0].resolution_images = formatResolutionImages(rows[0]);
     log.adm('Downtime updated', { id: req.params.id, admin_id: req.user.id, fields });
     reply.send({ downtime: rows[0] });
 

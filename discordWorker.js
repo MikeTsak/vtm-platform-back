@@ -30,7 +30,8 @@ if (process.env.DISCORD_BOT_TOKEN) {
       GatewayIntentBits.Guilds, 
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
-      GatewayIntentBits.GuildVoiceStates
+      GatewayIntentBits.GuildVoiceStates,
+      GatewayIntentBits.GuildMessageReactions
     ],
     ws: { compress: false },
     rest: { timeout: 15000 },
@@ -513,6 +514,13 @@ if (commandText === 'whoami') {
       }
     });
 
+    return;
+  }
+
+  // --- &random reaction Command ---
+  if (message.content.trim().toLowerCase().startsWith('&random reaction') || 
+      message.content.trim().toLowerCase().startsWith('&random reactions')) {
+    await handleRandomReactionCommand(message, discordClient);
     return;
   }
 
@@ -1164,8 +1172,265 @@ module.exports = {
   resolveMemeImages,
   estimateGifProcessingSeconds,
   GifMemeQueue,
-  gifMemeQueue
+  gifMemeQueue,
+  parseRandomReactionArgs,
+  pickRandomWinners,
+  getParticipantDisplayName,
+  formatRandomReactionResult,
+  handleRandomReactionCommand
 };
+
+// --- &random reaction Command Logic ---
+
+/**
+ * Parses arguments for the &random reaction command.
+ * Supports:
+ * - Full Discord message URL: https://discord.com/channels/<guildId>/<channelId>/<messageId>
+ * - Raw Discord snowflake message ID (17-20 digits) or mock ID
+ * - Reply reference (if command is issued replying to a message)
+ * - Winner count: numeric count, defaults to 1 if omitted
+ * - Count can appear before or after the link/ID
+ */
+function parseRandomReactionArgs(content, reference = null) {
+  if (!content || typeof content !== 'string') return null;
+  const match = content.trim().match(/^&random\s+reactions?\b/i);
+  if (!match) return null;
+
+  const rest = content.trim().slice(match[0].length).trim();
+  let channelId = null;
+  let messageId = null;
+  let winnerCount = null;
+
+  const urlRegex = /https?:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/(\d+)/i;
+  const urlMatch = rest.match(urlRegex);
+
+  if (urlMatch) {
+    channelId = urlMatch[2];
+    messageId = urlMatch[3];
+    const textWithoutUrl = rest.replace(urlMatch[0], '').trim();
+    const countMatch = textWithoutUrl.match(/\b\d+\b/);
+    if (countMatch) {
+      winnerCount = parseInt(countMatch[0], 10);
+    }
+  } else {
+    const tokens = rest.split(/\s+/).filter(Boolean);
+    if (tokens.length >= 2) {
+      const firstIsSmallNumber = /^\d{1,4}$/.test(tokens[0]);
+      const secondIsSmallNumber = /^\d{1,4}$/.test(tokens[1]);
+      if (firstIsSmallNumber && !secondIsSmallNumber) {
+        winnerCount = parseInt(tokens[0], 10);
+        messageId = tokens[1];
+      } else if (!firstIsSmallNumber && secondIsSmallNumber) {
+        messageId = tokens[0];
+        winnerCount = parseInt(tokens[1], 10);
+      } else {
+        if (tokens[0].length > tokens[1].length) {
+          messageId = tokens[0];
+          winnerCount = parseInt(tokens[1], 10);
+        } else {
+          winnerCount = parseInt(tokens[0], 10);
+          messageId = tokens[1];
+        }
+      }
+    } else if (tokens.length === 1) {
+      if (tokens[0].length > 6 || !reference?.messageId) {
+        messageId = tokens[0];
+      } else {
+        winnerCount = parseInt(tokens[0], 10);
+        messageId = reference.messageId;
+        channelId = reference.channelId || null;
+      }
+    } else if (reference?.messageId) {
+      messageId = reference.messageId;
+      channelId = reference.channelId || null;
+    }
+  }
+
+  if (!messageId && reference?.messageId) {
+    messageId = reference.messageId;
+    channelId = reference.channelId || channelId;
+  }
+
+  const parsedCount = (typeof winnerCount === 'number' && !isNaN(winnerCount) && winnerCount > 0)
+    ? Math.min(winnerCount, 100)
+    : 1;
+
+  return {
+    isCommand: true,
+    messageId,
+    channelId,
+    winnerCount: parsedCount
+  };
+}
+
+/**
+ * Unbiased random selection without replacement using Fisher-Yates shuffle.
+ */
+function pickRandomWinners(participants, count = 1) {
+  if (!Array.isArray(participants) || participants.length === 0) return [];
+  const pool = [...participants];
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  const takeCount = Math.max(1, Math.min(count, pool.length));
+  return pool.slice(0, takeCount);
+}
+
+function getParticipantDisplayName(user, guild = null) {
+  if (!user) return 'Unknown';
+  const member = guild?.members?.cache?.get ? guild.members.cache.get(user.id) : null;
+  return member?.displayName || user.displayName || user.globalName || user.username || 'Unknown';
+}
+
+function formatRandomReactionResult(winners, participants, guild = null) {
+  if (!winners || winners.length === 0) {
+    return 'No winners could be selected.';
+  }
+
+  const isMultiple = winners.length > 1;
+  const header = isMultiple
+    ? 'Congratulations! The winners of this random draw are:'
+    : 'Congratulations! The winner of this random draw is:';
+
+  const lines = [header];
+  winners.forEach((w, idx) => {
+    lines.push(`${idx + 1}: <@${w.id}>`);
+  });
+
+  lines.push('');
+  lines.push(`Participants (${participants.length}):`);
+
+  let currentLength = lines.join('\n').length;
+  for (let i = 0; i < participants.length; i++) {
+    const p = participants[i];
+    const name = getParticipantDisplayName(p, guild);
+    const line = `${i + 1}: ${name}`;
+    if (currentLength + line.length + 35 > 1900) {
+      const remaining = participants.length - i;
+      lines.push(`... plus ${remaining} more participants`);
+      break;
+    }
+    lines.push(line);
+    currentLength += line.length + 1;
+  }
+
+  return lines.join('\n');
+}
+
+async function handleRandomReactionCommand(message, client) {
+  const parsed = parseRandomReactionArgs(message.content, message.reference);
+  if (!parsed || !parsed.isCommand) return false;
+
+  if (!parsed.messageId) {
+    await message.reply({
+      content: 'Please specify a Discord message link or message ID, and optionally the winner count.\nExample: `&random reaction https://discord.com/channels/.../... 2`',
+      allowedMentions: { repliedUser: true }
+    });
+    return true;
+  }
+
+  if (message.channel && typeof message.channel.sendTyping === 'function') {
+    await message.channel.sendTyping().catch(() => {});
+  }
+
+  let targetChannel = message.channel;
+  if (parsed.channelId && parsed.channelId !== message.channel?.id) {
+    targetChannel = client?.channels ? await client.channels.fetch(parsed.channelId).catch(() => null) : null;
+  }
+
+  if (!targetChannel || !targetChannel.messages) {
+    await message.reply({
+      content: 'Could not access the specified channel. Please ensure the link is valid and the bot has channel permissions.',
+      allowedMentions: { repliedUser: true }
+    });
+    return true;
+  }
+
+  let targetMessage = await targetChannel.messages.fetch(parsed.messageId).catch(() => null);
+
+  if (!targetMessage && !parsed.channelId && message.guild?.channels?.cache) {
+    for (const [, ch] of message.guild.channels.cache) {
+      if (ch.isTextBased && ch.isTextBased() && ch.id !== message.channel.id && (ch.viewable === undefined || ch.viewable)) {
+        try {
+          const found = await ch.messages.fetch(parsed.messageId);
+          if (found) {
+            targetMessage = found;
+            targetChannel = ch;
+            break;
+          }
+        } catch (_) {}
+      }
+    }
+  }
+
+  if (!targetMessage) {
+    await message.reply({
+      content: 'Could not find that message. Please verify the message ID or use the full message link.',
+      allowedMentions: { repliedUser: true }
+    });
+    return true;
+  }
+
+  const reactionsCache = targetMessage.reactions?.cache;
+  if (!reactionsCache || reactionsCache.size === 0) {
+    await message.reply({
+      content: 'No reactions found on that message.',
+      allowedMentions: { repliedUser: true }
+    });
+    return true;
+  }
+
+  const participantMap = new Map();
+
+  for (const reaction of reactionsCache.values()) {
+    let lastId = null;
+    while (true) {
+      const options = { limit: 100 };
+      if (lastId) options.after = lastId;
+      let batch = null;
+      try {
+        batch = await reaction.users.fetch(options);
+      } catch (err) {
+        log.err('Failed to fetch reaction users', { error: err.message });
+        break;
+      }
+      if (!batch || batch.size === 0) break;
+      for (const [id, user] of batch) {
+        if (!user.bot && !participantMap.has(id)) {
+          participantMap.set(id, user);
+        }
+      }
+      const lastKey = typeof batch.lastKey === 'function' ? batch.lastKey() : Array.from(batch.keys()).pop();
+      lastId = lastKey || null;
+      if (batch.size < 100) break;
+    }
+  }
+
+  if (participantMap.size === 0) {
+    await message.reply({
+      content: 'No eligible participants found among the reactions.',
+      allowedMentions: { repliedUser: true }
+    });
+    return true;
+  }
+
+  const participants = Array.from(participantMap.values());
+  const winners = pickRandomWinners(participants, parsed.winnerCount);
+  const resultText = formatRandomReactionResult(winners, participants, targetMessage.guild || message.guild);
+
+  await message.reply({
+    content: resultText,
+    allowedMentions: {
+      users: winners.map(w => w.id),
+      roles: false,
+      everyone: false,
+      repliedUser: true
+    }
+  });
+
+  return true;
+}
 
 
 

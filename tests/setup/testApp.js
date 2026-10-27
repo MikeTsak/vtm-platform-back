@@ -12,6 +12,7 @@
 require('./env');
 const fastify = require('fastify');
 const fastifyCookie = require('@fastify/cookie');
+const fastifyMultipart = require('@fastify/multipart');
 const { authRequired, optionalAuth, requireAdmin } = require('../../authMiddleware.fastify');
 const { validateRetainerSheet } = require('../../utils/retainerValidation');
 
@@ -76,6 +77,7 @@ function buildTestApp(pool) {
   };
 
   app.register(fastifyCookie);
+  app.register(fastifyMultipart, { limits: { fileSize: 500 * 1024 * 1024 } });
   // routes/auth.js calls fastify.db.query(...) rather than the pool passed in
   // opts (matches how it's decorated in the real server.fastify.js).
   app.decorate('db', pool);
@@ -136,7 +138,21 @@ function buildTestApp(pool) {
     authRequired,
   });
 
-  app.register(require('../../routes/downtimes'), { pool, log: testLog, authRequired, requireAdmin, broadcastNtfyAlert: noop });
+  app.register(require('../../routes/downtimes'), {
+    pool,
+    log: testLog,
+    authRequired,
+    requireAdmin,
+    broadcastNtfyAlert: noop,
+    imageClient: {
+      uploadImage: async (buf, filename) => ({
+        success: true,
+        url: `https://img.miketsak.gr/${filename || 'downtime_test.webp'}`,
+        filename: filename || 'downtime_test.webp',
+      }),
+    },
+    sharp: null,
+  });
   app.register(require('../../routes/xp'), { pool, log: testLog, authRequired, requireAdmin });
   app.register(require('../../routes/adminCharacters'), { pool, log: testLog, authRequired, requireAdmin });
   app.register(require('../../routes/npcs'), { pool, log: testLog, authRequired, requireAdmin });
