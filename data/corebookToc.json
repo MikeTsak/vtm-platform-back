@@ -1,0 +1,968 @@
+[
+  {
+    "level": 1,
+    "title": "concepts",
+    "page": 33,
+    "pdfPage": 35
+  },
+  {
+    "level": 2,
+    "title": "Roleplaying and Storytelling",
+    "page": 40,
+    "pdfPage": 42
+  },
+  {
+    "level": 1,
+    "title": "kindred",
+    "page": 47,
+    "pdfPage": 49
+  },
+  {
+    "level": 2,
+    "title": "Ancient andContemporary Outlooks",
+    "page": 47,
+    "pdfPage": 49
+  },
+  {
+    "level": 1,
+    "title": "Jyhad",
+    "page": 48,
+    "pdfPage": 50
+  },
+  {
+    "level": 2,
+    "title": "The Camarilla",
+    "page": 49,
+    "pdfPage": 51
+  },
+  {
+    "level": 2,
+    "title": "The Autarkis",
+    "page": 56,
+    "pdfPage": 58
+  },
+  {
+    "level": 2,
+    "title": "Endings and Beginnings",
+    "page": 56,
+    "pdfPage": 58
+  },
+  {
+    "level": 1,
+    "title": "clans",
+    "page": 63,
+    "pdfPage": 65
+  },
+  {
+    "level": 2,
+    "title": "Who are the Brujah?",
+    "page": 65,
+    "pdfPage": 67
+  },
+  {
+    "level": 3,
+    "title": "Disciplines",
+    "page": 67,
+    "pdfPage": 69
+  },
+  {
+    "level": 3,
+    "title": "Bane",
+    "page": 67,
+    "pdfPage": 69
+  },
+  {
+    "level": 3,
+    "title": "Who are the Gangrel?",
+    "page": 70,
+    "pdfPage": 72
+  },
+  {
+    "level": 3,
+    "title": "Disciplines (1)",
+    "page": 72,
+    "pdfPage": 74
+  },
+  {
+    "level": 3,
+    "title": "Bane (1)",
+    "page": 73,
+    "pdfPage": 75
+  },
+  {
+    "level": 3,
+    "title": "Who are the Malkavians?",
+    "page": 76,
+    "pdfPage": 78
+  },
+  {
+    "level": 3,
+    "title": "Disciplines (2)",
+    "page": 79,
+    "pdfPage": 81
+  },
+  {
+    "level": 3,
+    "title": "Bane (2)",
+    "page": 79,
+    "pdfPage": 81
+  },
+  {
+    "level": 3,
+    "title": "Disciplines (3)",
+    "page": 84,
+    "pdfPage": 86
+  },
+  {
+    "level": 3,
+    "title": "Bane (3)",
+    "page": 85,
+    "pdfPage": 87
+  },
+  {
+    "level": 3,
+    "title": "Who are the Toreador?",
+    "page": 88,
+    "pdfPage": 90
+  },
+  {
+    "level": 3,
+    "title": "Disciplines (4)",
+    "page": 90,
+    "pdfPage": 92
+  },
+  {
+    "level": 3,
+    "title": "Bane (4)",
+    "page": 91,
+    "pdfPage": 93
+  },
+  {
+    "level": 3,
+    "title": "Who are the Tremere?",
+    "page": 94,
+    "pdfPage": 96
+  },
+  {
+    "level": 3,
+    "title": "Disciplines (5)",
+    "page": 97,
+    "pdfPage": 99
+  },
+  {
+    "level": 3,
+    "title": "Bane (5)",
+    "page": 97,
+    "pdfPage": 99
+  },
+  {
+    "level": 3,
+    "title": "Who Are the Ventrue?",
+    "page": 99,
+    "pdfPage": 101
+  },
+  {
+    "level": 3,
+    "title": "Disciplines (6)",
+    "page": 102,
+    "pdfPage": 104
+  },
+  {
+    "level": 3,
+    "title": "Bane (6)",
+    "page": 102,
+    "pdfPage": 104
+  },
+  {
+    "level": 3,
+    "title": "the caitiff",
+    "page": 105,
+    "pdfPage": 107
+  },
+  {
+    "level": 3,
+    "title": "Disciplines (7)",
+    "page": 107,
+    "pdfPage": 109
+  },
+  {
+    "level": 3,
+    "title": "Bane (7)",
+    "page": 107,
+    "pdfPage": 109
+  },
+  {
+    "level": 3,
+    "title": "the",
+    "page": 109,
+    "pdfPage": 111
+  },
+  {
+    "level": 3,
+    "title": "Thin-Blood Characteristics",
+    "page": 111,
+    "pdfPage": 113
+  },
+  {
+    "level": 3,
+    "title": "Ways Out",
+    "page": 113,
+    "pdfPage": 115
+  },
+  {
+    "level": 1,
+    "title": "rules",
+    "page": 115,
+    "pdfPage": 117
+  },
+  {
+    "level": 2,
+    "title": "Time",
+    "page": 115,
+    "pdfPage": 117
+  },
+  {
+    "level": 3,
+    "title": "Simple Tests",
+    "page": 117,
+    "pdfPage": 119
+  },
+  {
+    "level": 3,
+    "title": "Contests",
+    "page": 123,
+    "pdfPage": 125
+  },
+  {
+    "level": 3,
+    "title": "Conflicts",
+    "page": 123,
+    "pdfPage": 125
+  },
+  {
+    "level": 3,
+    "title": "Examples of Rolls",
+    "page": 128,
+    "pdfPage": 130
+  },
+  {
+    "level": 3,
+    "title": "Experience and Improvement",
+    "page": 130,
+    "pdfPage": 132
+  },
+  {
+    "level": 3,
+    "title": "The Golden Rule",
+    "page": 130,
+    "pdfPage": 132
+  },
+  {
+    "level": 1,
+    "title": "characters",
+    "page": 133,
+    "pdfPage": 135
+  },
+  {
+    "level": 2,
+    "title": "Character Fundamentals",
+    "page": 133,
+    "pdfPage": 135
+  },
+  {
+    "level": 2,
+    "title": "Character Creation",
+    "page": 135,
+    "pdfPage": 137
+  },
+  {
+    "level": 3,
+    "title": "The Role of the Storyteller",
+    "page": 135,
+    "pdfPage": 137
+  },
+  {
+    "level": 3,
+    "title": "Character, Coterie, Chronicle",
+    "page": 139,
+    "pdfPage": 141
+  },
+  {
+    "level": 3,
+    "title": "The Relationship Map",
+    "page": 142,
+    "pdfPage": 144
+  },
+  {
+    "level": 3,
+    "title": "Your Human Life",
+    "page": 144,
+    "pdfPage": 146
+  },
+  {
+    "level": 3,
+    "title": "Embrace and After",
+    "page": 148,
+    "pdfPage": 150
+  },
+  {
+    "level": 3,
+    "title": "Summary Sheet",
+    "page": 152,
+    "pdfPage": 154
+  },
+  {
+    "level": 2,
+    "title": "Core Traits",
+    "page": 155,
+    "pdfPage": 157
+  },
+  {
+    "level": 3,
+    "title": "PhysicalAttributes",
+    "page": 155,
+    "pdfPage": 157
+  },
+  {
+    "level": 3,
+    "title": "SocialAttributes",
+    "page": 155,
+    "pdfPage": 157
+  },
+  {
+    "level": 3,
+    "title": "MentalAttributes",
+    "page": 156,
+    "pdfPage": 158
+  },
+  {
+    "level": 3,
+    "title": "Willpower",
+    "page": 157,
+    "pdfPage": 159
+  },
+  {
+    "level": 3,
+    "title": "Physical Skills",
+    "page": 159,
+    "pdfPage": 161
+  },
+  {
+    "level": 3,
+    "title": "Social Skills",
+    "page": 164,
+    "pdfPage": 166
+  },
+  {
+    "level": 3,
+    "title": "Mental Skills",
+    "page": 168,
+    "pdfPage": 170
+  },
+  {
+    "level": 2,
+    "title": "Beliefs",
+    "page": 172,
+    "pdfPage": 174
+  },
+  {
+    "level": 3,
+    "title": "Convictions",
+    "page": 172,
+    "pdfPage": 174
+  },
+  {
+    "level": 3,
+    "title": "Touchstones",
+    "page": 173,
+    "pdfPage": 175
+  },
+  {
+    "level": 3,
+    "title": "Ambition and Desire",
+    "page": 173,
+    "pdfPage": 175
+  },
+  {
+    "level": 2,
+    "title": "Predator Types",
+    "page": 175,
+    "pdfPage": 177
+  },
+  {
+    "level": 3,
+    "title": "Alleycat",
+    "page": 175,
+    "pdfPage": 177
+  },
+  {
+    "level": 3,
+    "title": "Bagger",
+    "page": 176,
+    "pdfPage": 178
+  },
+  {
+    "level": 3,
+    "title": "Blood Leech",
+    "page": 176,
+    "pdfPage": 178
+  },
+  {
+    "level": 3,
+    "title": "Cleaver",
+    "page": 176,
+    "pdfPage": 178
+  },
+  {
+    "level": 3,
+    "title": "Consensualist",
+    "page": 177,
+    "pdfPage": 179
+  },
+  {
+    "level": 3,
+    "title": "Farmer",
+    "page": 177,
+    "pdfPage": 179
+  },
+  {
+    "level": 3,
+    "title": "Osiris",
+    "page": 177,
+    "pdfPage": 179
+  },
+  {
+    "level": 3,
+    "title": "Sandman",
+    "page": 177,
+    "pdfPage": 179
+  },
+  {
+    "level": 3,
+    "title": "Scene Queen",
+    "page": 178,
+    "pdfPage": 180
+  },
+  {
+    "level": 3,
+    "title": "Siren",
+    "page": 178,
+    "pdfPage": 180
+  },
+  {
+    "level": 2,
+    "title": "Advantages",
+    "page": 179,
+    "pdfPage": 181
+  },
+  {
+    "level": 3,
+    "title": "Merits",
+    "page": 179,
+    "pdfPage": 181
+  },
+  {
+    "level": 3,
+    "title": "Backgrounds",
+    "page": 184,
+    "pdfPage": 186
+  },
+  {
+    "level": 2,
+    "title": "Coterie Creation",
+    "page": 195,
+    "pdfPage": 197
+  },
+  {
+    "level": 3,
+    "title": "Domain",
+    "page": 195,
+    "pdfPage": 197
+  },
+  {
+    "level": 3,
+    "title": "CoterieBackgrounds",
+    "page": 196,
+    "pdfPage": 198
+  },
+  {
+    "level": 3,
+    "title": "Types of Coteries",
+    "page": 197,
+    "pdfPage": 199
+  },
+  {
+    "level": 1,
+    "title": "vampires",
+    "page": 201,
+    "pdfPage": 203
+  },
+  {
+    "level": 2,
+    "title": "Truth and Lies",
+    "page": 201,
+    "pdfPage": 203
+  },
+  {
+    "level": 3,
+    "title": "Hunger",
+    "page": 205,
+    "pdfPage": 207
+  },
+  {
+    "level": 3,
+    "title": "Hunger Dice",
+    "page": 205,
+    "pdfPage": 207
+  },
+  {
+    "level": 3,
+    "title": "Compulsions",
+    "page": 208,
+    "pdfPage": 210
+  },
+  {
+    "level": 3,
+    "title": "Rousing the Blood",
+    "page": 211,
+    "pdfPage": 213
+  },
+  {
+    "level": 3,
+    "title": "Slaking Hunger",
+    "page": 211,
+    "pdfPage": 213
+  },
+  {
+    "level": 2,
+    "title": "The Blood",
+    "page": 214,
+    "pdfPage": 216
+  },
+  {
+    "level": 3,
+    "title": "Generation",
+    "page": 214,
+    "pdfPage": 216
+  },
+  {
+    "level": 3,
+    "title": "Blood Potency",
+    "page": 215,
+    "pdfPage": 217
+  },
+  {
+    "level": 3,
+    "title": "Gifts of the Blood",
+    "page": 217,
+    "pdfPage": 219
+  },
+  {
+    "level": 3,
+    "title": "Prices of the Blood",
+    "page": 219,
+    "pdfPage": 221
+  },
+  {
+    "level": 3,
+    "title": "Dangers to the Blood",
+    "page": 221,
+    "pdfPage": 223
+  },
+  {
+    "level": 1,
+    "title": "You are what",
+    "page": 225,
+    "pdfPage": 227
+  },
+  {
+    "level": 1,
+    "title": "You eat",
+    "page": 225,
+    "pdfPage": 227
+  },
+  {
+    "level": 2,
+    "title": "The Blood is the Life",
+    "page": 226,
+    "pdfPage": 228
+  },
+  {
+    "level": 3,
+    "title": "Hunting and Humors",
+    "page": 228,
+    "pdfPage": 230
+  },
+  {
+    "level": 3,
+    "title": "Resonance and Experience",
+    "page": 231,
+    "pdfPage": 233
+  },
+  {
+    "level": 2,
+    "title": "states of",
+    "page": 233,
+    "pdfPage": 235
+  },
+  {
+    "level": 2,
+    "title": "damnation",
+    "page": 233,
+    "pdfPage": 235
+  },
+  {
+    "level": 3,
+    "title": "The Blood Bond",
+    "page": 233,
+    "pdfPage": 235
+  },
+  {
+    "level": 3,
+    "title": "Diablerie",
+    "page": 234,
+    "pdfPage": 236
+  },
+  {
+    "level": 2,
+    "title": "humanity",
+    "page": 236,
+    "pdfPage": 238
+  },
+  {
+    "level": 3,
+    "title": "The Downward Spiral",
+    "page": 236,
+    "pdfPage": 238
+  },
+  {
+    "level": 3,
+    "title": "The Humanity Track",
+    "page": 239,
+    "pdfPage": 241
+  },
+  {
+    "level": 1,
+    "title": "disciplines",
+    "page": 243,
+    "pdfPage": 245
+  },
+  {
+    "level": 2,
+    "title": "General Rules",
+    "page": 244,
+    "pdfPage": 246
+  },
+  {
+    "level": 3,
+    "title": "Animalism",
+    "page": 244,
+    "pdfPage": 246
+  },
+  {
+    "level": 3,
+    "title": "Auspex",
+    "page": 248,
+    "pdfPage": 250
+  },
+  {
+    "level": 3,
+    "title": "Celerity",
+    "page": 252,
+    "pdfPage": 254
+  },
+  {
+    "level": 3,
+    "title": "Dominate",
+    "page": 254,
+    "pdfPage": 256
+  },
+  {
+    "level": 3,
+    "title": "Fortitude",
+    "page": 258,
+    "pdfPage": 260
+  },
+  {
+    "level": 3,
+    "title": "Obfuscate",
+    "page": 260,
+    "pdfPage": 262
+  },
+  {
+    "level": 3,
+    "title": "Potence",
+    "page": 263,
+    "pdfPage": 265
+  },
+  {
+    "level": 3,
+    "title": "Presence",
+    "page": 266,
+    "pdfPage": 268
+  },
+  {
+    "level": 3,
+    "title": "Protean",
+    "page": 269,
+    "pdfPage": 271
+  },
+  {
+    "level": 3,
+    "title": "Blood Sorcery",
+    "page": 271,
+    "pdfPage": 273
+  },
+  {
+    "level": 3,
+    "title": "Rituals",
+    "page": 274,
+    "pdfPage": 276
+  },
+  {
+    "level": 3,
+    "title": "Thin-BloodAlchemy",
+    "page": 282,
+    "pdfPage": 284
+  },
+  {
+    "level": 1,
+    "title": "Advanced",
+    "page": 289,
+    "pdfPage": 291
+  },
+  {
+    "level": 2,
+    "title": "Scenes and Modes",
+    "page": 290,
+    "pdfPage": 292
+  },
+  {
+    "level": 3,
+    "title": "Types of Scenes",
+    "page": 290,
+    "pdfPage": 292
+  },
+  {
+    "level": 3,
+    "title": "Modes of Play",
+    "page": 291,
+    "pdfPage": 293
+  },
+  {
+    "level": 2,
+    "title": "Extended Tests",
+    "page": 293,
+    "pdfPage": 295
+  },
+  {
+    "level": 3,
+    "title": "Versions of \u00adExtended Tests",
+    "page": 293,
+    "pdfPage": 295
+  },
+  {
+    "level": 3,
+    "title": "Special Cases and \u00adExtended Tests",
+    "page": 294,
+    "pdfPage": 296
+  },
+  {
+    "level": 2,
+    "title": "Advanced Conflict",
+    "page": 295,
+    "pdfPage": 297
+  },
+  {
+    "level": 3,
+    "title": "Three, Two, Done",
+    "page": 295,
+    "pdfPage": 297
+  },
+  {
+    "level": 3,
+    "title": "\u00adAdditional \u00ad\u00adConflict \u00adOptions",
+    "page": 296,
+    "pdfPage": 298
+  },
+  {
+    "level": 3,
+    "title": "Movement in Conflicts",
+    "page": 298,
+    "pdfPage": 300
+  },
+  {
+    "level": 3,
+    "title": "One-Roll \u00adConflicts",
+    "page": 298,
+    "pdfPage": 300
+  },
+  {
+    "level": 3,
+    "title": "Advanced \u00adConflict: \u00adPhysical Combat",
+    "page": 300,
+    "pdfPage": 302
+  },
+  {
+    "level": 3,
+    "title": "Advanced Conflict: Social Combat",
+    "page": 304,
+    "pdfPage": 306
+  },
+  {
+    "level": 2,
+    "title": "Systems of the Blood",
+    "page": 306,
+    "pdfPage": 308
+  },
+  {
+    "level": 3,
+    "title": "Hunting",
+    "page": 306,
+    "pdfPage": 308
+  },
+  {
+    "level": 3,
+    "title": "Kindred \u00adIntimacy",
+    "page": 310,
+    "pdfPage": 312
+  },
+  {
+    "level": 3,
+    "title": "Compulsion Variants",
+    "page": 311,
+    "pdfPage": 313
+  },
+  {
+    "level": 3,
+    "title": "Memoriam",
+    "page": 311,
+    "pdfPage": 313
+  },
+  {
+    "level": 3,
+    "title": "Prestation",
+    "page": 314,
+    "pdfPage": 316
+  },
+  {
+    "level": 1,
+    "title": "cities",
+    "page": 317,
+    "pdfPage": 319
+  },
+  {
+    "level": 2,
+    "title": "The Feudal \u00adSystem",
+    "page": 319,
+    "pdfPage": 321
+  },
+  {
+    "level": 3,
+    "title": "Atmosphere",
+    "page": 328,
+    "pdfPage": 330
+  },
+  {
+    "level": 3,
+    "title": "Your City by\u00a0Night",
+    "page": 331,
+    "pdfPage": 333
+  },
+  {
+    "level": 1,
+    "title": "chronicles",
+    "page": 337,
+    "pdfPage": 339
+  },
+  {
+    "level": 2,
+    "title": "Planning a Chronicle",
+    "page": 337,
+    "pdfPage": 339
+  },
+  {
+    "level": 3,
+    "title": "Styles of Play",
+    "page": 340,
+    "pdfPage": 342
+  },
+  {
+    "level": 3,
+    "title": "Running a Game",
+    "page": 354,
+    "pdfPage": 356
+  },
+  {
+    "level": 3,
+    "title": "The Second Inquisition in Chronicles",
+    "page": 360,
+    "pdfPage": 362
+  },
+  {
+    "level": 3,
+    "title": "Hunters Hunted",
+    "page": 366,
+    "pdfPage": 368
+  },
+  {
+    "level": 1,
+    "title": "tools",
+    "page": 369,
+    "pdfPage": 371
+  },
+  {
+    "level": 2,
+    "title": "Antagonists",
+    "page": 370,
+    "pdfPage": 372
+  },
+  {
+    "level": 3,
+    "title": "Mortals",
+    "page": 370,
+    "pdfPage": 372
+  },
+  {
+    "level": 3,
+    "title": "Animals",
+    "page": 373,
+    "pdfPage": 375
+  },
+  {
+    "level": 3,
+    "title": "Vampires",
+    "page": 374,
+    "pdfPage": 376
+  },
+  {
+    "level": 3,
+    "title": "Creatures of\u00a0Horror",
+    "page": 376,
+    "pdfPage": 378
+  },
+  {
+    "level": 2,
+    "title": "Items",
+    "page": 378,
+    "pdfPage": 380
+  },
+  {
+    "level": 3,
+    "title": "Gear",
+    "page": 378,
+    "pdfPage": 380
+  },
+  {
+    "level": 3,
+    "title": "Conventional Weapons",
+    "page": 379,
+    "pdfPage": 381
+  },
+  {
+    "level": 3,
+    "title": "Supernatural Equipment",
+    "page": 381,
+    "pdfPage": 383
+  }
+]

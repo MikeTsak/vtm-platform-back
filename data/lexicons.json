@@ -1,0 +1,258 @@
+{
+  "disciplines": [
+    {
+      "name": "Animalism",
+      "url": "https://vtm.paradoxwikis.com/Animalism",
+      "icon": "/img/disciplines/Animalism-rombo.png",
+      "book": "Corebook",
+      "page": 244,
+      "pdfPage": 246,
+      "file": "Vampire-the-Masquerade-1.pdf"
+    },
+    {
+      "name": "Auspex",
+      "url": "https://vtm.paradoxwikis.com/Auspex",
+      "icon": "/img/disciplines/Auspex-rombo.png",
+      "book": "Corebook",
+      "page": 248,
+      "pdfPage": 250,
+      "file": "Vampire-the-Masquerade-1.pdf"
+    },
+    {
+      "name": "Blood Sorcery",
+      "url": "https://vtm.paradoxwikis.com/Blood_Sorcery",
+      "icon": "/img/disciplines/Blood-Sorcery-rombo.png",
+      "book": "Corebook",
+      "page": 271,
+      "pdfPage": 273,
+      "file": "Vampire-the-Masquerade-1.pdf"
+    },
+    {
+      "name": "Celerity",
+      "url": "https://vtm.paradoxwikis.com/Celerity",
+      "icon": "/img/disciplines/Celerity-rombo.png",
+      "book": "Corebook",
+      "page": 252,
+      "pdfPage": 254,
+      "file": "Vampire-the-Masquerade-1.pdf"
+    },
+    {
+      "name": "Dominate",
+      "url": "https://vtm.paradoxwikis.com/Dominate",
+      "icon": "/img/disciplines/Dominate-rombo.png",
+      "book": "Corebook",
+      "page": 254,
+      "pdfPage": 256,
+      "file": "Vampire-the-Masquerade-1.pdf"
+    },
+    {
+      "name": "Fortitude",
+      "url": "https://vtm.paradoxwikis.com/Fortitude",
+      "icon": "/img/disciplines/Fortitude-rombo.png",
+      "book": "Corebook",
+      "page": 258,
+      "pdfPage": 260,
+      "file": "Vampire-the-Masquerade-1.pdf"
+    },
+    {
+      "name": "Obfuscate",
+      "url": "https://vtm.paradoxwikis.com/Obfuscate",
+      "icon": "/img/disciplines/Obfuscate-rombo.png",
+      "book": "Corebook",
+      "page": 260,
+      "pdfPage": 262,
+      "file": "Vampire-the-Masquerade-1.pdf"
+    },
+    {
+      "name": "Oblivion",
+      "url": "https://vtm.paradoxwikis.com/Oblivion",
+      "icon": "/img/disciplines/Oblivion-rombo.png",
+      "book": "Cults of the Blood Gods",
+      "page": 201,
+      "pdfPage": 202,
+      "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf"
+    },
+    {
+      "name": "Potence",
+      "url": "https://vtm.paradoxwikis.com/Potence",
+      "icon": "/img/disciplines/Potence-rombo.png",
+      "book": "Corebook",
+      "page": 263,
+      "pdfPage": 265,
+      "file": "Vampire-the-Masquerade-1.pdf"
+    },
+    {
+      "name": "Presence",
+      "url": "https://vtm.paradoxwikis.com/Presence",
+      "icon": "/img/disciplines/Presence-rombo.png",
+      "book": "Corebook",
+      "page": 266,
+      "pdfPage": 268,
+      "file": "Vampire-the-Masquerade-1.pdf"
+    },
+    {
+      "name": "Protean",
+      "url": "https://vtm.paradoxwikis.com/Protean",
+      "icon": "/img/disciplines/Protean-rombo.png",
+      "book": "Corebook",
+      "page": 269,
+      "pdfPage": 271,
+      "file": "Vampire-the-Masquerade-1.pdf"
+    },
+    {
+      "name": "Thin blood Alchemy",
+      "url": "https://vtm.paradoxwikis.com/Thin-blood_Alchemy",
+      "icon": "/img/disciplines/Thin-blood-Alchemy-rombo.png",
+      "book": "Corebook",
+      "page": 282,
+      "pdfPage": 284,
+      "file": "Vampire-the-Masquerade-1.pdf"
+    }
+  ],
+  "clans": [
+    {
+      "name": "Banu Haqim",
+      "url": "https://vtm.paradoxwikis.com/Banu_Haqim",
+      "icon": "/img/clans/white/330px-Banu_Haqim_symbol_white.webp",
+      "book": "Players Guide",
+      "page": 14,
+      "pdfPage": 16,
+      "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+    },
+    {
+      "name": "Brujah",
+      "url": "https://vtm.paradoxwikis.com/Brujah",
+      "icon": "/img/clans/white/330px-Brujah_symbol_white.webp",
+      "book": "Corebook",
+      "page": 65,
+      "pdfPage": 67,
+      "file": "Vampire-the-Masquerade-1.pdf"
+    },
+    {
+      "name": "Gangrel",
+      "url": "https://vtm.paradoxwikis.com/Gangrel",
+      "icon": "/img/clans/white/330px-Gangrel_symbol_white.webp",
+      "book": "Corebook",
+      "page": 70,
+      "pdfPage": 72,
+      "file": "Vampire-the-Masquerade-1.pdf"
+    },
+    {
+      "name": "Hecata",
+      "url": "https://vtm.paradoxwikis.com/Hecata",
+      "icon": "/img/clans/white/330px-Hecata_symbol_white.webp",
+      "book": "Cults of the Blood Gods",
+      "page": 192,
+      "pdfPage": 193,
+      "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf"
+    },
+    {
+      "name": "Lasombra",
+      "url": "https://vtm.paradoxwikis.com/Lasombra",
+      "icon": "/img/clans/white/330px-Lasombra_symbol_white.webp",
+      "book": "Players Guide",
+      "page": 44,
+      "pdfPage": 46,
+      "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+    },
+    {
+      "name": "Malkavian",
+      "url": "https://vtm.paradoxwikis.com/Malkavian",
+      "icon": "/img/clans/white/330px-Malkavian_symbol_white.webp",
+      "book": "Corebook",
+      "page": 76,
+      "pdfPage": 78,
+      "file": "Vampire-the-Masquerade-1.pdf"
+    },
+    {
+      "name": "The Ministry",
+      "url": "https://vtm.paradoxwikis.com/The_Ministry",
+      "icon": "/img/clans/white/330px-Ministry_symbol_white.webp",
+      "book": "Anarch",
+      "page": 176,
+      "pdfPage": 177,
+      "file": "Anarch-Vampire-the-Masquerade-5th-Edition.pdf"
+    },
+    {
+      "name": "Nosferatu",
+      "url": "https://vtm.paradoxwikis.com/Nosferatu",
+      "icon": "/img/clans/white/330px-Nosferatu_symbol_white.webp",
+      "book": "Corebook",
+      "page": 81,
+      "pdfPage": 83,
+      "file": "Vampire-the-Masquerade-1.pdf"
+    },
+    {
+      "name": "Ravnos",
+      "url": "https://vtm.paradoxwikis.com/Ravnos",
+      "icon": "/img/clans/white/330px-Ravnos_symbol_white.webp",
+      "book": "Players Guide",
+      "page": 64,
+      "pdfPage": 66,
+      "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+    },
+    {
+      "name": "Salubri",
+      "url": "https://vtm.paradoxwikis.com/Salubri",
+      "icon": "/img/clans/white/330px-Salubri_symbol_white.webp",
+      "book": "Players Guide",
+      "page": 74,
+      "pdfPage": 76,
+      "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+    },
+    {
+      "name": "Toreador",
+      "url": "https://vtm.paradoxwikis.com/Toreador",
+      "icon": "/img/clans/white/330px-Toreador_symbol_white.webp",
+      "book": "Corebook",
+      "page": 88,
+      "pdfPage": 90,
+      "file": "Vampire-the-Masquerade-1.pdf"
+    },
+    {
+      "name": "Tremere",
+      "url": "https://vtm.paradoxwikis.com/Tremere",
+      "icon": "/img/clans/white/330px-Tremere_symbol_white.webp",
+      "book": "Corebook",
+      "page": 94,
+      "pdfPage": 96,
+      "file": "Vampire-the-Masquerade-1.pdf"
+    },
+    {
+      "name": "Tzimisce",
+      "url": "https://vtm.paradoxwikis.com/Tzimisce",
+      "icon": "/img/clans/white/330px-Tzimisce_symbol_white.webp",
+      "book": "Players Guide",
+      "page": 82,
+      "pdfPage": 84,
+      "file": "Vampire-The-Masquerade-V5-Players-Guide.pdf"
+    },
+    {
+      "name": "Ventrue",
+      "url": "https://vtm.paradoxwikis.com/Ventrue",
+      "icon": "/img/clans/white/330px-Ventrue_symbol_white.webp",
+      "book": "Corebook",
+      "page": 99,
+      "pdfPage": 101,
+      "file": "Vampire-the-Masquerade-1.pdf"
+    },
+    {
+      "name": "Caitiff",
+      "url": "https://vtm.paradoxwikis.com/Caitiff",
+      "icon": "/img/clans/white/330px-Caitiff_symbol_white.webp",
+      "book": "Corebook",
+      "page": 105,
+      "pdfPage": 107,
+      "file": "Vampire-the-Masquerade-1.pdf"
+    },
+    {
+      "name": "Thin blood",
+      "url": "https://vtm.paradoxwikis.com/Thin-blood",
+      "icon": "/img/clans/white/330px-Thinblood_symbol_white.webp",
+      "book": "Corebook",
+      "page": 109,
+      "pdfPage": 111,
+      "file": "Vampire-the-Masquerade-1.pdf"
+    }
+  ]
+}

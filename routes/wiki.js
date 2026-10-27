@@ -1,4 +1,5 @@
 const guards = require('../services/guards');
+const ruleMasterService = require('../services/ruleMasterService');
 module.exports = async function (fastify, opts) {
   const { pool, wikiPool, log, authRequired, optionalAuth, requireAdmin, imageClient } = opts;
   const wikiDb = wikiPool || pool;
@@ -738,6 +739,38 @@ module.exports = async function (fastify, opts) {
       log.err('Failed to delete admin note', e);
       return reply.status(500).send({ error: 'Database error' });
     }
+  });
+
+  /* -------------------- RULE MASTER AI (ADMIN ONLY) -------------------- */
+
+  // Query Rule Master AI with grounded V5 context and Google Generative AI (Admins only)
+  fastify.post('/api/wiki/rule-master/ask', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    const { question, deepSearch, history } = req.body || {};
+    if (!question || typeof question !== 'string' || !question.trim()) {
+      return reply.status(400).send({ error: 'Question is required' });
+    }
+
+    try {
+      const result = await ruleMasterService.askRuleMaster(question, {
+        deepSearch: Boolean(deepSearch),
+        history: Array.isArray(history) ? history : []
+      });
+      return reply.send({ success: true, ...result });
+    } catch (e) {
+      log.err('Rule Master query error', e);
+      return reply.status(500).send({
+        error: e.message || 'Rule Master could not process question'
+      });
+    }
+  });
+
+  // Get available models and health status (Admins only)
+  fastify.get('/api/wiki/rule-master/models', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    return reply.send({
+      models: ruleMasterService.CANDIDATE_MODELS,
+      defaultModel: ruleMasterService.CANDIDATE_MODELS[0],
+      configured: Boolean(process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY)
+    });
   });
 
 };

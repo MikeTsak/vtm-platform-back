@@ -1,0 +1,167 @@
+[
+  {
+    "id": "spectre_hostile_possession",
+    "name": "Spectre Possession (Hostile)",
+    "category": "Antagonists & Entities",
+    "entity_type": "Spectre / Ghost / Wraith",
+    "source": "Corebook, page 377",
+    "book": "Corebook",
+    "page": 377,
+    "pdfPage": 379,
+    "file": "Vampire-the-Masquerade-1.pdf",
+    "summary": "Rules for hostile spirits (spectres and wraiths) possessing living mortals or vampires.",
+    "rules": "Spectres and powerful wraiths possess the supernatural ability to forcibly inhabit and take over physical bodies (mortals, and under certain circumstances torpid or weak willed vampires). When a spirit possesses a victim: 1) Attributes and Skills: The possessing spirit uses its own Mental and Social Attributes and its own Skills. The victim physical body provides the Physical Attributes. 2) Host Consciousness: The victim consciousness remains fully awake and aware throughout the possession, witnessing everything the body is forced to do, but remains completely paralyzed and unable to assert physical control. 3) Memory and Knowledge: The spirit gains no access to the victim memories, thoughts, personality, or specialized knowledge. 4) Disciplines and Supernatural Powers: Depending on the spirit power rating and archetype, it can manifest abilities through the host body, often resembling Dominate, Presence, or Auspex. 5) Ending Possession: Ending hostile possession requires Oblivion ceremonies such as Exorcism, destroying or resolving the spirit Fetters, or inflicting lethal damage to the host body to render it uninhabitable.",
+    "mechanics": {
+      "dice_pool": "Spirit Power vs victim Resolve + Composure (or Resolve + Willpower)",
+      "attributes_used": "Spirit Mental and Social Attributes, Host Physical Attributes",
+      "host_awareness": "Fully conscious but physically paralyzed",
+      "memory_access": "None. The ghost cannot read host thoughts or memories.",
+      "duration": "Until exorcised, fetter resolved, or voluntarily abandoned"
+    }
+  },
+  {
+    "id": "puppeteer_ghosts",
+    "name": "Puppeteers (Specialist Possessing Ghosts)",
+    "category": "Antagonists & Entities",
+    "entity_type": "Specialist Wraith / Spectre",
+    "source": "Cults of the Blood Gods, page 212",
+    "book": "Cults of the Blood Gods",
+    "page": 212,
+    "pdfPage": 214,
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf",
+    "summary": "Wraith antagonist archetype specialized entirely in claiming physical vessels.",
+    "rules": "Puppeteers are wraiths consumed by desperate yearning for physical form and the sensations of life. They stalk mortal and kindred society, targeting emotionally fragile, injured, or sleeping victims. A Puppeteer can initiate possession by engaging in an extended contest of Spirit Power vs victim Resolve + Composure. Once inside, they ride the host body to indulge in mortal vices, enact vengeful vendettas, or undermine kindred domains. Puppeteers can manipulate the host vocal cords and mimic mortal behavior through observation, but lack the victim memories.",
+    "mechanics": {
+      "dice_pool": "Spirit Power rating (typically 6 to 8) vs Resolve + Composure",
+      "contest": "Contested mental roll, extended test for stubborn hosts",
+      "duration": "Days to weeks until evicted or vessel breaks"
+    }
+  },
+  {
+    "id": "ceremony_host_spirit",
+    "name": "Host Spirit (Voluntary Possession Ceremony)",
+    "category": "Oblivion Ceremonies",
+    "entity_type": "Oblivion Ceremony Level 3",
+    "source": "Cults of the Blood Gods, page 208",
+    "book": "Cults of the Blood Gods",
+    "page": 208,
+    "pdfPage": 210,
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf",
+    "summary": "Voluntary spirit possession ceremony allowing a wraith to inhabit the vampire body to mend spiritual damage.",
+    "rules": "A vampire practicing the Hecata rites of Oblivion can willingly invite a wraith or spectre to inhabit their dead body. The vampire performs the ceremony and surrenders physical control to the invited entity for the agreed duration. While possessed, the vampire remains a silent passenger in their own flesh. If the vampire survives the experience and the spirit departs without destroying the vessel, the sheer spiritual catharsis completely heals all Superficial and Aggravated Willpower damage suffered by the vampire.",
+    "mechanics": {
+      "level": 3,
+      "cost": "One Rouse Check",
+      "dice_pool": "Resolve + Oblivion",
+      "prerequisite": "Where the Veil Thins or Passion Feast",
+      "benefit": "Heals all Superficial and Aggravated Willpower damage upon spirit departure",
+      "risk": "Relinquishing control to an unpredictable dead spirit"
+    }
+  },
+  {
+    "id": "ceremony_exorcism",
+    "name": "Exorcism (Banishing Possessing Spirits)",
+    "category": "Oblivion Ceremonies",
+    "entity_type": "Oblivion Ceremony Level 3",
+    "source": "Cults of the Blood Gods, page 207",
+    "book": "Cults of the Blood Gods",
+    "page": 207,
+    "pdfPage": 209,
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf",
+    "summary": "Ceremony to forcibly expel and banish a possessing ghost or spectre from a person, place, or object.",
+    "rules": "The necromancer confronts a possessed victim or haunted location, reciting incantations of dismissal and branding symbols of severance. The caster rolls Resolve + Oblivion in a contested roll against the possessing spirit Power. If the caster succeeds, the spirit is torn from the host flesh and banished back across the Shroud into the Shadowlands, unable to return to the vessel for at least one lunar cycle.",
+    "mechanics": {
+      "level": 3,
+      "cost": "One Rouse Check",
+      "dice_pool": "Resolve + Oblivion vs Spirit Power",
+      "effect": "Forcibly ejects possessing ghost and bars return for one lunar cycle"
+    }
+  },
+  {
+    "id": "ceremony_compel_spirit",
+    "name": "Compel Spirit",
+    "category": "Oblivion Ceremonies",
+    "entity_type": "Oblivion Ceremony Level 2",
+    "source": "Cults of the Blood Gods, page 207",
+    "book": "Cults of the Blood Gods",
+    "page": 207,
+    "pdfPage": 209,
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf",
+    "summary": "Commands a ghost to perform services or answer questions truthfully.",
+    "rules": "Through this ceremony, the caster asserts dominion over an summoned or nearby wraith, forcing it to obey instructions or truthfully answer questions, with bonus dice if the caster holds the ghost Fetter.",
+    "mechanics": {
+      "level": 2,
+      "cost": "One Rouse Check",
+      "dice_pool": "Manipulation + Oblivion vs Spirit Resolve + Composure"
+    }
+  },
+  {
+    "id": "fetters_and_hauntings",
+    "name": "Fetters and Ghost Mechanics",
+    "category": "Antagonists & Entities",
+    "entity_type": "Supernatural Mechanics",
+    "source": "Cults of the Blood Gods, page 204",
+    "book": "Cults of the Blood Gods",
+    "page": 204,
+    "pdfPage": 206,
+    "file": "Cults-of-the-Blood-Gods-Vampire-the-Masquerade-5th-Edition.pdf",
+    "summary": "Core mechanics governing ghosts, wraiths, and how they anchor to the mortal world.",
+    "rules": "Ghosts in V5 cannot remain in the mortal world indefinitely without Fetters: objects, locations, or living people tied to their deepest passions, trauma, or unresolved desires in life. If a ghost Fetters are threatened or destroyed, the ghost suffers immense spiritual agony and may be pulled into the Oblivion void. Storytellers and players can exploit Fetters to negotiate with, compel, or banish spirits without direct violence.",
+    "mechanics": {
+      "anchor": "Physical object, loved one, or site of death",
+      "destruction": "Destruction of all Fetters banishes or dissolves the wraith"
+    }
+  },
+  {
+    "id": "lupines_werewolves",
+    "name": "Lupines (Werewolves in V5)",
+    "category": "Antagonists & Entities",
+    "entity_type": "Creatures of Horror",
+    "source": "Corebook, page 376",
+    "book": "Corebook",
+    "page": 376,
+    "pdfPage": 378,
+    "file": "Vampire-the-Masquerade-1.pdf",
+    "summary": "Terrifying shapeshifters of the wilderness and apex predators of the World of Darkness.",
+    "rules": "Werewolves in V5 are lethal adversaries designed as group level threats. In their nine foot tall Crinos battle form, Lupines inflict unhalved Aggravated damage with claws and fangs, possess massive Physical dice pools (often 10 to 14 dice), regenerate superficial health every turn, and are vulnerable only to silver weapons and overwhelming fire. Meeting a Lupine in Crinos form triggers immediate Terror Frenzy tests in vampires.",
+    "mechanics": {
+      "health": "Massive track with turn by turn regeneration",
+      "damage": "Aggravated physical claw and bite attacks",
+      "weakness": "Vulnerable to pure silver weapons (inflicts Aggravated damage)"
+    }
+  },
+  {
+    "id": "spirit_power_ratings",
+    "name": "Spirit Power Ratings and General Contests",
+    "category": "Antagonists & Entities",
+    "entity_type": "Antagonist Statistics",
+    "source": "Corebook, page 377",
+    "book": "Corebook",
+    "page": 377,
+    "pdfPage": 379,
+    "file": "Vampire-the-Masquerade-1.pdf",
+    "summary": "Universal stat block and dice rolling system for spirits and spectres in V5.",
+    "rules": "Rather than using nine attributes, generic spirits and spectres in V5 use a simplified Power rating (typically ranging from 4 for minor phantoms to 8 or 10 for ancient terrors). The spirit rolls its Power pool for all actions, including attacks, mental contests, and supernatural manifestations. Against physical attacks, spirits are completely immune while incorporeal, but can be harmed by Fire, Sunlight, Blood Sorcery, or Oblivion.",
+    "mechanics": {
+      "pool": "Power rating rolled for all actions",
+      "defense": "Immune to mundane physical weapons while disembodied"
+    }
+  },
+  {
+    "id": "second_inquisition_agents",
+    "name": "Second Inquisition Agents & True Faith",
+    "category": "Antagonists & Entities",
+    "entity_type": "Mortal Antagonists",
+    "source": "Corebook, page 371",
+    "book": "Corebook",
+    "page": 371,
+    "pdfPage": 373,
+    "file": "Vampire-the-Masquerade-1.pdf",
+    "summary": "Special forces, intelligence agency operators, and holy hunters targeting Kindred.",
+    "rules": "Second Inquisition operatives operate with advanced surveillance, thermal optics, tactical fireteams, and drone support. Elite hunters or Society of St. Leopold inquisitors may possess True Faith, allowing them to brand vampires with holy symbols, resist mental disciplines, and repel kindred through pure spiritual conviction.",
+    "mechanics": {
+      "true_faith": "Adds True Faith rating to resist Disciplines, repels vampires at high ratings",
+      "equipment": "Dragon breath incendiary rounds, UV searchlights, stake launchers"
+    }
+  }
+]

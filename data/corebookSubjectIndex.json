@@ -1,0 +1,690 @@
+[
+  {
+    "topic": "Aggravated Damage",
+    "category": "Combat and Health",
+    "page": 126,
+    "pdfPage": 128,
+    "section": "Rules : Health and Damage",
+    "summary": "Severe wounds from fire, sunlight, or supernatural attacks. Mends slowly and requires Rouse Checks or days of rest."
+  },
+  {
+    "topic": "All Out Attack",
+    "category": "Combat and Health",
+    "page": 301,
+    "pdfPage": 303,
+    "section": "Advanced Systems : Combat Maneuvers",
+    "summary": "Add +1 or +2 dice to a melee attack while sacrificing defense for the turn."
+  },
+  {
+    "topic": "Animal Succulence",
+    "category": "Blood and Hunger",
+    "page": 212,
+    "pdfPage": 214,
+    "section": "Vampires at Play : Feeding",
+    "summary": "Slaking hunger from animal vessels, penalties based on Blood Potency rating."
+  },
+  {
+    "topic": "Animalism Discipline",
+    "category": "Disciplines",
+    "page": 244,
+    "pdfPage": 246,
+    "section": "Disciplines : Animalism",
+    "summary": "Supernatural mastery over beasts, communion with creatures, and directing the Beast outward."
+  },
+  {
+    "topic": "Anarch Movement",
+    "category": "Setting and Lore",
+    "page": 56,
+    "pdfPage": 58,
+    "section": "Kindred Society : The Anarchs",
+    "summary": "Revolutionary faction rejecting elder Camarilla dominion, establishing Baronies and Free States."
+  },
+  {
+    "topic": "Armor and Protection",
+    "category": "Combat and Health",
+    "page": 304,
+    "pdfPage": 306,
+    "section": "Advanced Systems : Armor and Gear",
+    "summary": "Converts aggravated physical damage from firearms into superficial damage, values and penalties."
+  },
+  {
+    "topic": "Attributes Overview",
+    "category": "Character Creation",
+    "page": 154,
+    "pdfPage": 156,
+    "section": "Characters : Traits and Attributes",
+    "summary": "Nine traits across Physical, Social, and Mental pillars rating natural kindred capability from 1 to 5."
+  },
+  {
+    "topic": "Auspex Discipline",
+    "category": "Disciplines",
+    "page": 248,
+    "pdfPage": 250,
+    "section": "Disciplines : Auspex",
+    "summary": "Supernatural perception, aura sight, telepathy, premonitions, and clairvoyance."
+  },
+  {
+    "topic": "Automatic Feats and Difficulty",
+    "category": "Rules Mechanics",
+    "page": 119,
+    "pdfPage": 121,
+    "section": "Rules : Tests and Difficulty",
+    "summary": "Difficulty ratings from 1 (routine) to 7+ (nearly impossible), automatic successes on uncontested pools."
+  },
+  {
+    "topic": "Bane Severity",
+    "category": "Blood and Hunger",
+    "page": 216,
+    "pdfPage": 218,
+    "section": "Vampires at Play : Blood Potency",
+    "summary": "The intensity of a clan ancestral curse scaling with Blood Potency from rating 1 to 6."
+  },
+  {
+    "topic": "Bestial Failure",
+    "category": "Rules Mechanics",
+    "page": 207,
+    "pdfPage": 209,
+    "section": "Vampires at Play : The Beast",
+    "summary": "Rolling a 1 on a Hunger die during a failed roll. The Beast lashes out causing compulsions or uncontrolled aggression."
+  },
+  {
+    "topic": "Blood Bond Levels and Rules",
+    "category": "Blood and Hunger",
+    "page": 233,
+    "pdfPage": 235,
+    "section": "Vampires at Play : Blood Bond",
+    "summary": "Bonding through three steps of drinking kindred vitae, emotional servitude, duration, and breaking conditions."
+  },
+  {
+    "topic": "Blood Potency Chart and Effects",
+    "category": "Blood and Hunger",
+    "page": 216,
+    "pdfPage": 218,
+    "section": "Vampires at Play : Blood Potency",
+    "summary": "Governs Blood Surge dice, Mend amount per Rouse, Power bonuses, Rouse reroll tiers, Bane Severity, and Feeding restrictions."
+  },
+  {
+    "topic": "Blood Resonance and Dyscrasias",
+    "category": "Blood and Hunger",
+    "page": 226,
+    "pdfPage": 228,
+    "section": "Vampires at Play : Resonance",
+    "summary": "Choleric, Melancholic, Phlegmatic, and Sanguine emotional states in mortals granting discipline bonuses."
+  },
+  {
+    "topic": "Blood Sorcery and Rituals",
+    "category": "Disciplines",
+    "page": 271,
+    "pdfPage": 273,
+    "section": "Disciplines : Blood Sorcery",
+    "summary": "Thaumaturgical manipulation of vitae, Corrosive Vitae, Cauldron of Blood, and ritual casting rules."
+  },
+  {
+    "topic": "Blood Surge",
+    "category": "Blood and Hunger",
+    "page": 216,
+    "pdfPage": 218,
+    "section": "Vampires at Play : Blood Potency",
+    "summary": "Calling upon vitae to add +1 to +6 dice to a single pool at the cost of one Rouse Check."
+  },
+  {
+    "topic": "Brujah Clan Overview",
+    "category": "Clans",
+    "page": 65,
+    "pdfPage": 67,
+    "section": "Clans : Brujah",
+    "summary": "The Rabble, warrior scholars and rebels, Celerity, Potence, Presence, Bane of violent temper."
+  },
+  {
+    "topic": "Caitiff Clanless",
+    "category": "Clans",
+    "page": 107,
+    "pdfPage": 109,
+    "section": "Clans : Caitiff",
+    "summary": "Clanless kindred possessing no inherent clan curse, free choice of disciplines, and severe social stigma."
+  },
+  {
+    "topic": "Camarilla Structure and Traditions",
+    "category": "Setting and Lore",
+    "page": 51,
+    "pdfPage": 53,
+    "section": "Kindred Society : The Camarilla",
+    "summary": "The ivory tower, Prince, Primogen, Sheriff, Scourge, Keeper of Elysium, and the Six Traditions."
+  },
+  {
+    "topic": "Celerity Discipline",
+    "category": "Disciplines",
+    "page": 252,
+    "pdfPage": 254,
+    "section": "Disciplines : Celerity",
+    "summary": "Superhuman speed, lightning reflexes, dodging bullets, and extra movement actions."
+  },
+  {
+    "topic": "Character Creation Guide",
+    "category": "Character Creation",
+    "page": 136,
+    "pdfPage": 138,
+    "section": "Characters : Creation Walkthrough",
+    "summary": "Step by step guide for attributes, skills, predator type, disciplines, advantages, and convictions."
+  },
+  {
+    "topic": "Close Combat and Brawl",
+    "category": "Combat and Health",
+    "page": 297,
+    "pdfPage": 299,
+    "section": "Advanced Systems : Physical Conflict",
+    "summary": "Contested rolls (Strength + Brawl vs Dexterity + Athletics), damage margins, and weapon bonuses."
+  },
+  {
+    "topic": "Compulsions and Beast Manifestations",
+    "category": "Rules Mechanics",
+    "page": 208,
+    "pdfPage": 210,
+    "section": "Vampires at Play : Compulsions",
+    "summary": "Hunger, Dominance, Harm, Paranoia, and Clan specific compulsions penalizing unrelated actions."
+  },
+  {
+    "topic": "Convictions and Touchstones",
+    "category": "Character Creation",
+    "page": 172,
+    "pdfPage": 174,
+    "section": "Characters : Convictions",
+    "summary": "Human anchors and moral codes shielding kindred from humanity degeneration and stains."
+  },
+  {
+    "topic": "Coterie Types and Merits",
+    "category": "Character Creation",
+    "page": 195,
+    "pdfPage": 197,
+    "section": "Characters : Coteries",
+    "summary": "Shared domain, hunting territory, shared havens, and pooled background resources."
+  },
+  {
+    "topic": "Critical Wins and Messy Crits",
+    "category": "Rules Mechanics",
+    "page": 120,
+    "pdfPage": 122,
+    "section": "Rules : Rolling the Dice",
+    "summary": "Pairs of 10s granting 4 successes total, messy critical effects when rolled on hunger dice."
+  },
+  {
+    "topic": "Damage Types and Healing",
+    "category": "Combat and Health",
+    "page": 126,
+    "pdfPage": 128,
+    "section": "Rules : Damage and Healing",
+    "summary": "Superficial damage (halved for vampires) versus Aggravated damage, tracker overflow, and torpor."
+  },
+  {
+    "topic": "Daysleep and Waking During Day",
+    "category": "Blood and Hunger",
+    "page": 219,
+    "pdfPage": 221,
+    "section": "Vampires at Play : Daysleep",
+    "summary": "Humanity rating dictating dice pools during daytime, waking to danger, and Rouse requirements."
+  },
+  {
+    "topic": "Degeneration and Humanity Loss",
+    "category": "Rules Mechanics",
+    "page": 239,
+    "pdfPage": 241,
+    "section": "Vampires at Play : Humanity",
+    "summary": "Remorse tests, clearing stains, losing humanity points, and falling toward the Beast."
+  },
+  {
+    "topic": "Diablerie Procedure",
+    "category": "Blood and Hunger",
+    "page": 234,
+    "pdfPage": 236,
+    "section": "Vampires at Play : Diablerie",
+    "summary": "Draining kindred soul, contested rolls, lowering generation, black veins in aura, and humanity loss."
+  },
+  {
+    "topic": "Difficulty Ladder",
+    "category": "Rules Mechanics",
+    "page": 119,
+    "pdfPage": 121,
+    "section": "Rules : Difficulty Ratings",
+    "summary": "Guidelines for setting test difficulties from Routine (1) to Hard (5) and Nearly Impossible (7)."
+  },
+  {
+    "topic": "Dominate Discipline",
+    "category": "Disciplines",
+    "page": 254,
+    "pdfPage": 256,
+    "section": "Disciplines : Dominate",
+    "summary": "Hypnotic mind control, Cloud Memory, Mesmerize, The Forgetful Mind, and Terminal Decree."
+  },
+  {
+    "topic": "Elysium Rules and Sanctuary",
+    "category": "Setting and Lore",
+    "page": 317,
+    "pdfPage": 319,
+    "section": "Storytelling : Elysium",
+    "summary": "Sacred truce, prohibition of weapons and disciplines, domain etiquette, and Keeper duties."
+  },
+  {
+    "topic": "Experience Point Spending",
+    "category": "Character Creation",
+    "page": 151,
+    "pdfPage": 153,
+    "section": "Characters : Advancement",
+    "summary": "Costs for attributes, skills, disciplines, rituals, blood sorcery, and merits with earned XP."
+  },
+  {
+    "topic": "Feeding Methods and Slaking",
+    "category": "Blood and Hunger",
+    "page": 211,
+    "pdfPage": 213,
+    "section": "Vampires at Play : Feeding",
+    "summary": "Slaking hunger, blood bags, hunting pools, biting humans, and the ecstasy of the Kiss."
+  },
+  {
+    "topic": "Fire and Burning Damage",
+    "category": "Combat and Health",
+    "page": 221,
+    "pdfPage": 223,
+    "section": "Vampires at Play : Fire",
+    "summary": "Aggravated damage per turn based on fire intensity, terror frenzy tests, and soak rules."
+  },
+  {
+    "topic": "Fortitude Discipline",
+    "category": "Disciplines",
+    "page": 258,
+    "pdfPage": 260,
+    "section": "Disciplines : Fortitude",
+    "summary": "Supernatural resilience, soaking superficial and aggravated damage, resisting sunlight and mind probes."
+  },
+  {
+    "topic": "Frenzy Tests and Resisting the Beast",
+    "category": "Blood and Hunger",
+    "page": 219,
+    "pdfPage": 221,
+    "section": "Vampires at Play : Frenzy",
+    "summary": "Fury frenzy, hunger frenzy, terror frenzy (Rötschreck), willpower pools, and rider riding the wave."
+  },
+  {
+    "topic": "Gangrel Clan Overview",
+    "category": "Clans",
+    "page": 72,
+    "pdfPage": 74,
+    "section": "Clans : Gangrel",
+    "summary": "The Outlaws and Beasts, Animalism, Fortitude, Protean, and feral animal features upon frenzy."
+  },
+  {
+    "topic": "Generation Chart and Maximums",
+    "category": "Blood and Hunger",
+    "page": 214,
+    "pdfPage": 216,
+    "section": "Vampires at Play : Generation",
+    "summary": "Distance from Caine from 4th to 16th generation, Blood Potency caps, and starting attributes."
+  },
+  {
+    "topic": "Ghouls and Retainers Creation",
+    "category": "Setting and Lore",
+    "page": 234,
+    "pdfPage": 236,
+    "section": "Vampires at Play : Ghouls",
+    "summary": "Feeding mortal vitae, granting level 1 discipline power, longevity, and blood addiction."
+  },
+  {
+    "topic": "Haven Merits and Trappings",
+    "category": "Character Creation",
+    "page": 188,
+    "pdfPage": 190,
+    "section": "Characters : Havens",
+    "summary": "Haven ratings, security systems, hidden armories, luxury, occult libraries, and weaknesses."
+  },
+  {
+    "topic": "Health Tracker and Wounds",
+    "category": "Combat and Health",
+    "page": 126,
+    "pdfPage": 128,
+    "section": "Rules : Health System",
+    "summary": "Health boxes (Stamina + 3), tracking superficial and aggravated damage, and impairment penalties."
+  },
+  {
+    "topic": "Humanity Tracker and Loss",
+    "category": "Rules Mechanics",
+    "page": 236,
+    "pdfPage": 238,
+    "section": "Vampires at Play : Humanity",
+    "summary": "Rating from 10 to 0, remorse tests, stains, torpor waking times, and becoming a Wight at 0."
+  },
+  {
+    "topic": "Hunger Mechanics and Dice",
+    "category": "Blood and Hunger",
+    "page": 203,
+    "pdfPage": 205,
+    "section": "Vampires at Play : Hunger",
+    "summary": "Replacing standard dice with red hunger dice, tracking hunger from 0 to 5, and the relentless Beast."
+  },
+  {
+    "topic": "Hunting and Predator Rolls",
+    "category": "Blood and Hunger",
+    "page": 211,
+    "pdfPage": 213,
+    "section": "Vampires at Play : Hunting",
+    "summary": "Hunting rolls by predator type, hunting grounds, hunting difficulties, and domain trespassing."
+  },
+  {
+    "topic": "Impairment from Physical or Mental Damage",
+    "category": "Combat and Health",
+    "page": 126,
+    "pdfPage": 128,
+    "section": "Rules : Impairment",
+    "summary": "Minus 2 penalty to all physical or mental pools when health or willpower trackers fill completely."
+  },
+  {
+    "topic": "Initiative and Turn Order",
+    "category": "Combat and Health",
+    "page": 298,
+    "pdfPage": 300,
+    "section": "Advanced Systems : Initiative",
+    "summary": "Close combat versus ranged weapon order, declaring actions, and resolving simultaneous attacks."
+  },
+  {
+    "topic": "Kindred Biology and Physiology",
+    "category": "Setting and Lore",
+    "page": 218,
+    "pdfPage": 220,
+    "section": "Vampires at Play : Physiology",
+    "summary": "Blushing of health, heartbeat simulation, digesting food, sexual intercourse, and breathing."
+  },
+  {
+    "topic": "Loresheets Compendium",
+    "category": "Character Creation",
+    "page": 382,
+    "pdfPage": 384,
+    "section": "Loresheets : Bloodlines and Lore",
+    "summary": "Heritage backgrounds from First City lore, Golconda, Clan legends, Theo Bell, and Amici Noctis."
+  },
+  {
+    "topic": "Malkavian Clan Overview",
+    "category": "Clans",
+    "page": 78,
+    "pdfPage": 80,
+    "section": "Clans : Malkavian",
+    "summary": "The Lunatics and Seers, Auspex, Dominate, Obfuscate, Cobweb connection, and delusion banes."
+  },
+  {
+    "topic": "Masquerade Enforcing and Breaches",
+    "category": "Setting and Lore",
+    "page": 55,
+    "pdfPage": 57,
+    "section": "Kindred Society : The Masquerade",
+    "summary": "The First Tradition, covering tracks from mortal eyes, cellphone bans, and Scourge hunts."
+  },
+  {
+    "topic": "Mending Damage with Vitae",
+    "category": "Blood and Hunger",
+    "page": 218,
+    "pdfPage": 220,
+    "section": "Vampires at Play : Healing",
+    "summary": "Superficial damage mended per Rouse Check based on Blood Potency, aggravated damage overnight."
+  },
+  {
+    "topic": "Merits and Flaws Master List",
+    "category": "Character Creation",
+    "page": 179,
+    "pdfPage": 181,
+    "section": "Characters : Advantages",
+    "summary": "Linguistics, Looks, Substance Use, Haven, Herd, Retainers, Resources, and Mythic bans."
+  },
+  {
+    "topic": "Messy Critical Outcome",
+    "category": "Rules Mechanics",
+    "page": 207,
+    "pdfPage": 209,
+    "section": "Vampires at Play : The Beast",
+    "summary": "Critical success achieved via at least one 10 on a Hunger die, triggering predatory compromises."
+  },
+  {
+    "topic": "Mortals and Police Antagonists",
+    "category": "Setting and Lore",
+    "page": 370,
+    "pdfPage": 372,
+    "section": "Antagonists : Mortals",
+    "summary": "Stat blocks for citizens, thugs, detectives, police swat, ghouls, and vampire hunters."
+  },
+  {
+    "topic": "Nosferatu Clan Overview",
+    "category": "Clans",
+    "page": 84,
+    "pdfPage": 86,
+    "section": "Clans : Nosferatu",
+    "summary": "The Sewer Rats, Animalism, Obfuscate, Potence, hideous disfigurement, and information broking."
+  },
+  {
+    "topic": "Obfuscate Discipline",
+    "category": "Disciplines",
+    "page": 260,
+    "pdfPage": 262,
+    "section": "Disciplines : Obfuscate",
+    "summary": "Stealth and illusion, Cloak of Shadows, Unseen Presence, Ghost in the Machine, and Vanish."
+  },
+  {
+    "topic": "Potence Discipline",
+    "category": "Disciplines",
+    "page": 263,
+    "pdfPage": 265,
+    "section": "Disciplines : Potence",
+    "summary": "Supernatural brute strength, Lethal Body, Soaring Leap, Prowess, and Fist of Caine."
+  },
+  {
+    "topic": "Predator Types Master Listing",
+    "category": "Character Creation",
+    "page": 175,
+    "pdfPage": 177,
+    "section": "Characters : Predator Types",
+    "summary": "Alleycat, Bagger, Blood Leech, Cleaver, Consensualist, Farmer, Osiris, Sandman, Scene Queen, Siren."
+  },
+  {
+    "topic": "Presence Discipline",
+    "category": "Disciplines",
+    "page": 266,
+    "pdfPage": 268,
+    "section": "Disciplines : Presence",
+    "summary": "Awe, Daunt, Lingering Kiss, Dread Gaze, Entrancement, and Majesty."
+  },
+  {
+    "topic": "Protean Discipline",
+    "category": "Disciplines",
+    "page": 269,
+    "pdfPage": 271,
+    "section": "Disciplines : Protean",
+    "summary": "Shapeshifting, Eyes of the Beast, Weight of the Feather, Feral Weapons, Earth Meld, and Mist Form."
+  },
+  {
+    "topic": "Ranged Combat and Firearms",
+    "category": "Combat and Health",
+    "page": 299,
+    "pdfPage": 301,
+    "section": "Advanced Systems : Ranged Combat",
+    "summary": "Firearms pools (Composure + Firearms), range bands, rate of fire, cover modifiers, and ammunition."
+  },
+  {
+    "topic": "Remorse Roll End of Session",
+    "category": "Rules Mechanics",
+    "page": 238,
+    "pdfPage": 240,
+    "section": "Vampires at Play : Remorse",
+    "summary": "Rolling unmarked humanity boxes minus stains. One success retains humanity; zero lowers rating by 1."
+  },
+  {
+    "topic": "Resisting Sunlight and Daylight",
+    "category": "Blood and Hunger",
+    "page": 221,
+    "pdfPage": 223,
+    "section": "Vampires at Play : Sunlight",
+    "summary": "Aggravated damage per turn from sunlight based on skin exposure, weather, and blood potency."
+  },
+  {
+    "topic": "Rituals Blood Sorcery List",
+    "category": "Disciplines",
+    "page": 274,
+    "pdfPage": 276,
+    "section": "Disciplines : Blood Sorcery Rituals",
+    "summary": "Blood Walk, Clinging of the Insect, Ward against Ghouls, Scry the Soul, and ritual casting times."
+  },
+  {
+    "topic": "Rouse Checks Procedure",
+    "category": "Blood and Hunger",
+    "page": 211,
+    "pdfPage": 213,
+    "section": "Vampires at Play : Rouse Checks",
+    "summary": "Single die roll on 6 to 10 success; on 1 to 5 hunger increases by 1 box."
+  },
+  {
+    "topic": "Second Inquisition Overview",
+    "category": "Setting and Lore",
+    "page": 360,
+    "pdfPage": 362,
+    "section": "Storytelling : The Second Inquisition",
+    "summary": "Global intelligence coalition hunting kindred via financial records, drones, and black sites."
+  },
+  {
+    "topic": "Skills Master List",
+    "category": "Character Creation",
+    "page": 159,
+    "pdfPage": 161,
+    "section": "Characters : Skills",
+    "summary": "Athletics, Brawl, Craft, Drive, Firearms, Larceny, Melee, Stealth, Survival, and specialties."
+  },
+  {
+    "topic": "Stains and Violations",
+    "category": "Rules Mechanics",
+    "page": 236,
+    "pdfPage": 238,
+    "section": "Vampires at Play : Stains",
+    "summary": "Marks on the soul from violating chronicle tenets or convictions, impairing conscience."
+  },
+  {
+    "topic": "Teamwork and Aiding Rolls",
+    "category": "Rules Mechanics",
+    "page": 122,
+    "pdfPage": 124,
+    "section": "Rules : Teamwork",
+    "summary": "Teamwork rules: Secondary helpers rolling to grant +1 die or margin successes to primary actor."
+  },
+  {
+    "topic": "Thin Blood Alchemy Discipline",
+    "category": "Disciplines",
+    "page": 282,
+    "pdfPage": 284,
+    "section": "Disciplines : Thin Blood Alchemy",
+    "summary": "Formula distillation methods (Athanor Corporis, Calcinatio, Fixatio) mimicking any discipline."
+  },
+  {
+    "topic": "Toreador Clan Overview",
+    "category": "Clans",
+    "page": 90,
+    "pdfPage": 92,
+    "section": "Clans : Toreador",
+    "summary": "The Divas and Artists, Auspex, Celerity, Presence, aesthetic fixation bane, and high society."
+  },
+  {
+    "topic": "Torpor States and Awakening",
+    "category": "Blood and Hunger",
+    "page": 223,
+    "pdfPage": 225,
+    "section": "Vampires at Play : Torpor",
+    "summary": "Comatose kindred hibernation, duration chart based on humanity, and waking via ancient blood."
+  },
+  {
+    "topic": "Touchstones Protection Rules",
+    "category": "Character Creation",
+    "page": 173,
+    "pdfPage": 175,
+    "section": "Characters : Touchstones",
+    "summary": "Living mortal tethered to conviction, catastrophic stains accrued if injured or killed."
+  },
+  {
+    "topic": "Tremere Clan Overview",
+    "category": "Clans",
+    "page": 96,
+    "pdfPage": 98,
+    "section": "Clans : Tremere",
+    "summary": "The Warlocks, Auspex, Blood Sorcery, Dominate, shattered pyramid, and inability to blood bond kindred."
+  },
+  {
+    "topic": "True Faith Powers and Effects",
+    "category": "Setting and Lore",
+    "page": 410,
+    "pdfPage": 412,
+    "section": "Antagonists : True Faith",
+    "summary": "Holy symbols, divine intervention repelling vampires, and aggravated burn effects."
+  },
+  {
+    "topic": "Ventrue Clan Overview",
+    "category": "Clans",
+    "page": 102,
+    "pdfPage": 104,
+    "section": "Clans : Ventrue",
+    "summary": "The Blue Bloods and Kings, Dominate, Fortitude, Presence, and rarefied feeding preferences."
+  },
+  {
+    "topic": "Weapons and Firearms Tables",
+    "category": "Combat and Health",
+    "page": 304,
+    "pdfPage": 306,
+    "section": "Advanced Systems : Weapons",
+    "summary": "Damage ratings for knives, swords, pistols, rifles, shotguns, stakes, and automatic bursts."
+  },
+  {
+    "topic": "Willpower Spending and Recovery",
+    "category": "Rules Mechanics",
+    "page": 126,
+    "pdfPage": 128,
+    "section": "Rules : Willpower",
+    "summary": "Rerolling up to three regular dice, resisting frenzy, superficial vs aggravated willpower damage."
+  },
+  {
+    "topic": "Spectre Possession (Hostile)",
+    "category": "Antagonists and Entities",
+    "page": 377,
+    "pdfPage": 379,
+    "section": "Antagonists : Creatures of Horror",
+    "summary": "Rules for hostile spirits (spectres and wraiths) possessing mortals or vampires. Spirit uses its own Mental and Social attributes and Skills, host provides Physical attributes. Host is conscious but paralyzed, no memory access."
+  },
+  {
+    "topic": "Host Spirit Ceremony",
+    "category": "Oblivion Ceremonies",
+    "page": 208,
+    "pdfPage": 210,
+    "section": "Oblivion Ceremonies : Level 3",
+    "summary": "Level 3 Oblivion ceremony where a vampire voluntarily allows a wraith to possess their body. Heals all Superficial and Aggravated Willpower damage upon departure."
+  },
+  {
+    "topic": "Exorcism Ceremony",
+    "category": "Oblivion Ceremonies",
+    "page": 207,
+    "pdfPage": 209,
+    "section": "Oblivion Ceremonies : Level 3",
+    "summary": "Level 3 Oblivion ceremony to banish and expel a possessing spirit or spectre from a person or location via contested Resolve + Oblivion roll."
+  },
+  {
+    "topic": "Puppeteers (Possessing Ghosts)",
+    "category": "Antagonists and Entities",
+    "page": 212,
+    "pdfPage": 214,
+    "section": "Cults of the Blood Gods : Ghost Antagonists",
+    "summary": "Wraiths specialized in hostile physical possession, riding mortal or kindred vessels to experience physical sensation or enact vendettas."
+  },
+  {
+    "topic": "Fetters and Ghost Mechanics",
+    "category": "Antagonists and Entities",
+    "page": 204,
+    "pdfPage": 206,
+    "section": "Cults of the Blood Gods : The Underworld",
+    "summary": "Objects, locations, or people anchoring a spirit to the living world. Destruction or resolution of fetters banishes the ghost."
+  },
+  {
+    "topic": "Lupines and Werewolves",
+    "category": "Antagonists and Entities",
+    "page": 376,
+    "pdfPage": 378,
+    "section": "Antagonists : Creatures of Horror",
+    "summary": "Lupines in Crinos battle form, unhalved aggravated claw damage, turn by turn regeneration, vulnerability to pure silver."
+  }
+]
