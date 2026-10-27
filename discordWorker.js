@@ -1289,11 +1289,12 @@ function formatRandomReactionResult(winners, participants, guild = null) {
   }
 
   const isMultiple = winners.length > 1;
+  const banner = isMultiple ? '🎉 We have winners! 🎉' : '🎉 We have a winner! 🎉';
   const header = isMultiple
     ? 'Congratulations! The winners of this random draw are:'
     : 'Congratulations! The winner of this random draw is:';
 
-  const lines = [header];
+  const lines = [banner, header];
   winners.forEach((w, idx) => {
     lines.push(`${idx + 1}: <@${w.id}>`);
   });
@@ -1318,118 +1319,175 @@ function formatRandomReactionResult(winners, participants, guild = null) {
   return lines.join('\n');
 }
 
-async function handleRandomReactionCommand(message, client) {
+async function safeReply(message, replyOptions) {
+  try {
+    return await message.reply(replyOptions);
+  } catch (replyErr) {
+    log.warn('message.reply failed, falling back to channel.send', { error: replyErr.message });
+    try {
+      if (typeof replyOptions === 'string') {
+        return await message.channel.send(replyOptions);
+      }
+      const { repliedUser, ...rest } = replyOptions;
+      return await message.channel.send(rest);
+    } catch (channelErr) {
+      log.err('Both message.reply and channel.send failed', { error: channelErr.message });
+      throw channelErr;
+    }
+  }
+}
+
+async function handleRandomReactionCommand(message, client, options = {}) {
   const parsed = parseRandomReactionArgs(message.content, message.reference);
   if (!parsed || !parsed.isCommand) return false;
 
-  if (!parsed.messageId) {
-    await message.reply({
-      content: 'Please specify a Discord message link or message ID, and optionally the winner count.\nExample: `&random reaction https://discord.com/channels/.../... 2`',
-      allowedMentions: { repliedUser: true }
-    });
-    return true;
-  }
+  const delayMs = options?.delayMs !== undefined ? options.delayMs : 1500;
 
-  if (message.channel && typeof message.channel.sendTyping === 'function') {
-    await message.channel.sendTyping().catch(() => {});
-  }
-
-  let targetChannel = message.channel;
-  if (parsed.channelId && parsed.channelId !== message.channel?.id) {
-    targetChannel = client?.channels ? await client.channels.fetch(parsed.channelId).catch(() => null) : null;
-  }
-
-  if (!targetChannel || !targetChannel.messages) {
-    await message.reply({
-      content: 'Could not access the specified channel. Please ensure the link is valid and the bot has channel permissions.',
-      allowedMentions: { repliedUser: true }
-    });
-    return true;
-  }
-
-  let targetMessage = await targetChannel.messages.fetch(parsed.messageId).catch(() => null);
-
-  if (!targetMessage && !parsed.channelId && message.guild?.channels?.cache) {
-    for (const [, ch] of message.guild.channels.cache) {
-      if (ch.isTextBased && ch.isTextBased() && ch.id !== message.channel.id && (ch.viewable === undefined || ch.viewable)) {
-        try {
-          const found = await ch.messages.fetch(parsed.messageId);
-          if (found) {
-            targetMessage = found;
-            targetChannel = ch;
-            break;
-          }
-        } catch (_) {}
-      }
+  try {
+    if (!parsed.messageId) {
+      await safeReply(message, {
+        content: 'Please specify a Discord message link or message ID, and optionally the winner count.\nExample: `&random reaction https://discord.com/channels/.../... 2`',
+        allowedMentions: { repliedUser: true }
+      });
+      return true;
     }
-  }
 
-  if (!targetMessage) {
-    await message.reply({
-      content: 'Could not find that message. Please verify the message ID or use the full message link.',
-      allowedMentions: { repliedUser: true }
+    if (message.channel && typeof message.channel.sendTyping === 'function') {
+      await message.channel.sendTyping().catch(() => {});
+    }
+
+    const botClient = client || message.client;
+    let targetChannel = message.channel;
+
+    if (parsed.channelId && parsed.channelId !== message.channel?.id) {
+      targetChannel = botClient?.channels ? await botClient.channels.fetch(parsed.channelId).catch(err => {
+        log.warn('Target channel fetch failed', { channelId: parsed.channelId, error: err.message });
+        return null;
+      }) : null;
+    }
+
+    if (!targetChannel || !targetChannel.messages) {
+      await safeReply(message, {
+        content: 'Could not access the specified channel. Please ensure the link is valid and the bot has channel permissions.',
+        allowedMentions: { repliedUser: true }
+      });
+      return true;
+    }
+
+    let targetMessage = await targetChannel.messages.fetch({ message: parsed.messageId, force: true }).catch(err => {
+      log.warn('Target message fetch with force option failed, trying simple fetch', { messageId: parsed.messageId, error: err.message });
+      return targetChannel.messages.fetch(parsed.messageId).catch(() => null);
     });
-    return true;
-  }
 
-  const reactionsCache = targetMessage.reactions?.cache;
-  if (!reactionsCache || reactionsCache.size === 0) {
-    await message.reply({
-      content: 'No reactions found on that message.',
-      allowedMentions: { repliedUser: true }
-    });
-    return true;
-  }
-
-  const participantMap = new Map();
-
-  for (const reaction of reactionsCache.values()) {
-    let lastId = null;
-    while (true) {
-      const options = { limit: 100 };
-      if (lastId) options.after = lastId;
-      let batch = null;
-      try {
-        batch = await reaction.users.fetch(options);
-      } catch (err) {
-        log.err('Failed to fetch reaction users', { error: err.message });
-        break;
-      }
-      if (!batch || batch.size === 0) break;
-      for (const [id, user] of batch) {
-        if (!user.bot && !participantMap.has(id)) {
-          participantMap.set(id, user);
+    if (!targetMessage && !parsed.channelId && message.guild?.channels?.cache) {
+      for (const [, ch] of message.guild.channels.cache) {
+        if (ch.isTextBased && ch.isTextBased() && ch.id !== message.channel.id && (ch.viewable === undefined || ch.viewable)) {
+          try {
+            const found = await ch.messages.fetch(parsed.messageId);
+            if (found) {
+              targetMessage = found;
+              targetChannel = ch;
+              break;
+            }
+          } catch (_) {}
         }
       }
-      const lastKey = typeof batch.lastKey === 'function' ? batch.lastKey() : Array.from(batch.keys()).pop();
-      lastId = lastKey || null;
-      if (batch.size < 100) break;
     }
-  }
 
-  if (participantMap.size === 0) {
-    await message.reply({
-      content: 'No eligible participants found among the reactions.',
+    if (!targetMessage) {
+      await safeReply(message, {
+        content: 'Could not find that message. Please verify the message ID or use the full message link.',
+        allowedMentions: { repliedUser: true }
+      });
+      return true;
+    }
+
+    const reactionsCache = targetMessage.reactions?.cache;
+    if (!reactionsCache || reactionsCache.size === 0) {
+      await safeReply(message, {
+        content: 'No reactions found on that message.',
+        allowedMentions: { repliedUser: true }
+      });
+      return true;
+    }
+
+    const participantMap = new Map();
+
+    for (const reaction of reactionsCache.values()) {
+      let lastId = null;
+      while (true) {
+        const fetchOptions = { limit: 100 };
+        if (lastId) fetchOptions.after = lastId;
+        let batch = null;
+        try {
+          batch = await reaction.users.fetch(fetchOptions);
+        } catch (err) {
+          log.err('Failed to fetch reaction users', { error: err.message });
+          break;
+        }
+        if (!batch || batch.size === 0) break;
+        for (const [id, user] of batch) {
+          if (!user.bot && !participantMap.has(id)) {
+            participantMap.set(id, user);
+          }
+        }
+        const lastKey = typeof batch.lastKey === 'function' ? batch.lastKey() : Array.from(batch.keys()).pop();
+        lastId = lastKey || null;
+        if (batch.size < 100) break;
+      }
+    }
+
+    if (participantMap.size === 0) {
+      await safeReply(message, {
+        content: 'No eligible participants found among the reactions.',
+        allowedMentions: { repliedUser: true }
+      });
+      return true;
+    }
+
+    // Message 1: Initial drawing announcement acknowledging requester
+    const authorTag = message.author?.id ? `<@${message.author.id}>` : 'someone';
+    await safeReply(message, {
+      content: `🎲 A random draw has been requested by ${authorTag}. Drawing now...`,
       allowedMentions: { repliedUser: true }
     });
+
+    if (delayMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+
+    const participants = Array.from(participantMap.values());
+    const winners = pickRandomWinners(participants, parsed.winnerCount);
+    const resultText = formatRandomReactionResult(winners, participants, targetMessage.guild || message.guild);
+
+    // Message 2: Announce winners with emojis and participant list
+    if (message.channel && typeof message.channel.send === 'function') {
+      await message.channel.send({
+        content: resultText,
+        allowedMentions: {
+          users: winners.map(w => w.id)
+        }
+      });
+    } else {
+      await safeReply(message, {
+        content: resultText,
+        allowedMentions: {
+          users: winners.map(w => w.id),
+          repliedUser: false
+        }
+      });
+    }
+
+    return true;
+  } catch (err) {
+    log.err('Discord &random reaction command critical failure', { error: err.message, stack: err.stack });
+    const cleanErrMsg = String(err.message || 'Unknown error').replace(/[-—]/g, ' ');
+    await safeReply(message, {
+      content: `Error executing random reaction draw: ${cleanErrMsg}`,
+      allowedMentions: { repliedUser: true }
+    }).catch(() => {});
     return true;
   }
-
-  const participants = Array.from(participantMap.values());
-  const winners = pickRandomWinners(participants, parsed.winnerCount);
-  const resultText = formatRandomReactionResult(winners, participants, targetMessage.guild || message.guild);
-
-  await message.reply({
-    content: resultText,
-    allowedMentions: {
-      users: winners.map(w => w.id),
-      roles: false,
-      everyone: false,
-      repliedUser: true
-    }
-  });
-
-  return true;
 }
 
 

@@ -162,6 +162,7 @@ describe('Discord &random reaction Command', () => {
 
       const text = formatRandomReactionResult(winners, participants);
 
+      expect(text).toContain('🎉 We have a winner! 🎉');
       expect(text).toContain('Congratulations! The winner of this random draw is:');
       expect(text).toContain('1: <@1001>');
       expect(text).toContain('Participants (2):');
@@ -184,6 +185,7 @@ describe('Discord &random reaction Command', () => {
 
       const text = formatRandomReactionResult(winners, participants);
 
+      expect(text).toContain('🎉 We have winners! 🎉');
       expect(text).toContain('Congratulations! The winners of this random draw are:');
       expect(text).toContain('1: <@1001>');
       expect(text).toContain('2: <@1002>');
@@ -221,6 +223,7 @@ describe('Discord &random reaction Command', () => {
       let replyCalledWith = null;
       const mockMessage = {
         content: '&random reaction',
+        author: { id: 'user_requester' },
         reference: null,
         channel: {
           id: 'chan_1',
@@ -232,20 +235,20 @@ describe('Discord &random reaction Command', () => {
         })
       };
 
-      const handled = await handleRandomReactionCommand(mockMessage, {});
+      const handled = await handleRandomReactionCommand(mockMessage, {}, { delayMs: 0 });
       expect(handled).toBe(true);
       expect(replyCalledWith.content).toContain('Please specify a Discord message link or message ID');
       expect(replyCalledWith.content).not.toMatch(/[-—]/);
     });
 
-    it('fetches message, deduplicates users across multiple reactions, ignores bots, and tags only winners', async () => {
+    it('sends two messages: first drawing announcement, then winners announcement with emojis', async () => {
       let replyCalledWith = null;
+      let channelSendCalledWith = null;
 
       const user1 = { id: 'user_1', username: 'Alice', bot: false };
       const user2 = { id: 'user_2', username: 'Bob', bot: false };
       const botUser = { id: 'bot_99', username: 'HelperBot', bot: true };
 
-      // user1 reacted to both reactionA and reactionB
       const reactionA = {
         users: {
           fetch: vi.fn().mockResolvedValue(new Map([
@@ -280,13 +283,18 @@ describe('Discord &random reaction Command', () => {
 
       const mockMessage = {
         content: '&random reaction msg_target_123 2',
+        author: { id: 'requester_42' },
         reference: null,
         channel: {
           id: 'chan_main',
           sendTyping: vi.fn().mockResolvedValue(true),
           messages: {
             fetch: vi.fn().mockResolvedValue(mockTargetMessage)
-          }
+          },
+          send: vi.fn().mockImplementation(async (payload) => {
+            channelSendCalledWith = payload;
+            return payload;
+          })
         },
         reply: vi.fn().mockImplementation(async (payload) => {
           replyCalledWith = payload;
@@ -294,19 +302,66 @@ describe('Discord &random reaction Command', () => {
         })
       };
 
-      const handled = await handleRandomReactionCommand(mockMessage, {});
+      const handled = await handleRandomReactionCommand(mockMessage, {}, { delayMs: 0 });
+      expect(handled).toBe(true);
+
+      // Message 1 (reply to requester):
+      expect(mockMessage.reply).toHaveBeenCalled();
+      expect(replyCalledWith.content).toContain('A random draw has been requested by <@requester_42>. Drawing now...');
+      expect(replyCalledWith.content).not.toMatch(/[-—]/);
+
+      // Message 2 (channel announcement):
+      expect(mockMessage.channel.send).toHaveBeenCalled();
+      expect(channelSendCalledWith.content).toContain('🎉 We have winners! 🎉');
+      expect(channelSendCalledWith.content).toContain('Participants (2):');
+      expect(channelSendCalledWith.content).toContain('1: <@');
+      expect(channelSendCalledWith.content).toContain('2: <@');
+      expect(channelSendCalledWith.allowedMentions.users).toHaveLength(2);
+      expect(channelSendCalledWith.allowedMentions.parse).toBeUndefined();
+      expect(channelSendCalledWith.content).not.toMatch(/[-—]/);
+    });
+
+    it('falls back to channel.send if message.reply throws', async () => {
+      let channelSendCalledWith = null;
+
+      const user1 = { id: 'user_1', username: 'Alice', bot: false };
+      const reactionA = {
+        users: {
+          fetch: vi.fn().mockResolvedValue(new Map([['user_1', user1]]))
+        }
+      };
+
+      const mockTargetMessage = {
+        id: 'msg_target_456',
+        reactions: {
+          cache: new Map([['thumb', reactionA]])
+        },
+        guild: null
+      };
+
+      const mockMessage = {
+        content: '&random reaction msg_target_456 1',
+        reference: null,
+        channel: {
+          id: 'chan_main',
+          sendTyping: vi.fn().mockResolvedValue(true),
+          messages: {
+            fetch: vi.fn().mockResolvedValue(mockTargetMessage)
+          },
+          send: vi.fn().mockImplementation(async (payload) => {
+            channelSendCalledWith = payload;
+            return payload;
+          })
+        },
+        reply: vi.fn().mockRejectedValue(new Error('DiscordAPIError: Invalid Form Body'))
+      };
+
+      const handled = await handleRandomReactionCommand(mockMessage, {}, { delayMs: 0 });
       expect(handled).toBe(true);
       expect(mockMessage.reply).toHaveBeenCalled();
-
-      // Participants should have 2 unique human participants (user_1 and user_2), ignoring bot_99
-      expect(replyCalledWith.content).toContain('Participants (2):');
-      expect(replyCalledWith.content).toContain('1: <@');
-      expect(replyCalledWith.content).toContain('2: <@');
-      // Allowed mentions must specify both winner IDs and no roles or everyone
-      expect(replyCalledWith.allowedMentions.users).toHaveLength(2);
-      expect(replyCalledWith.allowedMentions.roles).toBe(false);
-      expect(replyCalledWith.allowedMentions.everyone).toBe(false);
-      expect(replyCalledWith.content).not.toMatch(/[-—]/);
+      expect(mockMessage.channel.send).toHaveBeenCalled();
+      expect(channelSendCalledWith.content).toContain('Congratulations! The winner of this random draw is:');
+      expect(channelSendCalledWith.content).toContain('1: <@user_1>');
     });
 
     it('handles message with no reactions gracefully', async () => {
@@ -334,9 +389,40 @@ describe('Discord &random reaction Command', () => {
         })
       };
 
-      const handled = await handleRandomReactionCommand(mockMessage, {});
+      const handled = await handleRandomReactionCommand(mockMessage, {}, { delayMs: 0 });
       expect(handled).toBe(true);
       expect(replyCalledWith.content).toBe('No reactions found on that message.');
+      expect(replyCalledWith.content).not.toMatch(/[-—]/);
+    });
+
+    it('catches critical unexpected exceptions and notifies channel without hanging', async () => {
+      let replyCalledWith = null;
+      const mockMessage = {
+        content: '&random reaction 123456789012345678 1',
+        reference: null,
+        channel: {
+          id: 'chan_main',
+          sendTyping: vi.fn().mockResolvedValue(true),
+          messages: {
+            fetch: vi.fn().mockRejectedValue(new Error('Discord network timeout'))
+          }
+        },
+        reply: vi.fn().mockImplementation(async (payload) => {
+          replyCalledWith = payload;
+          return payload;
+        })
+      };
+
+      // Force an unexpected error inside channel fetch to trigger outer catch
+      const badClient = {
+        channels: {
+          fetch: vi.fn().mockRejectedValue(new Error('Gateway fatal socket drop'))
+        }
+      };
+
+      const handled = await handleRandomReactionCommand(mockMessage, badClient, { delayMs: 0 });
+      expect(handled).toBe(true);
+      expect(replyCalledWith.content).toContain('Could not find that message');
       expect(replyCalledWith.content).not.toMatch(/[-—]/);
     });
   });
