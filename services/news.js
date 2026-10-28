@@ -2,6 +2,9 @@
 //
 // Helpers shared by the news and rumour routes.
 
+const discord = require('./discord');
+const { getSetting } = require('../utils/settings');
+
 const XML_ENTITIES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&apos;', '"': '&quot;' };
 
 const xmlEscape = (str) => String(str).replace(/[&<>'"]/g, (c) => XML_ENTITIES[c]);
@@ -113,4 +116,102 @@ async function resolveMediaUrl(rawUrl, appBase, pool) {
   return `${base}${trimmed.startsWith('/') ? '' : '/'}${trimmed}`;
 }
 
-module.exports = { xmlEscape, getAuthorSignature, isVideoUrl, resolveMediaUrl, redactNewsAuthor, NEWS_AUTHOR_COLUMNS, NEWS_AUTHOR_JOINS };
+/**
+ * Broadcasts a news article or announcement to the configured Discord channel.
+ *
+ * @param {Object} entry - News entry { id, type, title, subtitle, theme, media_url }
+ * @param {Object} options - { pool, log, discordPrefix, appBase }
+ * @returns {Promise<{ ok: boolean, reason?: string }>}
+ */
+async function broadcastNewsEntry(entry, options = {}) {
+  const { pool, log, discordPrefix, appBase: customAppBase } = options;
+  const { id, type, title, subtitle, theme, media_url } = entry;
+
+  const discordEnabled = (await getSetting('discord_enabled', 'true')) === 'true';
+  const tokenPresent = Boolean(process.env.DISCORD_BOT_TOKEN);
+
+  if (!discordEnabled || !tokenPresent) {
+    const msg = 'Discord broadcasting is disabled or bot token is missing.';
+    if (log) log.warn(msg);
+    return { ok: false, reason: msg };
+  }
+
+  const channelId = await getSetting('discord_channel_id', null);
+  if (!channelId) {
+    const msg = 'Discord channel not configured.';
+    if (log) log.warn(msg);
+    return { ok: false, reason: msg };
+  }
+
+  const appBase = (customAppBase || process.env.APP_BASE_URL || 'https://portal.attlarp.gr').replace(/\/$/, '');
+  const isAnnouncement = type === 'announcement';
+  const articleLink = isAnnouncement
+    ? `${appBase}/court/announcements/${id}`
+    : `${appBase}/news/${id}`;
+
+  const defaultPrefix = isAnnouncement
+    ? '📜 **New Court Announcement!** 📜'
+    : '🔥 **Hot news from the mortal world!** 🔥';
+
+  const prefix = discordPrefix || defaultPrefix;
+  let broadcast = `# ${prefix}\n\n**${title}**\n`;
+  if (subtitle) broadcast += `*${subtitle}*\n`;
+
+  if (!isAnnouncement) {
+    const outletNames = {
+      'ERT': 'ERT News', 'SKAI': 'SKAI.gr', 'ALPHA': 'Alpha News',
+      'MEGA': 'Mega Gegonota', 'KATHIMERINI': 'Kathimerini',
+      'GOSSIP': 'Gossip-tv', 'OPENTV': 'Open TV', 'ALTER': 'Alter Channel'
+    };
+    const outletEmojiKeys = {
+      'ERT': 'outlet_ert', 'SKAI': 'outlet_skai', 'ALPHA': 'outlet_alpha',
+      'MEGA': 'outlet_mega', 'KATHIMERINI': 'outlet_kathimerini',
+      'GOSSIP': 'outlet_gossip', 'OPENTV': 'outlet_opentv', 'ALTER': 'outlet_alter'
+    };
+    const sourceName = outletNames[theme] || theme || 'Unknown';
+    let emojiTag = '';
+    try {
+      const emojiIdsRaw = await getSetting('discord_emoji_ids', '{}');
+      const emojiMap = JSON.parse(emojiIdsRaw || '{}');
+      const emojiKey = outletEmojiKeys[theme];
+      if (emojiKey && emojiMap[emojiKey]) {
+        const val = String(emojiMap[emojiKey]).trim();
+        if (val.startsWith('<') && val.endsWith('>')) emojiTag = val;
+        else if (/^\d+$/.test(val)) emojiTag = `<:${emojiKey}:${val}>`;
+      }
+    } catch (_) {}
+
+    broadcast += `\n**Source:** ${emojiTag ? `${emojiTag} ` : ''}${sourceName}`;
+    broadcast += `\n**Read the full article:**\n${articleLink}`;
+    broadcast += `\n\n> ℹ️ *Note: News articles feature real ads to help support and maintain the site, fitting naturally in universe with mortal media.*`;
+  } else {
+    const sig = await getAuthorSignature(id, pool);
+    broadcast += `\n*${sig}*`;
+    broadcast += `\n\n**Read the full announcement here:**\n${articleLink}`;
+  }
+
+  const payload = { content: broadcast };
+  const resolvedImg = await resolveMediaUrl(media_url, appBase, pool);
+  if (resolvedImg) {
+    if (isVideoUrl(resolvedImg)) {
+      payload.content += `\n\n🎥 **Attached Media:**\n${resolvedImg}`;
+    } else {
+      payload.embeds = [{ image: { url: resolvedImg } }];
+    }
+  }
+
+  await (options.sendDiscordChannelMessage || discord.sendDiscordChannelMessage)(channelId, payload);
+  if (log) log.ok('Discord news broadcast sent successfully', { entryId: id, channelId });
+  return { ok: true };
+}
+
+module.exports = {
+  xmlEscape,
+  getAuthorSignature,
+  isVideoUrl,
+  resolveMediaUrl,
+  redactNewsAuthor,
+  broadcastNewsEntry,
+  NEWS_AUTHOR_COLUMNS,
+  NEWS_AUTHOR_JOINS
+};

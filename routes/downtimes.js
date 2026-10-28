@@ -814,6 +814,74 @@ module.exports = async function (fastify, opts) {
     }
   });
 
+  // Admin: Instant Mass Downtime Release Now
+  fastify.post('/api/admin/downtimes/release-now', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const nowLocal = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+
+      // Release every held downtime action and send push notifications to affected players
+      const affectedPlayerCount = await releasePendingAndNotify().catch(e => {
+        log.warn('Release now player notify failed', { message: e.message });
+        return 0;
+      });
+
+      // Ensure all unreleased rows are marked is_released = 1
+      const [updateResult] = await pool.query('UPDATE downtimes SET is_released = 1 WHERE is_released = 0');
+      const totalReleasedRows = (updateResult?.affectedRows || 0) + affectedPlayerCount;
+
+      // Update release date and mark notified to prevent duplicate cron notifications
+      await setSetting('downtime_mass_release_date', nowLocal);
+      await setSetting('downtime_mass_release_notified', 'true');
+      await syncSettingsToActiveCycle({ downtime_mass_release_date: nowLocal });
+
+      // Ntfy push alert
+      if (typeof broadcastNtfyAlert === 'function') {
+        try {
+          const alertResult = broadcastNtfyAlert('Downtime Resolutions have been released to all players!', {
+            title: '🦇 Downtimes Released',
+            tags: 'loudspeaker,vampire',
+            priority: 'high'
+          });
+          if (alertResult && typeof alertResult.catch === 'function') {
+            alertResult.catch(() => {});
+          }
+        } catch (_) {}
+      }
+
+      // Discord announcement broadcast
+      let discordBroadcastSent = false;
+      try {
+        discordBroadcastSent = await broadcastMassDowntimeDiscordAnnouncement();
+      } catch (err) {
+        log.warn('Release now discord announcement failed', { message: err.message });
+      }
+
+      log.adm('Manual mass release now triggered', {
+        admin_id: req.user.id,
+        affectedPlayers: affectedPlayerCount,
+        totalReleasedRows,
+        discordBroadcastSent,
+        releaseDate: nowLocal
+      });
+
+      const massReleaseMode = await getSetting('downtime_mass_release_mode', 'false');
+
+      reply.send({
+        ok: true,
+        message: 'All downtimes released successfully',
+        releasedCount: affectedPlayerCount,
+        discordSent: Boolean(discordBroadcastSent),
+        downtime_mass_release_date: nowLocal,
+        downtime_mass_release_mode: massReleaseMode === 'true'
+      });
+    } catch (e) {
+      log.err('Manual mass release now failed', { message: e.message, stack: e.stack });
+      reply.status(500).send({ error: 'Failed to release downtimes' });
+    }
+  });
+
   // Admin: Clean Resolved/Rejected Downtimes
   fastify.delete('/api/admin/downtimes/resolved', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {

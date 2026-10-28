@@ -2,12 +2,10 @@
 //
 // News and announcements: public feed, sitemap, authoring, per-theme
 // permissions, media, and broadcast.
-const axios = require('axios');
 const sharp = require('sharp');
-const { sendDiscordChannelMessage } = require('../services/discord');
 const { getSetting } = require('../utils/settings');
 const { sanitizeRichText } = require('../utils/sanitize');
-const { xmlEscape, getAuthorSignature, isVideoUrl, resolveMediaUrl, redactNewsAuthor, NEWS_AUTHOR_COLUMNS, NEWS_AUTHOR_JOINS } = require('../services/news');
+const { xmlEscape, getAuthorSignature, isVideoUrl, resolveMediaUrl, redactNewsAuthor, broadcastNewsEntry, NEWS_AUTHOR_COLUMNS, NEWS_AUTHOR_JOINS } = require('../services/news');
 
 const guards = require('../services/guards');
 module.exports = async function (fastify, opts) {
@@ -359,67 +357,11 @@ module.exports = async function (fastify, opts) {
 
       if (discordEnabled && notifyPrems && tokenPresent && !is_private) {
         try {
-          const channelId = await getSetting('discord_channel_id', null);
-          if (channelId) {
-            const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
-            const isAnnouncement = type === 'announcement';
-            const articleLink = isAnnouncement
-              ? `${appBase}/court/announcements/${insertResult.insertId}`
-              : `${appBase}/news/${insertResult.insertId}`;
-
-            const defaultPrefix = isAnnouncement
-              ? `📜 **New Court Announcement!** 📜`
-              : `🔥 **Hot news from the mortal world!** 🔥`;
-
-            const prefix = req.body?.discord_prefix || defaultPrefix;
-            let broadcast = `# ${prefix}\n\n**${title}**\n`;
-            if (subtitle) broadcast += `*${subtitle}*\n`;
-
-            if (!isAnnouncement) {
-              const outletNames = {
-                'ERT': 'ERT News', 'SKAI': 'SKAI.gr', 'ALPHA': 'Alpha News',
-                'MEGA': 'Mega Gegonota', 'KATHIMERINI': 'Kathimerini',
-                'GOSSIP': 'Gossip-tv', 'OPENTV': 'Open TV', 'ALTER': 'Alter Channel'
-              };
-              const outletEmojiKeys = {
-                'ERT': 'outlet_ert', 'SKAI': 'outlet_skai', 'ALPHA': 'outlet_alpha',
-                'MEGA': 'outlet_mega', 'KATHIMERINI': 'outlet_kathimerini',
-                'GOSSIP': 'outlet_gossip', 'OPENTV': 'outlet_opentv', 'ALTER': 'outlet_alter'
-              };
-              const sourceName = outletNames[theme] || theme || 'Unknown';
-              let emojiTag = '';
-              try {
-                const emojiIdsRaw = await getSetting('discord_emoji_ids', '{}');
-                const emojiMap = JSON.parse(emojiIdsRaw || '{}');
-                const emojiKey = outletEmojiKeys[theme];
-                if (emojiKey && emojiMap[emojiKey]) {
-                  const val = String(emojiMap[emojiKey]).trim();
-                  if (val.startsWith('<') && val.endsWith('>')) emojiTag = val;
-                  else if (/^\d+$/.test(val)) emojiTag = `<:${emojiKey}:${val}>`;
-                }
-              } catch (_) {}
-
-              broadcast += `\n**Source:** ${emojiTag ? `${emojiTag} ` : ''}${sourceName}`;
-              broadcast += `\n**Read the full article:**\n${articleLink}`;
-              broadcast += `\n\n> ℹ️ *Note: News articles feature real ads to help support and maintain the site, fitting naturally in universe with mortal media.*`;
-            } else {
-              const sig = await getAuthorSignature(insertResult.insertId, pool);
-              broadcast += `\n*${sig}*`;
-              broadcast += `\n\n**Read the full announcement here:**\n${articleLink}`;
-            }
-
-            const payload = { content: broadcast };
-            const resolvedImg = await resolveMediaUrl(media_url, appBase, pool);
-            if (resolvedImg) {
-              if (isVideoUrl(resolvedImg)) {
-                payload.content += `\n\n🎥 **Attached Media:**\n${resolvedImg}`;
-              } else {
-                payload.embeds = [{ image: { url: resolvedImg } }];
-              }
-            }
-
-            await sendDiscordChannelMessage(channelId, payload);
-          }
+          const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
+          await broadcastNewsEntry(
+            { id: insertResult.insertId, type, title, subtitle, theme, media_url },
+            { pool, log, discordPrefix: req.body?.discord_prefix, appBase }
+          );
         } catch (discordErr) {
           log.err('Discord news broadcast failed', { error: discordErr.response?.data ? JSON.stringify(discordErr.response.data) : discordErr.message });
         }
@@ -441,78 +383,18 @@ module.exports = async function (fastify, opts) {
       if (rows.length === 0) return reply.status(404).send({ error: 'Entry not found' });
 
       const entry = rows[0];
-      const { type, title, subtitle, theme, media_url } = entry;
-
-      const discordEnabled = await getSetting('discord_enabled', 'true') === 'true';
-      const tokenPresent = !!process.env.DISCORD_BOT_TOKEN;
-
-      if (!discordEnabled || !tokenPresent) {
-        return reply.status(400).send({ error: 'Discord broadcasting is disabled or bot token is missing.' });
-      }
-
-      const channelId = await getSetting('discord_channel_id', null);
-      if (!channelId) {
-        return reply.status(400).send({ error: 'Discord channel not configured.' });
-      }
-
       const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
-      const isAnnouncement = type === 'announcement';
-      const articleLink = isAnnouncement
-        ? `${appBase}/court/announcements/${entry.id}`
-        : `${appBase}/news/${entry.id}`;
 
-      const defaultPrefix = isAnnouncement
-        ? `📜 **New Court Announcement!** 📜`
-        : `🔥 **Hot news from the mortal world!** 🔥`;
+      const res = await broadcastNewsEntry(entry, {
+        pool,
+        log,
+        discordPrefix: req.body?.discord_prefix,
+        appBase
+      });
 
-      const prefix = req.body?.discord_prefix || defaultPrefix;
-      let broadcast = `# ${prefix}\n\n**${title}**\n`;
-      if (subtitle) broadcast += `*${subtitle}*\n`;
-
-      if (!isAnnouncement) {
-        const outletNames = {
-          'ERT': 'ERT News', 'SKAI': 'SKAI.gr', 'ALPHA': 'Alpha News',
-          'MEGA': 'Mega Gegonota', 'KATHIMERINI': 'Kathimerini',
-          'GOSSIP': 'Gossip-tv', 'OPENTV': 'Open TV', 'ALTER': 'Alter Channel'
-        };
-        const outletEmojiKeys = {
-          'ERT': 'outlet_ert', 'SKAI': 'outlet_skai', 'ALPHA': 'outlet_alpha',
-          'MEGA': 'outlet_mega', 'KATHIMERINI': 'outlet_kathimerini',
-          'GOSSIP': 'outlet_gossip', 'OPENTV': 'outlet_opentv', 'ALTER': 'outlet_alter'
-        };
-        const sourceName = outletNames[theme] || theme || 'Unknown';
-        let emojiTag = '';
-        try {
-          const emojiIdsRaw = await getSetting('discord_emoji_ids', '{}');
-          const emojiMap = JSON.parse(emojiIdsRaw || '{}');
-          const emojiKey = outletEmojiKeys[theme];
-          if (emojiKey && emojiMap[emojiKey]) {
-            const val = String(emojiMap[emojiKey]).trim();
-            if (val.startsWith('<') && val.endsWith('>')) emojiTag = val;
-            else if (/^\d+$/.test(val)) emojiTag = `<:${emojiKey}:${val}>`;
-          }
-        } catch (_) {}
-
-        broadcast += `\n**Source:** ${emojiTag ? `${emojiTag} ` : ''}${sourceName}`;
-        broadcast += `\n**Read the full article:**\n${articleLink}`;
-        broadcast += `\n\n> ℹ️ *Note: News articles feature real ads to help support and maintain the site, fitting naturally in universe with mortal media.*`;
-      } else {
-        const sig = await getAuthorSignature(entry.id, pool);
-        broadcast += `\n*${sig}*`;
-        broadcast += `\n\n**Read the full announcement here:**\n${articleLink}`;
+      if (!res.ok) {
+        return reply.status(400).send({ error: res.reason || 'Failed to broadcast to Discord' });
       }
-
-      const payload = { content: broadcast };
-      const resolvedImg = await resolveMediaUrl(media_url, appBase, pool);
-      if (resolvedImg) {
-        if (isVideoUrl(resolvedImg)) {
-          payload.content += `\n\n🎥 **Attached Media:**\n${resolvedImg}`;
-        } else {
-          payload.embeds = [{ image: { url: resolvedImg } }];
-        }
-      }
-
-      await sendDiscordChannelMessage(channelId, payload);
 
       log.ok('News/Announcement rebroadcast triggered', { user_id: req.user.id, entry_id: req.params.id });
       reply.send({ success: true });
@@ -529,33 +411,43 @@ module.exports = async function (fastify, opts) {
       if (rows.length === 0) return reply.status(404).send({ error: 'Not found' });
 
       const entry = rows[0];
+      const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
+
       if (entry.is_private === 0) {
+        if (!req.body?.skip_discord) {
+          const res = await broadcastNewsEntry(entry, {
+            pool,
+            log,
+            discordPrefix: req.body?.discord_prefix,
+            appBase
+          }).catch(err => {
+            log.err('Broadcast for already published news failed', { error: err.message });
+            return { ok: false, reason: err.message };
+          });
+          return reply.send({ success: true, message: 'Already published', discordSent: Boolean(res?.ok) });
+        }
         return reply.send({ success: true, message: 'Already published' });
       }
 
       await pool.query('UPDATE news_entries SET is_private = 0, published_by = ?, published_at = NOW() WHERE id = ?', [req.user.id, req.params.id]);
 
-      // We can reuse the same broadcast logic as the POST /api/news/:id/broadcast or just trigger it via fetch.
-      // Or we can just let the admin click the "Broadcast" button from the UI after publishing.
-      // Wait, the user said "i sould be able to push it to public form there to ap;piar in official new s and the discord bot."
-      // Let's trigger the broadcast endpoint internally.
+      let discordSent = false;
       if (!req.body?.skip_discord) {
         try {
-          const broadcastPayload = {};
-          if (req.body?.discord_prefix) {
-            broadcastPayload.discord_prefix = req.body.discord_prefix;
-          }
-          await axios.post(`http://127.0.0.1:${process.env.PORT || 3001}/api/news/${req.params.id}/broadcast`, broadcastPayload, {
-            headers: {
-              'Cookie': req.headers.cookie, // Pass the cookie for auth
-            }
+          const res = await broadcastNewsEntry(entry, {
+            pool,
+            log,
+            discordPrefix: req.body?.discord_prefix,
+            appBase
           });
+          discordSent = Boolean(res?.ok);
         } catch (err) {
           log.err('Failed to auto-broadcast published news', { error: err.message });
         }
       }
 
-      reply.send({ success: true, message: 'Published successfully' });
+      log.ok('News entry published', { entry_id: req.params.id, admin_id: req.user.id, discordSent });
+      reply.send({ success: true, message: 'Published successfully', discordSent });
     } catch (e) {
       log.err('Publish news failed', { message: e.message });
       reply.status(500).send({ error: 'Failed to publish news' });

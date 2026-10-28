@@ -220,7 +220,8 @@ async function releasePendingAndNotify() {
      FROM downtimes d JOIN characters c ON c.id = d.character_id
      WHERE d.is_released = 0
        AND ((d.gm_resolution IS NOT NULL AND d.gm_resolution <> '')
-            OR LOWER(d.status) IN ('resolved', 'rejected', 'resolved in scene'))`
+            OR LOWER(d.status) IN ('resolved', 'rejected', 'resolved in scene', 'approved')
+            OR LOWER(d.status) LIKE 'approved%')`
   );
   await pool.query('UPDATE downtimes SET is_released = 1 WHERE is_released = 0');
   const { sendPushNotification } = require('./push');
@@ -248,6 +249,7 @@ async function broadcastMassDowntimeDiscordAnnouncement() {
 
     const cycles = await readCycles();
     const activeIdx = await findActiveIndex(cycles);
+    const cycle = activeIdx >= 0 ? cycles[activeIdx] : null;
     const rawCycleName = cycle?.title || (cycle?.id ? `Cycle ${cycle.id}` : 'the current cycle');
     const cycleName = String(rawCycleName).replace(/[-—]/g, ':').trim();
 
