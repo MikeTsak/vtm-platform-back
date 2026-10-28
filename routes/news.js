@@ -52,6 +52,18 @@ module.exports = async function (fastify, opts) {
       // Public page, but remember logged-in readers. Admins (and admins
       // impersonating a player) are skipped so previewing doesn't pollute it.
       await optionalAuth(req);
+      const isAdminUser = Boolean(req.user && guards.isAdmin(req.user) && !req.user.imp);
+
+      // Track public views for non-admin visits (including anonymous visitors and players)
+      const ua = req.headers['user-agent'] || '';
+      const isBot = /bot|spider|crawl|slurp|headless|mediapartners/i.test(ua);
+      if (!isAdminUser && !isBot) {
+        pool.query(
+          'UPDATE news_entries SET views = COALESCE(views, 0) + 1 WHERE id = ?',
+          [rows[0].id]
+        ).catch((e) => log.err('Increment news views failed', { message: e.message }));
+      }
+
       if (req.user && !guards.isAdmin(req.user) && !req.user.imp) {
         pool.query(
           `INSERT INTO news_reads (news_id, user_id) VALUES (?, ?)
@@ -476,6 +488,7 @@ module.exports = async function (fastify, opts) {
   // GET /api/admin/news/:id/reads - Logged-in readers of one article (Admin only)
   fastify.get('/api/admin/news/:id/reads', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
+      const newsId = Number(req.params.id);
       const [rows] = await pool.query(
         `SELECT r.user_id, r.first_read_at, r.last_read_at, r.open_count,
                 u.display_name, c.name as char_name, c.clan
@@ -484,9 +497,10 @@ module.exports = async function (fastify, opts) {
          LEFT JOIN characters c ON c.user_id = u.id
          WHERE r.news_id = ?
          ORDER BY r.last_read_at DESC`,
-        [Number(req.params.id)]
+        [newsId]
       );
-      reply.send({ readers: rows });
+      const [entryRows] = await pool.query('SELECT views FROM news_entries WHERE id = ?', [newsId]);
+      reply.send({ readers: rows, views: Number(entryRows[0]?.views || 0) });
     } catch (e) {
       log.err('Fetch news readers failed', { message: e.message });
       reply.status(500).send({ error: 'Failed to load readers' });
