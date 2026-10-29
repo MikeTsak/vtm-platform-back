@@ -8,7 +8,7 @@
 const { isOwnerOrAdmin, isAdmin } = require('../services/guards');
 const { parseSheet } = require('../utils/sheet');
 const { CATALOG } = require('../utils/xpPurchase');
-const { rouse } = require('../services/dice');
+const { rouse, mendAmount, bloodPotency } = require('../services/dice');
 const { insertRoll } = require('../services/rolls');
 
 // What a logged Rouse Check is labelled as in the feed and dice log.
@@ -16,8 +16,6 @@ const ROUSE_SOURCES = new Set(['rouse_check', 'discipline_rouse_check', 'blush_o
 
 // V5 Blood Potency table (mirrors getBloodPotencyStats in the front end).
 const ROUSE_REROLL_LEVEL = [0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5];
-const MEND_AMOUNT = [1, 1, 2, 2, 3, 3, 3, 3, 4, 4, 5];
-const bloodPotency = (sheet, clan) => Math.min(10, Math.max(0, Number(sheet.blood_potency ?? (clan === 'Thin-blood' ? 0 : 1)) || 0));
 
 module.exports = async function (fastify, opts) {
   const { pool, authRequired } = opts;
@@ -147,7 +145,7 @@ module.exports = async function (fastify, opts) {
       const before = Number(sheet.health[key]) || 0;
       if (before <= 0) return { error: `No ${key} damage to mend.` };
       const rolls = Array.from({ length: aggravated ? 3 : 1 }, () => rouse(sheet, false));
-      const healed = Math.min(before, aggravated ? 1 : MEND_AMOUNT[bloodPotency(sheet, row.clan)]);
+      const healed = Math.min(before, aggravated ? 1 : mendAmount(sheet, row.clan));
       sheet.health[key] = before - healed;
       const fails = rolls.filter(r => !r.success).length;
       await logRoll({

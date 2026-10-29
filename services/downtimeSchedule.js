@@ -70,27 +70,47 @@ function withDefaultDates(cycles) {
   }));
 }
 
-// A cycle's id carries the number every feeding and ghoul upkeep is filed under (cycleIndexOf in
-// utils/feedingCycle.js), so ids must stay small, unique and stable. The Calendar's generators make
-// ids from Date.now() (too big for the INT column) or from event ids (renumbering live cycles, which
-// would make every player look unfed). On save: a valid `cycle_N` id is kept, otherwise the cycle
-// takes the id of the stored cycle that closes the same day, otherwise the next free number.
+// A cycle's id carries the number every feeding and ghoul upkeep is filed under (the digits of the
+// id, cycleIndexOf in utils/feedingCycle.js), so ids must stay small, unique and stable. The
+// Calendar's generators make ids from Date.now() (too big for the INT column) or from event ids
+// (renumbering live cycles, which would make every player look unfed). On save:
+//   1. an id already stored (with a usable number) is kept, whatever its shape;
+//   2. otherwise the cycle takes the id of the stored cycle that closes the same day;
+//   3. otherwise a new `cycle_N` id is kept if its number is free;
+//   4. otherwise it gets the next free number.
 // Returns the cycles plus the renames, so a caller can follow a renamed active cycle.
-const CYCLE_ID = /^cycle_(\d{1,6})$/;
+const MAX_CYCLE_NUMBER = 999999;
+function cycleNumber(c) {
+  const n = parseInt(String(c?.id || '').replace(/\D/g, ''), 10);
+  return n > 0 && n <= MAX_CYCLE_NUMBER ? n : null;
+}
 function withStableIds(cycles, previous = []) {
-  const numberOf = (c) => { const m = CYCLE_ID.exec(String(c?.id || '')); return m ? Number(m[1]) : null; };
-  let next = Math.max(0, ...[...previous, ...cycles].map(numberOf).filter(n => n !== null)) + 1;
-  const used = new Set();
-  const renames = {};
-  const out = cycles.map((c) => {
-    let id = numberOf(c) !== null && !used.has(c.id) ? c.id : null;
-    if (!id) {
-      const match = previous.find(p => numberOf(p) !== null && !used.has(p.id) && p.closing_date && dateOnly(p.closing_date) === dateOnly(c.closing_date));
-      id = match ? match.id : `cycle_${next++}`;
-      renames[c.id] = id;
+  const stored = new Map(previous.filter(cycleNumber).map(p => [String(p.id), p]));
+  const storedNumbers = new Set([...stored.values()].map(cycleNumber));
+  const usedNumbers = new Set();
+  const ids = cycles.map(() => null);
+
+  cycles.forEach((c, i) => {
+    if (stored.has(String(c.id)) && !usedNumbers.has(cycleNumber(c))) { ids[i] = c.id; usedNumbers.add(cycleNumber(c)); }
+  });
+  let next = Math.max(0, ...storedNumbers) + 1;
+  cycles.forEach((c, i) => {
+    if (ids[i]) return;
+    const match = [...stored.values()].find(p => !usedNumbers.has(cycleNumber(p)) && p.closing_date && dateOnly(p.closing_date) === dateOnly(c.closing_date));
+    if (match) ids[i] = match.id;
+    else if (/^cycle_\d+$/.test(String(c.id)) && cycleNumber(c) && !storedNumbers.has(cycleNumber(c)) && !usedNumbers.has(cycleNumber(c))) ids[i] = c.id;
+    else {
+      while (usedNumbers.has(next) || storedNumbers.has(next)) next += 1;
+      ids[i] = `cycle_${next}`;
     }
-    used.add(id);
-    return id === c.id ? c : { ...c, id };
+    usedNumbers.add(cycleNumber({ id: ids[i] }));
+  });
+
+  const renames = {};
+  const out = cycles.map((c, i) => {
+    if (ids[i] === c.id) return c;
+    renames[c.id] = ids[i];
+    return { ...c, id: ids[i] };
   });
   return { cycles: out, renames };
 }
@@ -229,12 +249,13 @@ async function cycleWindow({ isProject = false, now = new Date() } = {}) {
 
 // Can this character file one more action right now? Feeding gate, phase/window/deadline and the
 // per-cycle limit. Returns { error, code } (error null = allowed; code 'not_fed' | 'limit' | a
-// submissionState reason) plus the counting window.
-async function checkSubmission({ characterId, isProject = false }) {
+// submissionState reason) plus the counting window. `requireFed: false` is for an action that is
+// itself the feeding (routes/feeding.js's safe feeding).
+async function checkSubmission({ characterId, isProject = false, requireFed = true }) {
   const { from, to, cycleIndex } = await cycleWindow({ isProject });
   const done = (error, code = null) => ({ error, code, from, to });
 
-  if ((await getSetting('feeding_enabled', 'true')) === 'true') {
+  if (requireFed && (await getSetting('feeding_enabled', 'true')) === 'true') {
     const [fed] = await pool.query(
       "SELECT id FROM feedings WHERE character_id=? AND cycle_index=? AND status='resolved' LIMIT 1",
       [characterId, cycleIndex]
@@ -372,6 +393,8 @@ if (require.main === module) {
   );
   assert.deepStrictEqual(stable.cycles.map(c => c.id), ['cycle_3', 'cycle_4', 'cycle_2']);
   assert.deepStrictEqual(stable.renames, { event_cycle_42: 'cycle_3', cycle_1730000000000: 'cycle_4' });
+  // A stored id of another shape is kept as is: renaming it would refile the live cycle's feedings.
+  assert.deepStrictEqual(withStableIds([{ id: 'event_cycle_42', closing_date: '2026-10-25' }], [{ id: 'event_cycle_42', closing_date: '2026-10-25' }]).renames, {});
   console.log('downtimeSchedule self-check ok');
   process.exit(0);
 }

@@ -38,8 +38,8 @@ async function runFeedingDecay(pool, log) {
   if (completedCycle <= lastProcessed) return { skipped: 'already processed', completedCycle, lastProcessed };
 
   const [rows] = await pool.query(
-    // Herd and Storyteller-recorded feeds never touch the domain, so they don't count as activity here.
-    "SELECT division, outcome FROM feedings WHERE cycle_index = ? AND status='resolved' AND outcome NOT IN ('herd','manual')",
+    // Herd, Storyteller-recorded and downtime feeds never touch the domain, so they don't count as activity here.
+    "SELECT division, outcome FROM feedings WHERE cycle_index = ? AND status='resolved' AND outcome NOT IN ('herd','manual','downtime')",
     [completedCycle]
   );
   const byDivision = new Map();

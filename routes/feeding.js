@@ -21,16 +21,19 @@ const { isOwnerOrAdmin } = require('../services/guards');
 const { chasseBonus } = require('../data/chasseMerits');
 const { PREDATOR_HUNTING_POOLS, PREDATOR_SPECIALTIES } = require('../data/predatorHuntingPools');
 const { rollDice, computeFeedingOutcome, OUTCOME_DELTAS } = require('../services/feedingDice');
+const { mendAmount } = require('../services/dice');
 const { pickFlavor } = require('../data/predatorFlavor');
 const { runFeedingDecay } = require('../services/feedingDecay');
 const { parseSheet } = require('../utils/sheet');
 const { withSheetLock } = require('../utils/sheetLock');
 const { feedGhoul, ghoulStates, ghoulsFor, runGhoulUpkeep, dueUpkeepCycle } = require('../services/ghoulFeeding');
-const { readCycles, withDefaultDates, findActiveIndex } = require('../services/downtimeSchedule');
+const { readCycles, withDefaultDates, findActiveIndex, checkSubmission } = require('../services/downtimeSchedule');
 
 const HUNTS_PER_CYCLE = 3;
 // Feedings that aren't hunts: no roll, no domain, no cap.
-const NOT_HUNTS = ['herd', 'manual'];
+const NOT_HUNTS = ['herd', 'manual', 'downtime'];
+// Safe feeding paid with a downtime action: no roll, no domain, Hunger -2 (never below 1).
+const SAFE_FEED_HUNGER = -2;
 
 // Character sheets store this as `predator_type` (snake_case) everywhere the
 // rest of the app reads it (CharacterEditor.jsx's edit field, CharacterView.jsx,
@@ -127,9 +130,9 @@ module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, sendPushNotification } = opts;
 
   async function getMyCharacter(userId) {
-    const [rows] = await pool.query('SELECT id, sheet FROM characters WHERE user_id=?', [userId]);
+    const [rows] = await pool.query('SELECT id, clan, sheet FROM characters WHERE user_id=?', [userId]);
     if (!rows.length) return null;
-    return { id: rows[0].id, sheet: parseSheet(rows[0].sheet) };
+    return { id: rows[0].id, clan: rows[0].clan, sheet: parseSheet(rows[0].sheet) };
   }
 
   async function getCurrentCycle() {
@@ -194,11 +197,28 @@ module.exports = async function (fastify, opts) {
     return idx >= 0 ? cycles[idx].ghoul_feeding_date || null : null;
   }
 
+  // The trackers the Feeding page always shows on top (and Mending reads). Mend is
+  // POST /api/characters/:id/mend: it costs Rouse Checks, so it lives on this page.
+  function vitalsOf(char) {
+    const track = (t, max) => ({ superficial: Number(t?.superficial) || 0, aggravated: Number(t?.aggravated) || 0, max });
+    const attr = (name) => Number(char.sheet.attributes?.[name]) || 1;
+    return {
+      characterId: char.id,
+      hunger: readHunger(char.sheet),
+      health: track(char.sheet.health, attr('Stamina') + 3),
+      willpower: track(char.sheet.willpower, attr('Composure') + attr('Resolve')),
+      mendAmount: mendAmount(char.sheet, char.clan),
+    };
+  }
+
   /* -------------------- Status -------------------- */
   fastify.get('/api/feeding/status', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const enabled = await isFeedingEnabled();
-      if (!enabled) return reply.send({ enabled: false });
+      if (!enabled) {
+        const char = await getMyCharacter(req.user.id);
+        return reply.send({ enabled: false, ...(char ? vitalsOf(char) : { noCharacter: true }) });
+      }
 
       const cycle = await getCurrentCycle();
       const { cycleIndex, cycleStart, cycleEnd, cycleTitle, isDowntimeLinked } = cycle;
@@ -257,7 +277,8 @@ module.exports = async function (fastify, opts) {
             };
           }),
         myDivision,
-        hunger: readHunger(char.sheet),
+        ...vitalsOf(char),
+        safeFeedBlock: (await checkSubmission({ characterId: char.id, requireFed: false })).error,
         pending: pendingRows[0] || null,
         resolvedThisCycle: cycleRows.rows.find((r) => r.status === 'resolved') || null,
         feedings: cycleRows.rows.filter((r) => r.status === 'resolved'),
@@ -343,6 +364,56 @@ module.exports = async function (fastify, opts) {
     } catch (err) {
       log.err('POST /api/feeding/roll failed', { error: err.message });
       reply.status(500).send({ error: 'Database error making feeding roll' });
+    }
+  });
+
+  /* -------------------- Safe feeding (spend a downtime action) -------------------- */
+  // Same deal as XP training (utils/xpPurchase.js runPurchase): the action is filed as a resolved,
+  // released downtime of this cycle in the same transaction, under the same phase/deadline and
+  // 3-per-cycle checks as a normal submission. It is itself a feeding, so it skips the "fed first"
+  // check, unlocks the rest of the actions, and is not one of the three hunts.
+  fastify.post('/api/feeding/downtime-feed', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      if (!(await isFeedingEnabled())) return reply.status(400).send({ error: 'The Feeding system is currently disabled.' });
+      const char = await getMyCharacter(req.user.id);
+      if (!char) return reply.status(404).send({ error: 'No character found for this account.' });
+      const { cycleIndex } = await getCurrentCycle();
+
+      // The character row lock serialises this against the other ways of using up an action.
+      const result = await withCharacterLock(char.id, async (conn, locked) => {
+        const mine = await cycleFeedings(conn, char.id, cycleIndex);
+        if (mine.pending) return { code: 409, body: { error: 'Accept your current hunt first.' } };
+        const { error } = await checkSubmission({ characterId: char.id, requireFed: false });
+        if (error) return { code: 400, body: { error: `A safe feeding uses a downtime action. ${error}` } };
+
+        const sheet = locked.sheet;
+        const before = readHunger(sheet);
+        if (before <= 1) return { code: 400, body: { error: 'Your Hunger is already as low as feeding can bring it.' } };
+        sheet.hunger = applyHungerDelta(before, SAFE_FEED_HUNGER);
+        await conn.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), char.id]);
+
+        const [owned] = await conn.query('SELECT division FROM domain_claims WHERE owner_character_id=? LIMIT 1', [char.id]);
+        await conn.query(
+          `INSERT INTO feedings
+            (character_id, division, predator_type, pool_label, dice_pool, difficulty, bonus_dice,
+             chasse_merits_applied, hunger_before, normal_dice, hunger_dice, outcome, status, cycle_index, hunger_delta, safety_delta, resolved_at)
+           VALUES (?, ?, ?, 'Downtime', 0, 0, 0, '[]', ?, '[]', '[]', 'downtime', 'resolved', ?, ?, 0, NOW())`,
+          [char.id, owned[0]?.division || 39, getPredatorType(sheet) || '', before, cycleIndex, sheet.hunger - before]
+        );
+        await conn.query(
+          `INSERT INTO downtimes (character_id, title, body, status, gm_resolution, resolved_at, is_released)
+           VALUES (?, ?, ?, 'resolved', ?, NOW(), 1)`,
+          [char.id, '[Feeding] Safe feeding',
+            `Spent the night feeding carefully and out of sight. Hunger ${before} → ${sheet.hunger}.`,
+            'Filed automatically: a safe feeding uses a downtime action, needs no roll and leaves no trace on any domain.']
+        );
+        log.info('Safe feeding with a downtime action', { character_id: char.id, cycleIndex, hungerBefore: before, hungerAfter: sheet.hunger });
+        return { code: 200, body: { ok: true, hungerBefore: before, hungerAfter: sheet.hunger } };
+      });
+      reply.status(result.code).send(result.body);
+    } catch (err) {
+      log.err('POST /api/feeding/downtime-feed failed', { error: err.message });
+      reply.status(500).send({ error: 'Database error spending a downtime on feeding' });
     }
   });
 
@@ -709,6 +780,15 @@ module.exports = async function (fastify, opts) {
           undone.safety = -feeding.safety_delta;
         }
 
+        // A safe feeding filed its downtime action in the same transaction: give the slot back too.
+        if (feeding.outcome === 'downtime') {
+          await conn.query(
+            `DELETE FROM downtimes WHERE character_id=? AND title='[Feeding] Safe feeding'
+               AND ABS(TIMESTAMPDIFF(SECOND, created_at, ?)) <= 5 ORDER BY id LIMIT 1`,
+            [feeding.character_id, feeding.created_at]
+          );
+          undone.downtime = true;
+        }
         await conn.query('DELETE FROM feedings WHERE id=?', [feedingId]);
         log.adm('Admin allowed feeding reroll', { admin: req.user.id, feeding, undone });
         return { code: 200, body: { ok: true, undone } };
@@ -850,7 +930,7 @@ module.exports = async function (fastify, opts) {
       counts.critical = byOutcome.critical || 0;
       counts.messy_critical = byOutcome.messy_critical || 0;
       counts.bestial_failure = byOutcome.bestial_failure || 0;
-      counts.success = (byOutcome.success || 0) + (byOutcome.critical || 0) + (byOutcome.messy_critical || 0) + (byOutcome.herd || 0) + (byOutcome.manual || 0);
+      counts.success = (byOutcome.success || 0) + (byOutcome.critical || 0) + (byOutcome.messy_critical || 0) + (byOutcome.herd || 0) + (byOutcome.manual || 0) + (byOutcome.downtime || 0);
       counts.failure = (byOutcome.failure || 0) + (byOutcome.bestial_failure || 0);
 
       const pct = counts.total > 0 ? Math.round((counts.success / counts.total) * 100) : null;

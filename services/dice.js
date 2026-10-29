@@ -63,4 +63,9 @@ function rouse(sheet, advantage = false) {
   return { success, dice };
 }
 
-module.exports = { rollD10, rollPool, computeOutcome, computeV5Outcome, rouse };
+// V5 Blood Potency table: Superficial damage one Mend Rouse Check heals (index = Blood Potency).
+const MEND_AMOUNT = [1, 1, 2, 2, 3, 3, 3, 3, 4, 4, 5];
+const bloodPotency = (sheet, clan) => Math.min(10, Math.max(0, Number(sheet.blood_potency ?? (clan === 'Thin-blood' ? 0 : 1)) || 0));
+const mendAmount = (sheet, clan) => MEND_AMOUNT[bloodPotency(sheet, clan)];
+
+module.exports = { rollD10, rollPool, computeOutcome, computeV5Outcome, rouse, mendAmount, bloodPotency };
