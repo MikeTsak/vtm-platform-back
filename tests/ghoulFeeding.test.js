@@ -7,7 +7,7 @@ const { setupTestDatabase, getTestPool, truncateAll } = require('./setup/testDb'
 const { registerUser, extractSessionCookie } = require('./setup/helpers');
 const { setSetting } = require('../utils/settings');
 const { parseSheet } = require('../utils/sheet');
-const { runGhoulUpkeep } = require('../services/ghoulFeeding');
+const { runGhoulUpkeep, nextUpkeepAt } = require('../services/ghoulFeeding');
 
 const CYCLE = 7;
 let app, pool, ana, bo, cy, coterieId;
@@ -89,8 +89,14 @@ describe('ghoul upkeep', () => {
     const id = await ghoul({ character_id: ana.characterId, name: 'Old Hand' });
     const res = await runGhoulUpkeep(pool, null, { now: new Date(Date.now() + 30 * 86400000), notify: () => {} });
     expect(res.skipped).toBe('baseline recorded');
+    expect(res.cycleIndex).toBe(CYCLE); // its downtimes had closed: upkeep starts next cycle
+    expect(await nextUpkeepAt()).toBeNull(); // the skipped cycle's date is not advertised
     expect(await rowFor(id)).toBeUndefined();
+    // That cycle now owes nothing: no "needs feeding", no Feed button.
+    const mine = JSON.parse((await req('GET', '/api/feeding/ghouls', ana)).body).ghouls.find((g) => g.id === id);
+    expect(mine).toMatchObject({ state: 'fed', canFeed: false });
     await pool.query('DELETE FROM retainers WHERE id=?', [id]);
+    await setSetting('ghoul_upkeep_last_cycle', '');
   });
 
   it('at cycle end: a random member below Hunger 5 pays for a coterie ghoul; let-go ghouls starve', async () => {
@@ -126,6 +132,7 @@ describe('ghoul upkeep', () => {
 
 describe('feed all and Storyteller feedings', () => {
   it('feeds every ghoul the player can, skipping the ones let go', async () => {
+    await setSetting('ghoul_upkeep_last_cycle', ''); // the previous test ran this cycle's upkeep
     const dee = await makePlayer('Dee');
     const a = await ghoul({ character_id: dee.characterId, name: 'First' });
     const b = await ghoul({ character_id: dee.characterId, name: 'Second' });

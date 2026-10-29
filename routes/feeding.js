@@ -26,8 +26,8 @@ const { pickFlavor } = require('../data/predatorFlavor');
 const { runFeedingDecay } = require('../services/feedingDecay');
 const { parseSheet } = require('../utils/sheet');
 const { withSheetLock } = require('../utils/sheetLock');
-const { feedGhoul, ghoulStates, ghoulsFor, runGhoulUpkeep, dueUpkeepCycle } = require('../services/ghoulFeeding');
-const { readCycles, withDefaultDates, findActiveIndex, checkSubmission } = require('../services/downtimeSchedule');
+const { feedGhoul, ghoulStates, ghoulsFor, runGhoulUpkeep, dueUpkeepCycle, nextUpkeepAt } = require('../services/ghoulFeeding');
+const { checkSubmission } = require('../services/downtimeSchedule');
 
 const HUNTS_PER_CYCLE = 3;
 // Feedings that aren't hunts: no roll, no domain, no cap.
@@ -190,12 +190,8 @@ module.exports = async function (fastify, opts) {
     return ghouls.filter((g) => states[g.id].canFeed).length;
   }
 
-  // The current cycle's ghoul upkeep time from the Calendar.
-  async function upkeepAt() {
-    const cycles = withDefaultDates(await readCycles());
-    const idx = await findActiveIndex(cycles);
-    return idx >= 0 ? cycles[idx].ghoul_feeding_date || null : null;
-  }
+  // The next ghoul upkeep time from the Calendar.
+  const upkeepAt = () => nextUpkeepAt();
 
   // The trackers the Feeding page always shows on top (and Mending reads). Mend is
   // POST /api/characters/:id/mend: it costs Rouse Checks, so it lives on this page.

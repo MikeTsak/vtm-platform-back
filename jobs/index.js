@@ -280,6 +280,8 @@ function scheduleFeedingCycleDecay() {
 // passed, feed or starve every ghoul still unfed that cycle. Runs once per
 // cycle; see services/ghoulFeeding.js.
 function scheduleGhoulUpkeep() {
+  // Once at boot too, so a fresh deploy records its baseline before anyone can feed a ghoul.
+  runGhoulUpkeep(pool, log).catch((error) => log.err('Ghoul upkeep at boot failed', { error: error.message }));
   return cron.schedule('*/10 * * * *', async () => {
     try {
       const result = await runGhoulUpkeep(pool, log);

@@ -70,10 +70,13 @@ async function starveGhoul(conn, { ghoulId, cycleIndex, method }) {
  *   canFeed    no feeding (or starvation) recorded for this cycle yet
  *   current    this cycle's row, if any, with the feeder's name
  * A ghoul starved in an earlier cycle stays 'starved' until it is fed again.
+ * Once a cycle's upkeep is done (or skipped: the cycle the system went live in), a
+ * ghoul with nothing recorded for it owes nothing more that cycle.
  */
 async function ghoulStates(db, ids, cycleIndex) {
+  const settled = String(await getSetting('ghoul_upkeep_last_cycle', '')) === String(cycleIndex);
   const out = {};
-  for (const id of ids) out[id] = { state: 'hungry', canFeed: true, current: null };
+  for (const id of ids) out[id] = settled ? { state: 'fed', canFeed: false, current: null } : { state: 'hungry', canFeed: true, current: null };
   if (!ids.length) return out;
   const [rows] = await db.query(
     `SELECT g.retainer_id, g.cycle_index, g.status, g.method, g.rouse_dice, g.hunger_before, g.hunger_after, g.created_at,
@@ -123,8 +126,9 @@ async function coterieFeeders(db, coterieId) {
 /**
  * Feeds (or starves) every ghoul with nothing recorded for the cycle.
  * Without `cycleIndex` it runs for the cycle whose upkeep time has passed, once:
- * the processed cycle is remembered, and the very first run only records a
- * baseline so deploying this never charges an old cycle.
+ * the processed cycle is remembered. The very first run only records a baseline,
+ * so going live never charges a cycle that was already under way: when the
+ * current cycle's downtimes have closed, upkeep starts with the next cycle.
  */
 async function runGhoulUpkeep(pool, log, { now = new Date(), cycleIndex: forced, notify } = {}) {
   if ((await getSetting('feeding_enabled', 'true')) !== 'true') return { skipped: 'disabled' };
@@ -132,12 +136,14 @@ async function runGhoulUpkeep(pool, log, { now = new Date(), cycleIndex: forced,
   let cycleIndex = forced;
   if (cycleIndex == null) {
     const due = await dueUpkeepCycle(now);
-    if (!due) return { skipped: 'nothing due' };
     const last = await getSetting('ghoul_upkeep_last_cycle', null);
     if (last === null || last === '') {
-      await setSetting('ghoul_upkeep_last_cycle', String(due.cycleIndex));
-      return { skipped: 'baseline recorded', cycleIndex: due.cycleIndex };
+      const current = await resolveCurrentFeedingCycle(now);
+      const baseline = current.cycleEnd < now ? current.cycleIndex : (due ? due.cycleIndex : current.cycleIndex - 1);
+      await setSetting('ghoul_upkeep_last_cycle', String(baseline));
+      return { skipped: 'baseline recorded', cycleIndex: baseline };
     }
+    if (!due) return { skipped: 'nothing due' };
     if (String(due.cycleIndex) === String(last)) return { skipped: 'already processed', cycleIndex: due.cycleIndex };
     cycleIndex = due.cycleIndex;
   }
@@ -235,4 +241,16 @@ async function attachFeeding(db, retainers, isGhoul = isGhoulRow) {
   return retainers;
 }
 
-module.exports = { feedGhoul, starveGhoul, ghoulStates, ghoulsFor, runGhoulUpkeep, dueUpkeepCycle, currentCycleIndex, attachFeeding };
+// The next ghoul upkeep still to come (Calendar), for the Feeding page's countdown text.
+// A cycle already settled (its upkeep ran, or it was skipped at go-live) is left out.
+async function nextUpkeepAt(now = new Date()) {
+  const settled = String(await getSetting('ghoul_upkeep_last_cycle', ''));
+  const upcoming = withDefaultDates(await readCycles())
+    .filter((c, i) => String(cycleIndexOf(c, i)) !== settled)
+    .map((c) => c.ghoul_feeding_date)
+    .filter((d) => d && new Date(d) > now)
+    .sort();
+  return upcoming[0] || null;
+}
+
+module.exports = { nextUpkeepAt, feedGhoul, starveGhoul, ghoulStates, ghoulsFor, runGhoulUpkeep, dueUpkeepCycle, currentCycleIndex, attachFeeding };
