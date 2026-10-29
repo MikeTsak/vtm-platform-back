@@ -8,7 +8,7 @@
 const { isOwnerOrAdmin, isAdmin } = require('../services/guards');
 const { parseSheet } = require('../utils/sheet');
 const { CATALOG } = require('../utils/xpPurchase');
-const { rollD10 } = require('../services/dice');
+const { rouse } = require('../services/dice');
 const { insertRoll } = require('../services/rolls');
 
 // What a logged Rouse Check is labelled as in the feed and dice log.
@@ -18,18 +18,6 @@ const ROUSE_SOURCES = new Set(['rouse_check', 'discipline_rouse_check', 'blush_o
 const ROUSE_REROLL_LEVEL = [0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5];
 const MEND_AMOUNT = [1, 1, 2, 2, 3, 3, 3, 3, 4, 4, 5];
 const bloodPotency = (sheet, clan) => Math.min(10, Math.max(0, Number(sheet.blood_potency ?? (clan === 'Thin-blood' ? 0 : 1)) || 0));
-
-/** One Rouse Check against the sheet (mutates it): Hunger +1 on a fail, frenzy at Hunger 5. */
-function rouse(sheet, advantage) {
-  const dice = advantage ? [rollD10(), rollD10()] : [rollD10()];
-  const success = dice.some(d => d >= 6);
-  const before = Number(sheet.hunger) || 0;
-  if (!success) {
-    if (before >= 5) sheet.frenzyState = 'hunger';
-    sheet.hunger = Math.min(5, before + 1);
-  }
-  return { success, dice };
-}
 
 module.exports = async function (fastify, opts) {
   const { pool, authRequired } = opts;

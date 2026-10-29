@@ -8,7 +8,7 @@ const { getCycleInfo, resolveCurrentFeedingCycle } = require('../utils/feedingCy
 const { parseSheet } = require('../utils/sheet');
 const { sendPushNotification } = require('../services/push');
 const {
-  deadlineEnd, submissionState, syncSettingsToActiveCycle, applyActiveCycle, readCycles, findActiveIndex, withReleaseDates,
+  deadlineEnd, submissionState, syncSettingsToActiveCycle, applyActiveCycle, readCycles, findActiveIndex, withDefaultDates, withStableIds,
   releasePendingAndNotify, broadcastMassDowntimeDiscordAnnouncement, dateOnly, ACTIONS_PER_CYCLE, cycleWindow, checkSubmission,
 } = require('../services/downtimeSchedule');
 
@@ -897,7 +897,7 @@ module.exports = async function (fastify, opts) {
   // GET /api/admin/downtimes/cycles: Retrieve multiple downtime operation cycles
   fastify.get('/api/admin/downtimes/cycles', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const cycles = await readCycles();
+      const cycles = withDefaultDates(await readCycles());
       reply.send({ cycles });
     } catch (e) {
       log.err('Fetch downtime cycles failed', { message: e.message });
@@ -936,11 +936,13 @@ module.exports = async function (fastify, opts) {
   // POST /api/admin/downtimes/cycles: Save multiple downtime operation cycles
   fastify.post('/api/admin/downtimes/cycles', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const { cycles, activeCycleId } = req.body || {};
-      // New or generated cycles arrive without a release date: give each a concrete one to adjust.
-      let validCycles = withReleaseDates(Array.isArray(cycles) ? cycles : []);
+      const { cycles } = req.body || {};
       // Which cycle is live is decided from the stored list before this edit (its dates may be what changed).
       const previous = await readCycles();
+      // Generated ids are renumbered onto stable cycle_N ids; new cycles get concrete release/ghoul dates.
+      const { cycles: stable, renames } = withStableIds(Array.isArray(cycles) ? cycles : [], previous);
+      let validCycles = withDefaultDates(stable);
+      const activeCycleId = renames[req.body?.activeCycleId] || req.body?.activeCycleId;
       const liveIdx = await findActiveIndex(previous);
       const liveId = liveIdx >= 0 ? previous[liveIdx].id : null;
       await setSetting('downtime_cycles_schedule', JSON.stringify(validCycles));

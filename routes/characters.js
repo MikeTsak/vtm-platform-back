@@ -1,4 +1,5 @@
 const { getSetting } = require('../utils/settings');
+const { attachFeeding } = require('../services/ghoulFeeding');
 const { DEFAULT_DISABLED_CLANS } = require('../utils/clans');
 const { isAdmin, userOwnsCharacter } = require('../services/guards');
 const { parseSheet } = require('../utils/sheet');
@@ -360,6 +361,7 @@ module.exports = async function (fastify, opts) {
         row.sheet = parseSheet(row.sheet);
         results.push({ ...row }); // Ensure it's a plain object
       }
+      await attachFeeding(pool, results);
         const payload = JSON.stringify(results);
         return reply
           .header('Content-Type', 'application/json; charset=utf-8')

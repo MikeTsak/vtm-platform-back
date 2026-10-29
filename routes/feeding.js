@@ -1,8 +1,12 @@
 // routes/feeding.js
 //
-// The Feeding system: a required, server-authoritative hunting roll gating
-// downtime submission each 3-week cycle (see routes/downtimes.js's
-// feeding-gate check). Dice are rolled here, not on the client — same
+// The Feeding system: server-authoritative hunting rolls, up to
+// HUNTS_PER_CYCLE per downtime cycle, at least one feeding (a roll or a Herd
+// use) gating downtime submission (see services/downtimeSchedule.js's
+// checkSubmission). Herd uses are not hunts: they repeat until the Herd pool
+// runs dry. Hunting is open from the cycle's opening to its deadline, so the
+// ghoul upkeep that lands before the event (services/ghoulFeeding.js) can
+// only be offset by feeding ghouls early. Dice are rolled here, not on the client — same
 // "server is the source of truth" principle as routes/mechanics.js — so a
 // player can never fabricate or redo a masquerade-affecting result. A roll
 // is persisted as 'pending' the instant it's made; from there the only two
@@ -21,6 +25,12 @@ const { pickFlavor } = require('../data/predatorFlavor');
 const { runFeedingDecay } = require('../services/feedingDecay');
 const { parseSheet } = require('../utils/sheet');
 const { withSheetLock } = require('../utils/sheetLock');
+const { feedGhoul, ghoulStates, ghoulsFor, runGhoulUpkeep, dueUpkeepCycle } = require('../services/ghoulFeeding');
+const { readCycles, withDefaultDates, findActiveIndex } = require('../services/downtimeSchedule');
+
+const HUNTS_PER_CYCLE = 3;
+// Feedings that aren't hunts: no roll, no domain, no cap.
+const NOT_HUNTS = ['herd', 'manual'];
 
 // Character sheets store this as `predator_type` (snake_case) everywhere the
 // rest of the app reads it (CharacterEditor.jsx's edit field, CharacterView.jsx,
@@ -149,13 +159,49 @@ module.exports = async function (fastify, opts) {
     return (await getSetting('feeding_enabled', 'true')) === 'true';
   }
 
+  // Hunting runs from the cycle's opening to the end of its closing day.
+  function isHuntingOpen(cycle, now = new Date()) {
+    const start = cycle?.cycleStart instanceof Date ? cycle.cycleStart.getTime() : NaN;
+    const end = cycle?.cycleEnd instanceof Date ? cycle.cycleEnd.getTime() : NaN;
+    return !(now.getTime() < start) && !(now.getTime() > end);
+  }
+
+  // This cycle's feedings for a character (conn may hold the character lock).
+  async function cycleFeedings(db, characterId, cycleIndex) {
+    const [rows] = await db.query(
+      "SELECT * FROM feedings WHERE character_id=? AND cycle_index=? ORDER BY id",
+      [characterId, cycleIndex]
+    );
+    return {
+      rows,
+      pending: rows.find((r) => r.status === 'pending') || null,
+      hunts: rows.filter((r) => !NOT_HUNTS.includes(r.outcome)).length,
+      fed: rows.some((r) => r.status === 'resolved'),
+    };
+  }
+
+  // Ghouls this character could still feed this cycle (nav badge, Feeding page).
+  async function countUnfedGhouls(characterId, cycleIndex) {
+    const ghouls = (await ghoulsFor(pool, characterId)).filter((g) => !g.let_starve);
+    const states = await ghoulStates(pool, ghouls.map((g) => g.id), cycleIndex);
+    return ghouls.filter((g) => states[g.id].canFeed).length;
+  }
+
+  // The current cycle's ghoul upkeep time from the Calendar.
+  async function upkeepAt() {
+    const cycles = withDefaultDates(await readCycles());
+    const idx = await findActiveIndex(cycles);
+    return idx >= 0 ? cycles[idx].ghoul_feeding_date || null : null;
+  }
+
   /* -------------------- Status -------------------- */
   fastify.get('/api/feeding/status', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const enabled = await isFeedingEnabled();
       if (!enabled) return reply.send({ enabled: false });
 
-      const { cycleIndex, cycleStart, cycleEnd, cycleTitle, isDowntimeLinked } = await getCurrentCycle();
+      const cycle = await getCurrentCycle();
+      const { cycleIndex, cycleStart, cycleEnd, cycleTitle, isDowntimeLinked } = cycle;
       const char = await getMyCharacter(req.user.id);
       if (!char) {
         return reply.send({ enabled: true, cycleIndex, cycleStart, cycleEnd, cycleTitle: cycleTitle || `Cycle ${cycleIndex}`, isDowntimeLinked: !!isDowntimeLinked, noCharacter: true });
@@ -175,10 +221,7 @@ module.exports = async function (fastify, opts) {
         "SELECT * FROM feedings WHERE character_id=? AND status='pending' ORDER BY id DESC LIMIT 1",
         [char.id]
       );
-      const [resolvedRows] = await pool.query(
-        "SELECT * FROM feedings WHERE character_id=? AND cycle_index=? AND status='resolved' LIMIT 1",
-        [char.id, cycleIndex]
-      );
+      const cycleRows = await cycleFeedings(pool, char.id, cycleIndex);
 
       const herdDots = getHerdDots(char.sheet);
 
@@ -214,8 +257,15 @@ module.exports = async function (fastify, opts) {
             };
           }),
         myDivision,
+        hunger: readHunger(char.sheet),
         pending: pendingRows[0] || null,
-        resolvedThisCycle: resolvedRows[0] || null,
+        resolvedThisCycle: cycleRows.rows.find((r) => r.status === 'resolved') || null,
+        feedings: cycleRows.rows.filter((r) => r.status === 'resolved'),
+        fed: cycleRows.fed,
+        huntsUsed: cycleRows.hunts,
+        huntsMax: HUNTS_PER_CYCLE,
+        huntingOpen: isHuntingOpen(cycle),
+        ghoulsUnfed: await countUnfedGhouls(char.id, cycleIndex),
       });
     } catch (err) {
       log.err('GET /api/feeding/status failed', { error: err.message });
@@ -246,17 +296,19 @@ module.exports = async function (fastify, opts) {
       const difficulty = huntingDifficulty(division);
       if (difficulty === null) return reply.status(400).send({ error: 'Invalid domain.' });
 
-      const { cycleIndex } = await getCurrentCycle();
+      const cycle = await getCurrentCycle();
+      const { cycleIndex } = cycle;
+      if (!isHuntingOpen(cycle)) return reply.status(400).send({ error: 'Hunting is closed until the next downtime cycle opens.' });
 
       // The character row lock serializes this against a double-submitted
-      // roll (or a concurrent Herd feed), so the one-per-cycle check holds.
+      // roll (or a concurrent Herd feed), so the per-cycle cap holds.
       const result = await withCharacterLock(char.id, async (conn, locked) => {
-        const [existing] = await conn.query(
-          "SELECT id, status FROM feedings WHERE character_id=? AND cycle_index=? AND status IN ('pending','resolved') LIMIT 1",
-          [char.id, cycleIndex]
-        );
-        if (existing.length) {
-          return { code: 409, body: { error: 'You already have a feeding roll for this cycle.', feedingId: existing[0].id, status: existing[0].status } };
+        const mine = await cycleFeedings(conn, char.id, cycleIndex);
+        if (mine.pending) {
+          return { code: 409, body: { error: 'Accept your current hunt before hunting again.', feedingId: mine.pending.id, status: 'pending' } };
+        }
+        if (mine.hunts >= HUNTS_PER_CYCLE) {
+          return { code: 409, body: { error: `You have already hunted ${HUNTS_PER_CYCLE} times this cycle.` } };
         }
 
         const sheet = locked.sheet;
@@ -311,15 +363,19 @@ module.exports = async function (fastify, opts) {
         return reply.status(400).send({ error: 'Please select a domain to feed in.' });
       }
 
-      const { cycleIndex } = await getCurrentCycle();
+      const cycle = await getCurrentCycle();
+      const { cycleIndex } = cycle;
+      if (!isHuntingOpen(cycle)) return reply.status(400).send({ error: 'Feeding is closed until the next downtime cycle opens.' });
 
+      // Herd isn't a hunt: it repeats until the pool runs dry, and once you
+      // have fed this cycle it is only worth using while Hunger can still drop.
       const result = await withCharacterLock(char.id, async (conn, locked) => {
-        const [existing] = await conn.query(
-          "SELECT id, status FROM feedings WHERE character_id=? AND cycle_index=? AND status IN ('pending','resolved') LIMIT 1",
-          [char.id, cycleIndex]
-        );
-        if (existing.length) {
-          return { code: 409, body: { error: 'You already have a feeding roll for this cycle.', feedingId: existing[0].id, status: existing[0].status } };
+        const mine = await cycleFeedings(conn, char.id, cycleIndex);
+        if (mine.pending) {
+          return { code: 409, body: { error: 'Accept your current hunt before feeding on your Herd.', feedingId: mine.pending.id, status: 'pending' } };
+        }
+        if (mine.fed && readHunger(locked.sheet) <= 1) {
+          return { code: 400, body: { error: 'Your Hunger is already as low as feeding can bring it.' } };
         }
 
         const sheet = locked.sheet;
@@ -794,7 +850,7 @@ module.exports = async function (fastify, opts) {
       counts.critical = byOutcome.critical || 0;
       counts.messy_critical = byOutcome.messy_critical || 0;
       counts.bestial_failure = byOutcome.bestial_failure || 0;
-      counts.success = (byOutcome.success || 0) + (byOutcome.critical || 0) + (byOutcome.messy_critical || 0) + (byOutcome.herd || 0);
+      counts.success = (byOutcome.success || 0) + (byOutcome.critical || 0) + (byOutcome.messy_critical || 0) + (byOutcome.herd || 0) + (byOutcome.manual || 0);
       counts.failure = (byOutcome.failure || 0) + (byOutcome.bestial_failure || 0);
 
       const pct = counts.total > 0 ? Math.round((counts.success / counts.total) * 100) : null;
@@ -805,6 +861,225 @@ module.exports = async function (fastify, opts) {
         error: 'Database error fetching feeding stats',
         details: err.sqlMessage || err.message,
       });
+    }
+  });
+
+  /* -------------------- Ghouls -------------------- */
+  // A personal ghoul is its owner's; a coterie ghoul any member may feed, but
+  // only its domitor lets it go (same split as the coterie retainer routes).
+  const mayLetStarve = (g, characterId) => (g.coterie_id ? g.domitor_character_id : g.character_id) === characterId;
+
+  async function loadGhoul(db, retainerId, characterId) {
+    const ghoul = (await ghoulsFor(db, characterId)).find((g) => g.id === retainerId);
+    return ghoul ? { ...ghoul, canLetStarve: mayLetStarve(ghoul, characterId) } : null;
+  }
+
+  fastify.get('/api/feeding/ghouls', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const char = await getMyCharacter(req.user.id);
+      if (!char) return reply.send({ ghouls: [], upkeepAt: null });
+      const { cycleIndex } = await getCurrentCycle();
+      const ghouls = await ghoulsFor(pool, char.id);
+      const states = await ghoulStates(pool, ghouls.map((g) => g.id), cycleIndex);
+      reply.send({
+        upkeepAt: await upkeepAt(),
+        ghouls: ghouls.map((g) => ({
+          ...g,
+          let_starve: !!g.let_starve,
+          canLetStarve: mayLetStarve(g, char.id),
+          ...states[g.id],
+        })),
+      });
+    } catch (err) {
+      log.err('GET /api/feeding/ghouls failed', { error: err.message });
+      reply.status(500).send({ error: 'Database error fetching ghouls' });
+    }
+  });
+
+  fastify.post('/api/feeding/ghouls/:rid/feed', { preHandler: [authRequired] }, async (req, reply) => {
+    const conn = await pool.getConnection();
+    try {
+      if (!(await isFeedingEnabled())) return reply.status(400).send({ error: 'The Feeding system is currently disabled.' });
+      const char = await getMyCharacter(req.user.id);
+      if (!char) return reply.status(404).send({ error: 'No character found for this account.' });
+      const ghoul = await loadGhoul(pool, Number(req.params.rid), char.id);
+      if (!ghoul) return reply.status(404).send({ error: 'Ghoul not found.' });
+      const { cycleIndex } = await getCurrentCycle();
+
+      await conn.beginTransaction();
+      const r = await feedGhoul(conn, { ghoul, feederId: char.id, cycleIndex, method: 'early' });
+      if (r.error) { await conn.rollback(); return reply.status(400).send({ error: r.error }); }
+      await conn.query('UPDATE retainers SET let_starve=0 WHERE id=?', [ghoul.id]);
+      await conn.commit();
+      log.info('Ghoul fed early', { retainer_id: ghoul.id, character_id: char.id, cycleIndex, success: r.success });
+      reply.send({ ok: true, success: r.success, dice: r.dice, hungerBefore: r.hungerBefore, hungerAfter: r.hungerAfter });
+    } catch (err) {
+      await conn.rollback().catch(() => {});
+      if (err.code === 'ER_DUP_ENTRY') return reply.status(409).send({ error: 'This ghoul has already been fed (or starved) this cycle.' });
+      log.err('POST /api/feeding/ghouls/:rid/feed failed', { error: err.message });
+      reply.status(500).send({ error: 'Database error feeding ghoul' });
+    } finally {
+      conn.release();
+    }
+  });
+
+  // Feeds every ghoul the character can still feed this cycle (not the ones let
+  // go), one Rouse Check each, stopping when their Hunger reaches 5.
+  fastify.post('/api/feeding/ghouls/feed-all', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      if (!(await isFeedingEnabled())) return reply.status(400).send({ error: 'The Feeding system is currently disabled.' });
+      const char = await getMyCharacter(req.user.id);
+      if (!char) return reply.status(404).send({ error: 'No character found for this account.' });
+      const { cycleIndex } = await getCurrentCycle();
+      const ghouls = (await ghoulsFor(pool, char.id)).filter((g) => !g.let_starve);
+      const states = await ghoulStates(pool, ghouls.map((g) => g.id), cycleIndex);
+
+      const fed = [];
+      let stopped = null;
+      for (const ghoul of ghouls.filter((g) => states[g.id].canFeed)) {
+        const conn = await pool.getConnection();
+        try {
+          await conn.beginTransaction();
+          const r = await feedGhoul(conn, { ghoul, feederId: char.id, cycleIndex, method: 'early' });
+          if (r.error) { await conn.rollback(); stopped = r.error; break; }
+          await conn.commit();
+          fed.push({ id: ghoul.id, name: ghoul.name, success: r.success, hungerAfter: r.hungerAfter });
+        } catch (err) {
+          await conn.rollback().catch(() => {});
+          if (err.code !== 'ER_DUP_ENTRY') throw err; // someone else fed it meanwhile
+        } finally {
+          conn.release();
+        }
+      }
+      log.info('Ghouls fed in bulk', { character_id: char.id, cycleIndex, fed: fed.length, stopped });
+      reply.send({ ok: true, fed, stopped });
+    } catch (err) {
+      log.err('POST /api/feeding/ghouls/feed-all failed', { error: err.message });
+      reply.status(500).send({ error: 'Database error feeding ghouls' });
+    }
+  });
+
+  fastify.post('/api/feeding/ghouls/:rid/let-starve', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const char = await getMyCharacter(req.user.id);
+      if (!char) return reply.status(404).send({ error: 'No character found for this account.' });
+      const ghoul = await loadGhoul(pool, Number(req.params.rid), char.id);
+      if (!ghoul) return reply.status(404).send({ error: 'Ghoul not found.' });
+      if (!ghoul.canLetStarve) return reply.status(403).send({ error: "Only this ghoul's domitor can let them go unfed." });
+      const value = !!req.body?.value;
+      await pool.query('UPDATE retainers SET let_starve=? WHERE id=?', [value ? 1 : 0, ghoul.id]);
+      log.info('Ghoul let-starve toggled', { retainer_id: ghoul.id, character_id: char.id, value });
+      reply.send({ ok: true, let_starve: value });
+    } catch (err) {
+      log.err('POST /api/feeding/ghouls/:rid/let-starve failed', { error: err.message });
+      reply.status(500).send({ error: 'Database error updating ghoul' });
+    }
+  });
+
+  /* ---- Admin: every ghoul's upkeep state this cycle ---- */
+  fastify.get('/api/admin/feeding/ghouls', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const { cycleIndex } = await getCurrentCycle();
+      const [rows] = await pool.query(
+        `SELECT r.id, r.name, r.tier, r.sheet, r.coterie_id, r.let_starve, co.name AS coterie_name,
+                COALESCE(owner.name, dom.name) AS owner_name
+           FROM retainers r
+           LEFT JOIN coteries co ON co.id = r.coterie_id
+           LEFT JOIN characters owner ON owner.id = r.character_id
+           LEFT JOIN characters dom ON dom.id = r.domitor_character_id
+          WHERE r.coterie_id IS NOT NULL OR owner.user_id IS NOT NULL
+          ORDER BY r.name`
+      );
+      const ghouls = rows.filter((r) => parseSheet(r.sheet)?.isGhoul === true).map(({ sheet, ...r }) => r);
+      const states = await ghoulStates(pool, ghouls.map((g) => g.id), cycleIndex);
+      const due = await dueUpkeepCycle(new Date());
+      reply.send({
+        cycleIndex,
+        upkeepAt: await upkeepAt(),
+        lastProcessed: await getSetting('ghoul_upkeep_last_cycle', null),
+        lastDue: due ? due.cycleIndex : null,
+        ghouls: ghouls.map((g) => ({ ...g, let_starve: !!g.let_starve, ...states[g.id] })),
+      });
+    } catch (err) {
+      log.err('GET /api/admin/feeding/ghouls failed', { error: err.message });
+      reply.status(500).send({ error: 'Database error fetching ghouls', details: err.sqlMessage || err.message });
+    }
+  });
+
+  /* ---- Admin: active characters with no feeding this cycle ---- */
+  fastify.get('/api/admin/feeding/unfed', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const { cycleIndex } = await getCurrentCycle();
+      const [rows] = await pool.query(
+        `SELECT c.id, c.name, c.sheet FROM characters c
+          WHERE c.user_id IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM feedings f WHERE f.character_id = c.id AND f.cycle_index = ? AND f.status = 'resolved')
+          ORDER BY c.name`,
+        [cycleIndex]
+      );
+      reply.send({
+        cycleIndex,
+        characters: rows.map((r) => {
+          const sheet = parseSheet(r.sheet);
+          const predatorType = getPredatorType(sheet);
+          return {
+            id: r.id, name: r.name, predatorType, hunger: readHunger(sheet),
+            canAutomate: !!predatorType && PREDATOR_HUNTING_POOLS[predatorType]?.length > 0,
+          };
+        }),
+      });
+    } catch (err) {
+      log.err('GET /api/admin/feeding/unfed failed', { error: err.message });
+      reply.status(500).send({ error: 'Database error fetching unfed characters', details: err.sqlMessage || err.message });
+    }
+  });
+
+  /* ---- Admin: record a feeding by hand (no roll, no domain) ---- */
+  // body { character_id, hunger }: the character's Hunger after feeding (1-5; 0 only by sheet edit).
+  // Unlocks downtime actions like any feeding; not a hunt, so it never uses one of the three.
+  fastify.post('/api/admin/feeding/manual', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const characterId = Number(req.body?.character_id);
+      const hunger = Number(req.body?.hunger);
+      if (!Number.isInteger(characterId)) return reply.status(400).send({ error: 'character_id required' });
+      if (!Number.isInteger(hunger) || hunger < 1 || hunger > 5) return reply.status(400).send({ error: 'Hunger after feeding must be 1 to 5.' });
+      const { cycleIndex } = await getCurrentCycle();
+
+      const result = await withCharacterLock(characterId, async (conn, locked) => {
+        if (!locked) return { code: 404, body: { error: 'Character not found.' } };
+        const sheet = locked.sheet;
+        const before = readHunger(sheet);
+        sheet.hunger = hunger;
+        await conn.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), characterId]);
+        const [owned] = await conn.query('SELECT division FROM domain_claims WHERE owner_character_id=? LIMIT 1', [characterId]);
+        await conn.query(
+          `INSERT INTO feedings
+            (character_id, division, predator_type, pool_label, dice_pool, difficulty, bonus_dice,
+             chasse_merits_applied, hunger_before, normal_dice, hunger_dice, outcome, status, cycle_index, hunger_delta, safety_delta, resolved_at)
+           VALUES (?, ?, ?, 'Storyteller', 0, 0, 0, '[]', ?, '[]', '[]', 'manual', 'resolved', ?, ?, 0, NOW())`,
+          [characterId, owned[0]?.division || 39, getPredatorType(sheet) || '', before, cycleIndex, hunger - before]
+        );
+        log.adm('Admin recorded a feeding', { admin: req.user.id, character_id: characterId, cycleIndex, hungerBefore: before, hungerAfter: hunger });
+        return { code: 200, body: { ok: true, hungerBefore: before, hungerAfter: hunger } };
+      });
+      reply.status(result.code).send(result.body);
+    } catch (err) {
+      log.err('POST /api/admin/feeding/manual failed', { error: err.message });
+      reply.status(500).send({ error: 'Database error recording feeding', details: err.sqlMessage || err.message });
+    }
+  });
+
+  /* ---- Admin: run this cycle's ghoul upkeep now ---- */
+  // Only ghouls with nothing recorded this cycle are touched, so it is safe to repeat.
+  fastify.post('/api/admin/feeding/ghoul-upkeep', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const { cycleIndex } = await getCurrentCycle();
+      const result = await runGhoulUpkeep(pool, log, { cycleIndex, notify: sendPushNotification });
+      log.adm('Ghoul upkeep manually triggered', { user: req.user.id, result });
+      reply.send(result);
+    } catch (err) {
+      log.err('POST /api/admin/feeding/ghoul-upkeep failed', { error: err.message });
+      reply.status(500).send({ error: 'Database error running ghoul upkeep', details: err.sqlMessage || err.message });
     }
   });
 };

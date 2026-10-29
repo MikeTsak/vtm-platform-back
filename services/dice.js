@@ -51,4 +51,16 @@ function rollPool(pool, hunger = 0) {
   };
 }
 
-module.exports = { rollD10, rollPool, computeOutcome, computeV5Outcome };
+/** One Rouse Check against the sheet (mutates it): Hunger +1 on a fail, frenzy at Hunger 5. */
+function rouse(sheet, advantage = false) {
+  const dice = advantage ? [rollD10(), rollD10()] : [rollD10()];
+  const success = dice.some(d => d >= 6);
+  const before = Number(sheet.hunger) || 0;
+  if (!success) {
+    if (before >= 5) sheet.frenzyState = 'hunger';
+    sheet.hunger = Math.min(5, before + 1);
+  }
+  return { success, dice };
+}
+
+module.exports = { rollD10, rollPool, computeOutcome, computeV5Outcome, rouse };

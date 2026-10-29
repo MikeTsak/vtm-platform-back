@@ -3,6 +3,7 @@
 // Storyteller character administration: roster, ghouls, edit, delete.
 
 const { parseSheet } = require('../utils/sheet');
+const { attachFeeding } = require('../services/ghoulFeeding');
 const { retireCharacter, restoreCharacter } = require('../services/characterRetirement');
 
 module.exports = async function (fastify, opts) {
@@ -114,6 +115,7 @@ module.exports = async function (fastify, opts) {
         r.blood_from = Object.fromEntries(Object.entries((r.sheet && r.sheet.bloodSources) || {})
           .map(([disc, id]) => [disc, names.get(Number(id)) || 'a former member']));
       }
+      await attachFeeding(pool, rows);
       reply.send({ retainers: rows });
     } catch (e) {
       log.err('Failed to fetch all retainers', { message: e.message });

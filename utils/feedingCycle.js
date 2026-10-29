@@ -16,6 +16,12 @@ function getCycleInfo(anchorInput, nowInput = new Date()) {
   return { cycleIndex, cycleStart, cycleEnd };
 }
 
+// A calendar cycle's index: the number in its id ('cycle-12' -> 12), else its 1-based position.
+function cycleIndexOf(cycle, position) {
+  const cycleNum = parseInt(String(cycle?.id || '').replace(/\D/g, ''), 10);
+  return !isNaN(cycleNum) && cycleNum > 0 ? cycleNum : position + 1;
+}
+
 /**
  * Resolves current feeding cycle tied directly to the Downtime Operations schedule.
  * If downtime_cycles_schedule exists, maps directly to the active DT cycle.
@@ -70,8 +76,7 @@ async function resolveCurrentFeedingCycle(nowInput = new Date()) {
         if (activeIdx === -1) activeIdx = 0;
 
         const cycle = cycles[activeIdx];
-        const cycleNum = parseInt(String(cycle.id || '').replace(/\D/g, ''), 10);
-        const cycleIndex = !isNaN(cycleNum) && cycleNum > 0 ? cycleNum : activeIdx + 1;
+        const cycleIndex = cycleIndexOf(cycle, activeIdx);
 
         const cycleStart = new Date(cycle.opening_date + 'T00:00:00');
         const cycleEnd = new Date(cycle.closing_date + 'T23:59:59');
@@ -95,6 +100,6 @@ async function resolveCurrentFeedingCycle(nowInput = new Date()) {
   return { ...fallback, isDowntimeLinked: false };
 }
 
-module.exports = { CYCLE_LENGTH_MS, getCycleInfo, resolveCurrentFeedingCycle };
+module.exports = { CYCLE_LENGTH_MS, getCycleInfo, cycleIndexOf, resolveCurrentFeedingCycle };
 
 

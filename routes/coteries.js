@@ -16,6 +16,7 @@
 // pool arithmetic is treated as a display convenience, never as truth.
 
 const rules = require('../utils/coterieRules');
+const { attachFeeding } = require('../services/ghoulFeeding');
 const { isAdmin, userOwnsCharacter } = require('../services/guards');
 const { parseSheet } = require('../utils/sheet');
 const { validateRetainerSheet } = require('../utils/retainerValidation');
@@ -528,6 +529,7 @@ module.exports = async function (fastify, opts) {
         'SELECT id, name, tier, domitor_character_id FROM retainers WHERE coterie_id=? ORDER BY tier DESC, name',
         [id]
       );
+      await attachFeeding(pool, retainers, (r) => !!r.domitor_character_id);
 
       reply.send({
         coterie: presentCoterie(row, members),
@@ -1417,6 +1419,7 @@ module.exports = async function (fastify, opts) {
           [c.id]
         );
         for (const r of retainers) r.sheet = parseSheet(r.sheet);
+        await attachFeeding(pool, retainers);
         out.push({
           id: c.id,
           name: c.name,

@@ -18,6 +18,7 @@ const { startOfMonth, endOfMonth } = require('./format');
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const DEFAULT_RELEASE_TIME = '10:00';
+const DEFAULT_GHOUL_FEEDING_TIME = '20:00';
 
 // A deadline stored as a bare date is open until 23:59:59 that day (what players see as the countdown).
 function deadlineEnd(value) {
@@ -46,13 +47,52 @@ function defaultReleaseFor(closingDate) {
   return `${dateOnly(d)}T${DEFAULT_RELEASE_TIME}`;
 }
 
+// Pre-fill for a cycle's ghoul upkeep: the evening before the event (closing is a Sunday, the event
+// the next Saturday). Same 'YYYY-MM-DDTHH:mm' format as the release.
+function defaultGhoulFeedingFor(closingDate) {
+  const close = dateOnly(closingDate);
+  if (!close) return '';
+  const d = new Date(`${close}T12:00:00`);
+  d.setDate(d.getDate() + 5);
+  return `${dateOnly(d)}T${DEFAULT_GHOUL_FEEDING_TIME}`;
+}
+
 function releaseOf(cycle) {
   return (cycle && cycle.release_date) || '';
 }
 
-// Every cycle carries a concrete release date: any cycle saved without one gets the pre-fill.
-function withReleaseDates(cycles) {
-  return cycles.map(c => (c.release_date || !c.closing_date ? c : { ...c, release_date: defaultReleaseFor(c.closing_date) }));
+// Every cycle carries a concrete release and ghoul upkeep date: any cycle saved without one gets the pre-fill.
+function withDefaultDates(cycles) {
+  return cycles.map(c => (!c.closing_date ? c : {
+    ...c,
+    release_date: c.release_date || defaultReleaseFor(c.closing_date),
+    ghoul_feeding_date: c.ghoul_feeding_date || defaultGhoulFeedingFor(c.closing_date),
+  }));
+}
+
+// A cycle's id carries the number every feeding and ghoul upkeep is filed under (cycleIndexOf in
+// utils/feedingCycle.js), so ids must stay small, unique and stable. The Calendar's generators make
+// ids from Date.now() (too big for the INT column) or from event ids (renumbering live cycles, which
+// would make every player look unfed). On save: a valid `cycle_N` id is kept, otherwise the cycle
+// takes the id of the stored cycle that closes the same day, otherwise the next free number.
+// Returns the cycles plus the renames, so a caller can follow a renamed active cycle.
+const CYCLE_ID = /^cycle_(\d{1,6})$/;
+function withStableIds(cycles, previous = []) {
+  const numberOf = (c) => { const m = CYCLE_ID.exec(String(c?.id || '')); return m ? Number(m[1]) : null; };
+  let next = Math.max(0, ...[...previous, ...cycles].map(numberOf).filter(n => n !== null)) + 1;
+  const used = new Set();
+  const renames = {};
+  const out = cycles.map((c) => {
+    let id = numberOf(c) !== null && !used.has(c.id) ? c.id : null;
+    if (!id) {
+      const match = previous.find(p => numberOf(p) !== null && !used.has(p.id) && p.closing_date && dateOnly(p.closing_date) === dateOnly(c.closing_date));
+      id = match ? match.id : `cycle_${next++}`;
+      renames[c.id] = id;
+    }
+    used.add(id);
+    return id === c.id ? c : { ...c, id };
+  });
+  return { cycles: out, renames };
 }
 
 async function readCycles() {
@@ -300,7 +340,9 @@ module.exports = {
   dateOnly,
   defaultReleaseFor,
   releaseOf,
-  withReleaseDates,
+  defaultGhoulFeedingFor,
+  withDefaultDates,
+  withStableIds,
   readCycles,
   writeCycles,
   findActiveIndex,
@@ -319,9 +361,17 @@ if (require.main === module) {
   assert.strictEqual(defaultReleaseFor('2026-12-31'), '2027-01-01T10:00');
   assert.strictEqual(releaseOf({ closing_date: '2026-10-04', release_date: '2026-10-06T09:00' }), '2026-10-06T09:00');
   assert.strictEqual(releaseOf({ closing_date: '2026-10-04' }), '');
-  assert.deepStrictEqual(withReleaseDates([{ closing_date: '2026-10-04' }, { closing_date: '2026-10-04', release_date: 'X' }]).map(c => c.release_date), ['2026-10-05T10:00', 'X']);
+  assert.deepStrictEqual(withDefaultDates([{ closing_date: '2026-10-04' }, { closing_date: '2026-10-04', release_date: 'X' }]).map(c => c.release_date), ['2026-10-05T10:00', 'X']);
+  assert.strictEqual(defaultGhoulFeedingFor('2026-10-04'), '2026-10-09T20:00');
+  assert.strictEqual(withDefaultDates([{ closing_date: '2026-10-04', ghoul_feeding_date: 'Y' }])[0].ghoul_feeding_date, 'Y');
   assert.strictEqual(deadlineEnd('2026-10-04').getHours(), 23);
   assert.strictEqual(dateOnly('2026-10-04T10:00'), '2026-10-04');
+  const stable = withStableIds(
+    [{ id: 'event_cycle_42', closing_date: '2026-10-25' }, { id: 'cycle_1730000000000', closing_date: '2026-11-08' }, { id: 'cycle_2', closing_date: '2026-10-04' }],
+    [{ id: 'cycle_2', closing_date: '2026-10-04' }, { id: 'cycle_3', closing_date: '2026-10-25' }]
+  );
+  assert.deepStrictEqual(stable.cycles.map(c => c.id), ['cycle_3', 'cycle_4', 'cycle_2']);
+  assert.deepStrictEqual(stable.renames, { event_cycle_42: 'cycle_3', cycle_1730000000000: 'cycle_4' });
   console.log('downtimeSchedule self-check ok');
   process.exit(0);
 }

@@ -13,6 +13,7 @@ const { getSetting, setSetting } = require('../utils/settings');
 const { broadcastNtfyAlert } = require('../utils/ntfy');
 const { sendDiscordDM, sendDiscordMailNotifications } = require('../services/discord');
 const { runFeedingDecay } = require('../services/feedingDecay');
+const { runGhoulUpkeep } = require('../services/ghoulFeeding');
 const { sendPushNotification } = require('../services/push');
 const { flushQueuedMessages } = require('../services/commsQueue');
 const { loadCommsState, statusPayload, clearExpiredOverride } = require('../services/commsState');
@@ -273,6 +274,29 @@ function scheduleFeedingCycleDecay() {
 }
 
 // ============================================================================
+// GHOUL UPKEEP
+// ============================================================================
+// Every 10 minutes: once a cycle's ghoul_feeding_date (admin Calendar) has
+// passed, feed or starve every ghoul still unfed that cycle. Runs once per
+// cycle; see services/ghoulFeeding.js.
+function scheduleGhoulUpkeep() {
+  return cron.schedule('*/10 * * * *', async () => {
+    try {
+      const result = await runGhoulUpkeep(pool, log);
+      if (result?.fed || result?.starved) {
+        log.info(`Ghoul upkeep: cycle ${result.cycleIndex}, ${result.fed} fed, ${result.starved} starved.`);
+        await broadcastNtfyAlert(`Ghoul upkeep ran: ${result.fed} fed, ${result.starved} starved.\n${result.report.join('\n')}`, {
+          title: 'Ghoul Upkeep',
+          tags: ['drop_of_blood'],
+        });
+      }
+    } catch (error) {
+      log.err('Ghoul upkeep cron failed', { error: error.message });
+    }
+  });
+}
+
+// ============================================================================
 // WILLPOWER RESET (day after a Modern Day event)
 // ============================================================================
 // Daily just after midnight, and once at boot so a restart that skipped the
@@ -394,6 +418,7 @@ function startJobs(fastify) {
   scheduleDailySummary();
   scheduleNightlyBackup();
   scheduleFeedingCycleDecay();
+  scheduleGhoulUpkeep();
   scheduleWillpowerReset();
   scheduleQueuedMessageFlush(fastify?.io);
   scheduleIdempotencyPurge();
