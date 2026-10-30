@@ -1,324 +1,156 @@
 <div align="center">
-  <img src="https://img.shields.io/badge/Vampire%20Platform-Backend-black?style=for-the-badge&logo=fastify" alt="Vampire Platform Backend" />
-  <h1>🦇 VTM Platform (V5 LARP) — Backend 🦇</h1>
-  <p><strong>Current Version: 1.0.163</strong></p>
 
-  <p>
-    <img src="https://img.shields.io/badge/Fastify-202020?style=for-the-badge&logo=fastify&logoColor=white" alt="Fastify" />
-    <img src="https://img.shields.io/badge/MariaDB-003545?style=for-the-badge&logo=mariadb&logoColor=white" alt="MariaDB" />
-    <img src="https://img.shields.io/badge/Node.js-339933?style=for-the-badge&logo=nodedotjs&logoColor=white" alt="Node" />
-    <img src="https://img.shields.io/badge/Socket.io-010101?style=for-the-badge&logo=socketdotio&logoColor=white" alt="Socket.io" />
-    <img src="https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge" alt="License" />
-  </p>
+# Erebus Portal: API
+
+**The server behind the Athens Through Time *Vampire: The Masquerade* V5 LARP platform.**
+
+Characters, XP, domains, Court politics, in-fiction comms, live sessions, dice, feeding, and the Discord bot: one Fastify process, one MariaDB database.
+
+[![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org)
+[![Fastify](https://img.shields.io/badge/Fastify-5-000000?style=flat-square&logo=fastify&logoColor=white)](https://fastify.dev)
+[![MariaDB](https://img.shields.io/badge/MariaDB-10.5%2B-003545?style=flat-square&logo=mariadb&logoColor=white)](https://mariadb.org)
+[![Socket.IO](https://img.shields.io/badge/Socket.IO-4-010101?style=flat-square&logo=socketdotio&logoColor=white)](https://socket.io)
+[![Vitest](https://img.shields.io/badge/tested_with-Vitest-6E9F18?style=flat-square&logo=vitest&logoColor=white)](https://vitest.dev)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue?style=flat-square)](LICENSE.txt)
+
+[Live API](https://api.attlarp.gr/api/health) · [API docs](https://api.attlarp.gr/api-docs) · [Portal](https://portal.attlarp.gr)
+
 </div>
-
-## 📖 Overview
-
-The high-performance API backend driving the **Vampire: The Masquerade V5 LARP** platform. 
-
-It provides authentication, character management, XP economy, domain administration, web push notifications, Discord bot integration, and real-time updates.
-
-- Frontend: Located in the `front/` directory of this repository
-- API base (local default): `http://localhost:3001/api`
-- Swagger UI (if enabled): `http://localhost:3001/api-docs`
-
-## ✨ Latest Features
-- **Fastify Core**: Rebuilt on Fastify for massive throughput and reduced overhead.
-- **Robust Database & Migrations**: MariaDB integration with custom migration systems for seamless schema evolution.
-- **Discord Bot Integration**: Built-in Discord worker using `discord.js` to bridge the game world and community servers.
-- **Real-Time Ecosystem**: `socket.io` for live updates and instant messaging.
-- **Web Push Notifications**: Integrated `web-push` for native browser alerts and reminders.
-- **Security First**: Comprehensive protection with JWT, `bcryptjs`, `@fastify/helmet`, rate-limiting, and `zod` payload validation.
-- **Automated API Docs**: `swagger-autogen` for constantly updated, interactive OpenAPI specifications.
-
-## 🗺️ Project Ecosystem
-
-This backend is part of the Vampire Platform monorepo, which includes:
-
-- `front/` - React single-page application for player and Storyteller/admin interfaces
-- `hunt/` - Hunt tracker application for managing hunting chronicles
-- `erebus-mobile/` - Mobile companion app for in-character (SchreckNet) and out-of-character (Surface Web) communication
-- `larp-badges/` - Tool for generating printable character badges
-- `attlarp.gr/` - Athens Through Time chronicle website (lore, setting, gallery)
-- `db/` - Database schemas and sample data
-
-All components communicate with this backend API to provide a full-featured LARP management platform.
 
 ---
 
 ## Contents
 
-- [Requirements](#requirements)
+- [Highlights](#highlights)
 - [Quick start](#quick-start)
-- [Environment variables](#environment-variables)
-- [Database schema (SQL)](#database-schema-sql)
-- [Project layout](#project-layout)
-- [Authentication & roles](#authentication--roles)
-- [API overview](#api-overview)
-- [XP spend rules](#xp-spend-rules)
-- [Realtime (socket.io)](#realtime-socketio)
+- [Scripts](#scripts)
+- [Configuration](#configuration)
+- [Architecture](#architecture)
+- [Authentication and roles](#authentication-and-roles)
+- [API map](#api-map)
+- [Realtime](#realtime)
 - [Background jobs](#background-jobs)
-- [Tests](#tests)
+- [Database and migrations](#database-and-migrations)
+- [Testing](#testing)
 - [Backups](#backups)
-- [Schema versions (migrations)](#schema-versions-migrations)
-- [Swagger / OpenAPI](#swagger--openapi)
-- [Troubleshooting / gotchas](#troubleshooting--gotchas)
-- [cURL examples](#curl-examples)
-- [Production notes](#production-notes)
+- [Deployment](#deployment)
+- [Troubleshooting](#troubleshooting)
+- [The Erebus ecosystem](#the-erebus-ecosystem)
 
----
+## Highlights
 
-## Requirements
-
-- **Node.js 20+** — Fastify 5 does not support Node 18.
-- MariaDB 10.5+ (tested on 10.6)
-- A database + user with privileges to create tables (InnoDB)
-- `sharp` needs prebuilt binaries for your platform (installed automatically).
-
----
+- **Server-authoritative game rules.** XP purchases, sheet edits, Rouse checks, Willpower, damage, feeding hunts, and every dice roll are computed on the server. The client never sends a price or a result. Rules data is compiled from the frontend into `data/rulesCatalog.json` so both sides share one source of truth.
+- **About 50 route modules** covering characters, coteries, retainers, domains, boons, Court offices and actions, news and rumours, SchreckNet chat, Surface Web email, anonymous notes, premonitions, hunts, live sessions, inventory with QR trading, the wiki, and admin tooling.
+- **Realtime** chat, presence, and live-session sync over Socket.IO, using the same cookie auth as HTTP.
+- **Calendar-driven world.** Downtime cycles, comms open/close, ghoul upkeep, Willpower resets, and Elysium invitations all run off the admin calendar through scheduled jobs.
+- **Safe by default.** httpOnly cookie sessions with instant revocation, per-tier rate limiting, Zod-validated env and payloads, Helmet, an origin allowlist, and idempotency keys on spend and send endpoints.
+- **Self-migrating.** Numbered migrations apply on boot, so a deploy updates the schema with no manual step.
+- **Integrations.** Discord bot (`discord.js`), Web Push (VAPID), ntfy alerts, EmailJS password resets, an image CDN, and a Gemini-backed rules assistant.
 
 ## Quick start
 
+**Requirements:** Node.js 20+ (Fastify 5 does not support Node 18) and MariaDB 10.5+ (tested on 10.6).
+
 ```bash
-# 1) Install deps
 npm install
-
-# 2) Create .env  (see "Environment variables" below — the server refuses to
-#    boot if a required key is missing, and tells you which one)
-cp .env.example .env
-
-# 3) Run migrations (creates/updates tables)
-npm run migrate
-
-# 4) Run the server
-npm run dev      # nodemon + regenerates the Swagger spec
-# or
-npm start        # plain node + regenerates the Swagger spec
+# create .env (see Configuration below); the server refuses to boot without the required keys
+npm run dev
 ```
 
-The API listens on `http://localhost:3001/api` by default.
+The API listens on `http://localhost:3001/api`. Interactive docs are at `http://localhost:3001/api-docs`.
 
-`initDatabase()` also runs on every boot and is idempotent, so a fresh database
-comes up without a manual migration step. `npm run migrate` is for applying the
-numbered migrations in `migrations/list/`.
+`initDatabase()` runs on every boot. It creates missing tables and applies pending migrations, so a fresh database needs no manual step.
 
-### npm scripts
+> **Tip:** To work against real data, `npm run db:staging` replaces your local database with the newest production backup. It refuses to run unless `DB_HOST` is local.
+
+## Scripts
 
 | Script | What it does |
 | --- | --- |
-| `dev` | Regenerate the Swagger spec, then run under nodemon |
-| `start` | Regenerate the Swagger spec, then run once |
-| `deploy` | Back up remote DB, direct FTP upload of changed files, touches Passenger restart, verifies health |
-| `deploy:backup` | Trigger remote database backup on production without uploading files |
-| `deploy:backup:full` | Trigger full remote database backup on production including media blobs |
-| `deploy:dry` | Preview files that would be uploaded without uploading or restarting |
-| `deploy:force` | Re upload all backend files regardless of cached hash |
-| `deploy:restart` | Bounce the live app only: FTP touches `tmp/restart.txt`, verifies health |
-| `test` / `test:watch` | vitest integration + unit tests |
-| `migrate` | Apply pending migrations from `migrations/list/` |
-| `migrate:status` | Show which migrations are applied and which are pending |
-| `migrate:legacy` | The old ad-hoc `run-migrations.js`; superseded, kept for reference |
-| `backup` | Full gzipped SQL dump (add `-- --no-media` to skip image BLOBs) |
-| `backup:list` | List existing backups with size and date |
-| `migrate-avatar-thumbs` | Backfill the 160px avatar thumbnails |
-| `migrate-avatars-to-cdn` | One-off: move BLOB avatars to the image CDN |
-| `migrate-news-urls` | One-off: rewrite legacy news media URLs |
+| `npm run dev` | Regenerate the Swagger spec, then run under nodemon |
+| `npm start` | Regenerate the Swagger spec, then run once |
+| `npm test` / `npm run test:watch` | Vitest integration and unit tests |
+| `npm run catalog` | Rebuild `data/rulesCatalog.json` from `front/src/data` after rules data changes |
+| `npm run migrate` | Apply pending migrations locally |
+| `npm run migrate:status` | Show applied, pending and orphaned migrations |
+| `npm run migrations` | Apply pending migrations on production |
+| `npm run migrations:status` | Inspect production migration state without changing it |
+| `npm run backup` | Gzipped SQL dump (add `-- --no-media` to skip image BLOBs) |
+| `npm run backup:list` | List local backups with size and date |
+| `npm run db:staging` | Mirror the newest production backup into the local database |
+| `npm run deploy` | Back up production, upload changed files, restart, verify health |
+| `npm run deploy:dry` | Preview a deploy without uploading or restarting |
+| `npm run deploy:force` | Re-upload every file regardless of cached hash |
+| `npm run deploy:restart` | Restart the live app only and verify health |
+| `npm run deploy:backup` / `deploy:backup:full` | Run a production backup on demand (full includes media) |
 
-Both `dev` and `start` run `swagger-autogen.js` first. It reads the route
-manifest in `routes/index.js`, so a new route module is documented
-automatically — you never edit the scanned-file list by hand.
+## Configuration
 
----
-
-## Environment variables
-
-Create a `.env` file in `back/`. Startup validation lives in
-`utils/envValidator.js` (Zod): if a **required** key is missing the process
-logs which one and exits immediately.
+Create `back/.env`. The schema lives in `utils/envValidator.js`. If a required key is missing, the process names it and exits.
 
 ```env
-# --- Required ---------------------------------------------------------
+# Required
 DB_HOST=localhost
 DB_PORT=3306
-DB_USER=your_db_user
-DB_PASS=your_db_password          # note: DB_PASS, not DB_PASSWORD
+DB_USER=vtm
+DB_PASS=secret                 # DB_PASS, not DB_PASSWORD
 DB_NAME=vtm
-
-JWT_SECRET=replace_me_with_strong_random
-
-# Web Push. Generate once with: npx web-push generate-vapid-keys
-VAPID_PUBLIC_KEY=...
+JWT_SECRET=long-random-string  # changing it logs every user out
+VAPID_PUBLIC_KEY=...           # npx web-push generate-vapid-keys
 VAPID_PRIVATE_KEY=...
 
-# --- Optional ---------------------------------------------------------
-PORT=3001                          # default 3001
+# Optional
+PORT=3001
 NODE_ENV=development
+APP_BASE_URL=https://portal.attlarp.gr      # links in emails and pushes
+CORS_ORIGIN=https://portal.attlarp.gr,http://localhost:3002
+COOKIE_SECURE=true                          # force cookie flags behind a proxy
 VAPID_SUBJECT=mailto:admin@attlarp.gr
-
-# Comma-separated allowlist. Falls back to the known app origins
-# (config/cors.js) — never to "*", because auth is a cookie.
-CORS_ORIGIN=https://portal.attlarp.gr,http://localhost:5173
-
-# Forces the session cookie's Secure/SameSite pair instead of inferring it
-# from the request. Set to "false" only for non-TLS local setups that the
-# hostname sniffing in utils/authCookie.js can't detect.
-COOKIE_SECURE=true
-
-APP_BASE_URL=https://portal.attlarp.gr   # used to build links in emails/pushes
-IMAGE_API_KEY=...                        # img.miketsak.gr upload key
-DISCORD_BOT_TOKEN=...                    # omit to run without the bot
-LOG_CHANNEL_ID=...                       # Discord channel for error reports
-NTFY_TOPIC=...                           # ntfy.sh broadcast topic
-
-# Password-reset mail (EmailJS). Without these, /auth/forgot throws.
-EMAILJS_SERVICE_ID=...
-EMAILJS_TEMPLATE_ID=...
-EMAILJS_PUBLIC_KEY=...
-EMAILJS_PRIVATE_KEY=...
-# Only if your EmailJS template uses non-default variable names:
-EMAILJS_VAR_TO=to_email
-EMAILJS_VAR_NAME=to_name
-EMAILJS_VAR_APP=app_name
-EMAILJS_VAR_LINK=reset_link
-EMAILJS_VAR_EXPIRES=expires_minutes
-
-# Logging (see logger.js)
-LOG_LEVEL=debug
-LOG_FILE=./logs/api.log            # required by the admin log viewer
-LOG_JSON=0
 ```
 
-Notes:
+<details>
+<summary><b>All optional integrations</b></summary>
 
-- Don't commit secrets — `.env` is in `.gitignore`.
-- Changing `JWT_SECRET` invalidates every existing session (all users re-login).
-- Tests use a separate database via `TEST_DB_NAME`; see `tests/setup/env.js`.
+| Variable | Purpose |
+| --- | --- |
+| `DISCORD_BOT_TOKEN` | Enables the Discord bot. Without it every Discord path is a no-op. |
+| `LOG_CHANNEL_ID` | Discord channel for error reports |
+| `NTFY_TOPIC` | ntfy.sh topic for admin alerts and daily summaries |
+| `IMAGE_API_KEY` | Upload key for the image CDN |
+| `GOOGLE_API_KEY` or `GEMINI_API_KEY` | Gemini rules assistant (wiki and Discord bot) |
+| `EMAILJS_SERVICE_ID`, `EMAILJS_TEMPLATE_ID`, `EMAILJS_PUBLIC_KEY`, `EMAILJS_PRIVATE_KEY` | Password-reset mail. Without them `/auth/forgot` fails. |
+| `EMAILJS_VAR_TO`, `_NAME`, `_APP`, `_LINK`, `_EXPIRES` | Only if your EmailJS template uses non-default variable names |
+| `RESET_COOLDOWN_MIN` | Minimum minutes between password-reset requests |
+| `LOG_LEVEL`, `LOG_FILE`, `LOG_JSON`, `LOG_SILENCE_PATHS` | Logging. `LOG_FILE` is required for the admin log viewer. |
+| `BACKUP_SCHEDULE_ENABLED`, `BACKUP_SCHEDULE_CRON`, `BACKUP_SCHEDULE_FULL`, `BACKUP_DIR`, `BACKUP_RETENTION_DAYS`, `BACKUP_MEDIA_TABLES` | Nightly backup job (see [Backups](#backups)) |
+| `TEST_DB_NAME` | Isolated database used by the test suite |
+| `DISABLE_LOGIN_LIMITS` | `true` turns off login throttling. For debugging only; remove it afterwards. |
 
----
+</details>
 
-## Database schema (SQL)
+## Architecture
 
-Run these statements in your MariaDB database (InnoDB + `utf8mb4`).
+The API is a Fastify app assembled from plugins. `server.fastify.js` only sequences the boot. It contains no routes.
 
-> If you ever hit `errno: 150` on foreign keys: it’s usually type mismatch (signed vs unsigned) or different engines/collations. The schema below uses `INT UNSIGNED` consistently for IDs.
+```text
+server.fastify.js          entry: env check -> app -> socket.io -> jobs -> listen
+app.js                     builds the Fastify instance (no listen, no side effects)
+realtime.js                socket.io auth, rooms, chat relay; decorates fastify.io
+discordWorker.js           Discord bot
+db.js                      mysql2 promise pool
+authMiddleware.fastify.js  authRequired / optionalAuth / requireAdmin
 
-```sql
--- USERS
-CREATE TABLE IF NOT EXISTS users (
-  id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  email         VARCHAR(190) NOT NULL UNIQUE,
-  display_name  VARCHAR(190) NOT NULL,
-  role          ENUM('user','admin') NOT NULL DEFAULT 'user',
-  password_hash VARCHAR(255) NOT NULL,
-  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- CHARACTERS
--- user_id is nullable so NPCs can exist (NPC = character with user_id NULL)
-CREATE TABLE IF NOT EXISTS characters (
-  id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  user_id    INT UNSIGNED NULL,
-  name       VARCHAR(190) NOT NULL,
-  clan       VARCHAR(64)  NOT NULL,
-  sheet      JSON NULL,
-  xp         INT NOT NULL DEFAULT 50,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_char_user
-    FOREIGN KEY (user_id) REFERENCES users(id)
-    ON DELETE SET NULL ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- XP LOG (optional but recommended)
-CREATE TABLE IF NOT EXISTS xp_log (
-  id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  character_id  INT UNSIGNED NOT NULL,
-  action        VARCHAR(64) NOT NULL,
-  target        VARCHAR(190) NULL,
-  from_level    INT NULL,
-  to_level      INT NULL,
-  cost          INT NOT NULL DEFAULT 0,
-  payload       JSON NULL,
-  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  INDEX idx_xp_char (character_id),
-  CONSTRAINT fk_xp_char
-    FOREIGN KEY (character_id) REFERENCES characters(id)
-    ON DELETE CASCADE ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- DOWNTIMES
-CREATE TABLE IF NOT EXISTS downtimes (
-  id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  character_id  INT UNSIGNED NOT NULL,
-  title         VARCHAR(255) NOT NULL,
-  feeding_type  VARCHAR(128) NULL,
-  body          TEXT NOT NULL,
-  status        ENUM('submitted','approved','rejected','resolved') NOT NULL DEFAULT 'submitted',
-  gm_notes      TEXT NULL,
-  gm_resolution TEXT NULL,
-  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  resolved_at   TIMESTAMP NULL DEFAULT NULL,
-  INDEX idx_dt_char (character_id),
-  CONSTRAINT fk_dt_char
-    FOREIGN KEY (character_id) REFERENCES characters(id)
-    ON DELETE CASCADE ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- DOMAINS (optional catalog)
-CREATE TABLE IF NOT EXISTS domains (
-  id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  name        VARCHAR(190) NOT NULL,
-  description TEXT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- DOMAIN CLAIMS (map division -> owner/color/character)
-CREATE TABLE IF NOT EXISTS domain_claims (
-  division             INT UNSIGNED NOT NULL PRIMARY KEY,
-  owner_name           VARCHAR(190) NULL,
-  color                CHAR(7) NOT NULL DEFAULT '#454545',
-  owner_character_id   INT UNSIGNED NULL,
-  updated_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  INDEX idx_claim_char (owner_character_id),
-  CONSTRAINT fk_claim_char
-    FOREIGN KEY (owner_character_id) REFERENCES characters(id)
-    ON DELETE SET NULL ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-```
-
----
-
-## Project layout
-
-The API is a Fastify app assembled from plugins. `server.fastify.js` only
-sequences the boot; it contains no routes.
-
-```
-server.fastify.js          # entry point: env -> app -> socket.io -> jobs -> listen
-app.js                     # builds the Fastify instance (no listen, no side effects)
-realtime.js                # socket.io: auth, rooms, chat relay; decorates fastify.io
-db.js                      # mysql2 pool (promise)
-authMiddleware.fastify.js  # authRequired / requireAdmin
-
-config/                # environment-derived configuration
-  cors.js              #   origin allowlist, shared by HTTP + SSE + socket.io
-
-plugins/               # Fastify infrastructure (fastify-plugin wrapped, root scope)
-  observability.js     #   request logging, admin no-store, error handler, onClose
-  security.js          #   multipart, helmet, cors, cookie, static, compression
-  docs.js              #   swagger + /api-docs
-
-routes/                # one plugin per feature
-  index.js             #   the route manifest + shared dependency bundle
-  chat.js  news.js  hunts.js  domainClaims.js  liveSessions.js  ...  (38 modules)
-
-services/              # shared, route-agnostic logic
-  push.js  discord.js  email.js  media.js  dice.js  guards.js
-  format.js  news.js  sse.js  banner.js  logTail.js  token.js
-  liveSession.js  domainOverlays.js
-
-jobs/                  # every cron/interval in the process, started by startJobs()
-utils/                 # small pure helpers (settings, sanitize, xpCost, clans, ...)
-migrations/            # schema creation + migration runner
-tests/                 # vitest integration tests (see tests/setup/testApp.js)
+config/      cors.js: origin allowlist shared by HTTP, SSE and socket.io
+plugins/     observability, security (helmet, cors, cookie, multipart, static), docs
+routes/      one plugin per feature; index.js is the manifest
+services/    shared domain logic: dice, rolls, feeding, ghoul upkeep, comms state,
+             downtime schedule, court offices, blood hunts, push, discord, media ...
+utils/       pure helpers: xpCost, xpPurchase, playerSheetEdit, sheetLock,
+             idempotency, envValidator, authCookie, athensTime ...
+jobs/        every cron and interval, started once by startJobs()
+migrations/  numbered migrations (list/) and hand-runnable SQL equivalents (sql/)
+scripts/     migrate, backup, deploy, db:staging, rules catalog
+tests/       vitest suites against a real Fastify instance
 ```
 
 ### Adding a route
@@ -327,482 +159,198 @@ tests/                 # vitest integration tests (see tests/setup/testApp.js)
 
    ```js
    module.exports = async function (fastify, opts) {
-     const { pool, log, authRequired } = opts;
+     const { pool, authRequired } = opts;
 
-     fastify.get('/api/thing', { preHandler: [authRequired] }, async (req, reply) => {
-       // ...
+     fastify.get('/api/thing', { preHandler: [authRequired] }, async (req) => {
+       return { thing: null };
      });
    };
    ```
 
 2. Add it to `ROUTE_MODULES` in `routes/index.js`.
 
-That is the whole wiring — Swagger picks the module up from the same manifest.
+That is all the wiring. Swagger picks the module up from the same manifest. `opts` carries only what a test may want to substitute (pool, logger, guards, limiters, external clients). `require()` stateless helpers directly.
 
-`opts` carries only what a test may want to substitute: the pool, the logger,
-the auth guards, the rate limiters, and the external clients. Anything
-stateless (pure helpers, config, settings access) should be `require()`d
-directly by the module that uses it rather than threaded through `opts`.
+## Authentication and roles
 
----
+- The session JWT lives in an **httpOnly cookie** named `token`, so client JavaScript, including an XSS payload, cannot read it. Browsers just send `withCredentials: true`.
+- `Authorization: Bearer <token>` is also accepted, for the mobile app, scripts and cURL.
+- There is deliberately **no `?token=` fallback**, because URLs leak into logs and history.
+- **Instant revocation:** each token embeds the user's `token_version`. Bumping it (password reset, "log out everywhere") invalidates every issued token on the next request.
+- **Role is live:** the role is read from the database on each request, not trusted from the JWT, so a demotion takes effect immediately.
+- **Cookie flags** (`Secure` and `SameSite`) are decided together in `utils/authCookie.js`. `COOKIE_SECURE` overrides them.
 
-## Authentication & roles
-
-The session JWT travels in an **httpOnly cookie** named `token`, not in
-`localStorage`. Client-side JS — including an injected XSS payload — cannot
-read it. The frontend never handles a token; it just sends
-`withCredentials: true` (see `front/src/core/api.js`).
-
-- `POST /api/auth/login` sets the cookie; `POST /api/auth/logout` clears it.
-- An `Authorization: Bearer <token>` header is still accepted, for non-browser
-  clients (the mobile app, scripts, cURL) that can't rely on cookies.
-- There is deliberately **no** `?token=` query fallback — a token in a URL leaks
-  into access logs, proxy logs and browser history. SSE streams, `<img>` avatar
-  requests and the socket.io handshake all authenticate via the cookie.
-
-**Revocation.** Each token embeds `tv`, the user's `token_version`. Bumping that
-column (password reset, "log out everywhere") invalidates every token already
-issued to them — `authRequired` re-checks it on each request, so revocation is
-immediate rather than waiting out the 7-day expiry.
-
-**Cookie flags.** `Secure` and `SameSite` are decided together from one signal
-(`utils/authCookie.js`): a request that is HTTPS, or forwarded as HTTPS, or
-addressed to a non-local host, gets `SameSite=None; Secure`; local dev over
-`http://127.0.0.1` gets `SameSite=Lax`. `COOKIE_SECURE` overrides both. Getting
-this wrong is what previously broke login on Safari, iOS and Chrome Incognito.
-
-### Roles
-
-| Role | Meaning |
+| Role | Access |
 | --- | --- |
-| `user` | Ordinary player. |
-| `courtuser` | Court officer. Passes `requireCourt` — boons, domain assignment, the Court NPC-chat views. |
-| `admin` | Storyteller. Passes both `requireCourt` and `requireAdmin`. |
+| `user` | Player |
+| `courtuser` | Court officer. Passes `requireCourt`. Specific powers are narrowed further by held offices (`services/courtOffices.js`). |
+| `admin` | Storyteller. Passes everything. |
 
-Guards live in `authMiddleware.fastify.js` (`authRequired`, `optionalAuth`,
-`requireAdmin`) and `services/guards.js` (`requireCourt`). Admin routes answer
-**403** for a non-admin session and **401** for no session at all.
+Admin routes answer **403** for a non-admin session and **401** for no session. Use `optionalAuth` for public endpoints that reveal more to signed-in callers. Don't wrap `authRequired` in try/catch: it sends the 401 rather than throwing.
 
-`optionalAuth` is for endpoints that are public but reveal more to a signed-in
-caller (e.g. the wiki feed showing private articles to admins). Do **not** wrap
-`authRequired` in a try/catch for that — it *sends* a 401 rather than throwing,
-so the reply is already committed by the time your catch would run.
+**Rate limiting** is enforced per tier in `services/guards.js`. Signed-in callers are keyed by user ID, so a venue's shared wifi doesn't lock out a table of players. Anonymous callers are keyed by IP.
 
-> **Rate limiting is currently a no-op.** The four limiters in
-> `services/guards.js` are stubs, and `@fastify/rate-limit` — although
-> installed — is not registered. Every call site already declares which tier it
-> wants, so switching real limiting on is a change to that one file.
+| Tier | Limit |
+| --- | --- |
+| `auth` | 30 requests per 15 minutes |
+| `moderate` | 120 requests per minute |
+| `upload` | 30 requests per minute |
 
----
+## API map
 
-## API overview
+All routes live under `/api`. **`/api-docs` is the generated, always-current reference.** This table is a map, not an exhaustive list.
 
-Base path: `/api`. There are ~220 endpoints; **`/api-docs` is the generated,
-always-current reference**. This section is a map of where things live, not an
-exhaustive list — for the authoritative route table read `routes/index.js` and
-the module it points at.
+| Area | Modules |
+| --- | --- |
+| Auth and users | `auth`, `users`, `adminUsers`, `debugLogin` |
+| Characters and sheets | `characters`, `characterXp`, `xp`, `mechanics`, `disciplineAccess`, `wishlist`, `inventory` |
+| Coteries and retainers | `coteries` |
+| Domains | `domains`, `domainClaims`, `domainOverlays`, `domainResidents` |
+| Court | `camarilla`, `courtActions`, `boons`, `clans` |
+| Feeding and downtimes | `feeding`, `downtimes` |
+| Comms | `chat`, `npcChat`, `emails`, `comms`, `drafts`, `anonymousNotes` |
+| Press | `news`, `rumors`, `banner` |
+| Sessions and dice | `liveSessions`, `dice`, `elysium` |
+| World content | `premonitions`, `hunts`, `wiki`, `npcs`, `avatars` |
+| Ops | `system`, `push`, `ntfy`, `discordAdmin`, `activity`, `adminCharacters`, `adminLogs`, `adminMisc`, `maintenance`, `dashboard` |
 
-| Area | Module | Notable endpoints |
-| --- | --- | --- |
-| Health & status | `routes/system.js` | `GET /health`, `GET /` (HTML status page) |
-| Auth | `routes/auth.js` | `/auth/register`, `/auth/login`, `/auth/me`, `/auth/forgot`, `/auth/reset`, `/auth/logout`, `/auth/logout-all` |
-| Users | `routes/users.js`, `routes/adminUsers.js` | `/users/search`, `/admin/users`, `PATCH /admin/users/:id`, `/auth/refresh` |
-| Characters | `routes/characters.js` | `/characters/me`, `/characters/user/:id` (admin; `:id` is a **character** id), inventory, retainers |
-| XP | `routes/characterXp.js`, `routes/xp.js` | `POST /characters/xp/spend` (self, idempotent), `/admin/characters/:id/xp/spend`, `/admin/characters/:id/xp`, `/admin/xp-logs` |
-| Mechanics | `routes/mechanics.js` | `/characters/:id/rouse`, `/spend-wp`, `/apply-damage` — server-authoritative |
-| Downtimes | `routes/downtimes.js` | `/downtimes/mine`, `/downtimes/quota`, `POST /downtimes`, `/admin/downtimes`, `/downtimes/config` |
-| Domains | `routes/domains.js`, `routes/domainClaims.js`, `routes/domainOverlays.js` | claims, requests, Court assignment, safety, codex, restricted map overlays |
-| Coteries | `routes/coteries.js` | CRUD, `/coteries/:id/members/set`, `/coteries/:id/purchase`, `/coteries/:id/xp` (admin) |
-| Boons | `routes/boons.js` | `/boons`, `/boons/entities` — Court writes, everyone reads |
-| Court | `routes/camarilla.js` | `/camarilla/roster` (public), `/admin/camarilla/update` |
-| Chat | `routes/chat.js`, `routes/npcChat.js` | DMs, groups, reactions, media, 4h edit/delete window, NPC threads |
-| Email (in-fiction) | `routes/emails.js` | `/emails/my-inbox`, `/emails/send`, `/admin/emails/*` |
-| News & rumours | `routes/news.js`, `routes/rumors.js` | public feed, sitemap, authoring, per-theme permissions, broadcast |
-| Premonitions | `routes/premonitions.js` | Malkavian visions: authoring, delivery, media |
-| Hunts | `routes/hunts.js` | hunt/step authoring, review, group join, submission |
-| Live sessions | `routes/liveSessions.js` | lifecycle, participants, rolls, ST broadcast |
-| Dice | `routes/dice.js` | `POST /dice/rolls`, `/admin/dice/rolls` |
-| Wiki | `routes/wiki.js` | articles, search, graph, timeline, Elysium boards |
-| Push | `routes/push.js` | subscribe/unsubscribe, per-category settings, test send |
-| NPCs | `routes/npcs.js` | admin CRUD + NPC XP |
-| Avatars | `routes/avatars.js` | `GET/PUT /{users,npcs,retainers,identities}/:id/avatar` |
-| Admin tooling | `routes/adminMisc.js`, `routes/adminLogs.js`, `routes/maintenance.js`, `routes/discordAdmin.js`, `routes/ntfy.js`, `routes/clans.js`, `routes/banner.js` | events, broadcasts, timelines, blood web, audit logs, log tail, SSE migration runners, Discord/ntfy config, clan availability, global banner |
+**Conventions**
 
-### Conventions
+- Success bodies are JSON objects, never bare arrays: `{ character }`, `{ articles: [...] }`, `{ ok: true }`.
+- Errors are `{ error }`. Schema failures add `details`.
+- Everything under `/api/admin` is sent `Cache-Control: no-store`.
+- Long-running admin jobs stream Server-Sent Events instead of blocking.
+- XP spends and chat sends honour an `Idempotency-Key` header, so a retry cannot double-charge or double-post.
 
-- Success bodies are JSON objects, never bare arrays: `{ character }`,
-  `{ articles: [...] }`, `{ ok: true }`.
-- Errors are `{ error: "..." }`, with `{ error: "Validation Error", details }`
-  for schema failures.
-- Everything under `/api/admin` is sent `Cache-Control: no-store` by a global
-  hook, so the admin panel never reads a stale 304.
-- Long-running admin jobs stream **SSE** rather than blocking a request — see
-  `routes/maintenance.js`.
-- `POST /api/characters/xp/spend` honours an `Idempotency-Key` header, so a
-  retried request cannot double-spend. It is the only endpoint that does.
+## Realtime
 
----
+`realtime.js` attaches Socket.IO to the same HTTP server. Route modules publish through `fastify.io`.
 
-## XP spend rules
-
-Endpoint:
-
-- `POST /api/characters/xp/spend`
-
-Body (varies by purchase type):
-
-```jsonc
-{
-  "type": "attribute" | "skill" | "specialty" |
-          "discipline" | "ritual" | "ceremony" |
-          "thin_blood_formula" | "advantage" |
-          "blood_potency",
-  "target": "Presence",
-  "currentLevel": 1,
-  "newLevel": 2,
-  "disciplineKind": "clan" | "other" | "caitiff" | "select",
-  "ritualLevel": 2,
-  "formulaLevel": 1,
-  "dots": 1,
-  "patchSheet": { /* optional updated sheet JSON */ }
-}
-```
-
-Costs:
-
-- Attribute: `new × 5`
-- Skill: `new × 3`
-- Specialty: `3`
-- Discipline:
-  - clan: `new × 5`
-  - other: `new × 7`
-  - caitiff: `new × 6`
-- Discipline power assignment **only** (no dot increase): **free**
-- Ritual: `level × 3`
-- Ceremony: `level × 3`
-- Thin-blood formula: `level × 3`
-- Advantage: `3 × dots`
-- Blood potency: `new × 10`
-
-Response:
-
-```json
-{ "character": { /* updated */ }, "spent": 15 }
-```
-
----
-
-## Realtime (socket.io)
-
-`realtime.js` attaches socket.io to the same HTTP server and decorates the
-Fastify instance, so route modules publish through `fastify.io` (or
-`req.server.io` inside a handler).
-
-- **Handshake auth** mirrors `authRequired`: the JWT is read from the handshake
-  `Cookie` header (falling back to `auth.token`), verified, and checked against
-  the user's current `token_version`. Unauthenticated sockets are rejected.
-- **Rooms**: `user_<id>` (joined automatically), `admin_chat` (admins and Court),
-  `group_<id>` (membership-checked on join), `session_<code>` (participants and
-  STs).
-- **Events**: the server emits `chat:refresh` and `chat:reactions` to nudge
-  clients to refetch, and `refresh_session` for live sessions. `chat_message` is
-  relayed for live sessions with the sender identity overwritten from the
-  verified socket — a client cannot spoof who sent a message.
-- The socket.io CORS allowlist is the same `config/cors.js` list the HTTP layer
-  uses.
-
----
+- **Handshake auth** mirrors `authRequired`: cookie first, then `auth.token`, with `token_version` checked.
+- **Rooms:** `user_<id>`, `admin_chat`, `group_<id>` (membership-checked), and `session_<code>`.
+- The sender identity on relayed messages is overwritten from the verified socket, so it cannot be spoofed.
 
 ## Background jobs
 
-Every cron and interval in the process is registered in `jobs/index.js` and
-started once, by `startJobs()`, after the server is listening. Nothing schedules
-itself as a side effect of being `require()`d.
+Every schedule is registered in `jobs/index.js` and started once, after the server is listening.
 
 | Schedule | Job |
 | --- | --- |
-| `0 12 * * *` | Downtime deadline pings — DMs players who still owe actions when the deadline is 24–48h out. No-ops without a Discord client. |
-| `* * * * *` | Mass-release ping — one ntfy broadcast the moment the countdown expires, latched by `downtime_mass_release_notified`. |
-| every 60s | Daily Discord mail digest — compares the clock to the admin-set `discord_schedule_time`; sends at most once per day. |
-| `59 23 * * *` | End-of-day ntfy summary, then resets the counters. |
+| Every minute | Comms switch follows the calendar; flushes the Send Later queue when comms open |
+| Every minute | Downtime mass-release ntfy ping (latched, fires once) |
+| Every 60 s | Daily Discord mail digest at the admin-set time |
+| Every 5 min | Closes live sessions left open for over 24 hours |
+| Every 10 min | Ghoul upkeep once the cycle's feeding date passes |
+| Every 10 min | Ends expired Blood Hunts |
+| Every 15 min | Auto-posts Elysium invitations to Discord on the Monday before the event |
+| 00:02 daily | Advances the active downtime cycle |
+| 00:05 daily | Feeding-cycle Masquerade decay |
+| 00:08 daily | Willpower reset after a Modern Day event |
+| 00:20 daily | Purges expired idempotency keys |
+| 03:30 daily | Nightly backup, with pruning and a failure alert |
+| 12:00 daily | Discord DMs to players who still owe downtime actions |
+| 23:59 daily | ntfy daily summary, then counter reset |
 
----
+## Database and migrations
 
-## Tests
+Migrations are numbered files in `migrations/list/`. Applied ones are recorded in `schema_migrations` and pending ones run on every boot.
 
-```bash
-npm test          # vitest run
-npm run test:watch
+```text
+  applied   0070_feeding_safety_before    2026-10-27T...
+  applied   0071_news_edited_at           2026-10-29T...
+  PENDING   0072_something_new
 ```
 
-Integration tests build a real Fastify instance from the production route
-plugins (`tests/setup/testApp.js`) against an isolated test database
-(`TEST_DB_NAME`, see `tests/setup/env.js`). Auth, authorization and DB access
-are the real code — only outbound side effects (ntfy, EmailJS, image uploads)
-are stubbed.
-
-Because route modules take their pool/logger/guards from `opts`, mounting one in
-isolation is a single `app.register(require('../../routes/x'), { pool, ... })`.
-
----
-
-## Backups
-
-`scripts/backup-db.js` writes a gzipped SQL dump using mysql2 — deliberately
-**not** `mysqldump`, which isn't installed everywhere this runs and whose absence
-would silently stop the job. The output is a plain SQL script, so you can import
-it straight into **phpMyAdmin** (Import ▸ choose file — it accepts `.sql.gz`), or
-pipe it to a mysql client:
-
-```bash
-gunzip -c backups/vtm-20260909-033000.sql.gz | mysql -u USER -p vtm
-```
-
-```bash
-npm run backup                  # full dump           -> vtm-<stamp>.sql.gz
-npm run backup -- --no-media    # game data only      -> vtm-<stamp>-nomedia.sql.gz
-npm run backup:list             # what's on disk
-```
-
-### Why `--no-media` exists
-
-`premonition_media` and `news_media` store full-resolution images as BLOBs:
-
-| table | rows | size |
-| --- | ---: | ---: |
-| premonition_media | 38 | 349.5 MB |
-| news_media | 36 | 21.5 MB |
-| **everything else combined** | ~12,600 | **~12 MB** |
-
-So a full dump is ~400 MB and a `--no-media` dump is ~2.4 MB, for the same
-chronicle data. A nightly 400 MB backup would fill the Plesk box in days, and
-those 74 images barely change.
-
-A partial backup is never disguised as a full one: the filename carries
-`-nomedia`, the file header says `*** PARTIAL BACKUP ***` and names the omitted
-tables, and each skipped table is marked in place with
-`-- row data intentionally omitted (N rows)`. **Take a full `npm run backup`
-before anything risky.**
-
-### Nightly job
-
-`jobs/index.js` schedules one at 03:30 with `--no-media`, prunes anything past
-the retention window, and fires an ntfy alert if it fails.
-
-```env
-BACKUP_SCHEDULE_ENABLED=true      # set false to turn it off
-BACKUP_SCHEDULE_CRON=30 3 * * *
-BACKUP_SCHEDULE_FULL=false        # true = include media every night (~400 MB)
-BACKUP_DIR=./backups              # gitignored
-BACKUP_RETENTION_DAYS=14          # 0 disables pruning
-BACKUP_MEDIA_TABLES=premonition_media,news_media
-```
-
-Backups are written to disk on the same machine as the database, which protects
-against a bad migration or a mistaken `DELETE` — **not** against losing the box.
-Copy them off-site if that matters.
-
----
-
-## Deploying
-
-The backend deploys directly to the Plesk production server via FTPS using `basic-ftp`. Migrations self-apply on boot (`initDatabase()`).
-
-Running `npm run deploy` runs the complete workflow in one single command:
-1. **production database backup**: automatically triggers a native streaming backup of game data on production before touching files or reloading passenger. Bypassed with `--no-backup`.
-2. **dependency safeguard**: cross references local `package.json` dependencies against the remote server. If new packages are detected, deployment is blocked with instructions to install them on the production server first.
-3. **auto versioning**: automatically increments the semantic version in `package.json` and updates `version.json` (bumping patch by default: `1.0.0` to `1.0.1`, etc.).
-4. **swagger autogen**: updates the OpenAPI documentation spec (`swagger_output.json`) with the new version.
-5. **file scan**: walks local backend files respecting `.gitignore` and hard exclusions (`.env*`, `node_modules`, `.git`, `deploy.config.json`, logs, backups).
-6. **delta upload**: checks remote file sizes and cached SHA1 hashes in `.deploy-manifest.json`, uploading only changed or new files.
-7. **graceful restart**: touches `/tmp/restart.txt` over FTP to trigger Phusion Passenger reload.
-8. **health verification**: polls `https://api.attlarp.gr/api/health` until the restarted server responds with active database connection, confirmed live target version, and fresh uptime.
-
-```bash
-npm run deploy                    # Back up DB, check deps, bump patch, upload files, restart server, verify health
-npm run deploy:backup             # Run remote production database backup on demand
-npm run deploy:backup:full        # Run full remote production database backup including media blobs
-npm run deploy:dry                # Dry run preview (upload nothing, no bump, no restart)
-npm run deploy:force              # Force upload all backend files
-npm run deploy:restart            # Bounce the live app directly and verify health
-npm run deploy -- --bump minor    # Bump minor version (e.g. 1.0.x to 1.1.0)
-npm run deploy -- --no-bump       # Deploy without incrementing version
-npm run deploy -- --no-backup     # Deploy without running pre deploy database backup
-npm run deploy -- --skip-deps-check # Bypass remote dependency cross reference check
-```
-
-Config: `back/deploy.config.json` (gitignored, see `deploy.config.example.json`).
-
-## Schema versions (migrations)
-
-Migrations are numbered files in `migrations/list/`, and applied ones are
-recorded in the `schema_migrations` table. `initDatabase()` runs pending ones on
-every boot, so a deploy is self-applying; `npm run migrate` does the same by
-hand, and `npm run migrate:status` shows where you stand:
-
-```
-  applied   0011_avatar_thumb_urls             2026-09-05T00:47:41.000Z
-  applied   0012_performance_indexes           2026-09-08T22:55:01.000Z
-  PENDING   0013_something_new
-  orphaned  0008_chat_message_reactions        (recorded, but no file on disk)
-```
-
-### Applying to another server (production)
-
-Deploying the code and restarting is enough — `initDatabase()` applies anything
-pending on boot. If you'd rather run a change by hand in phpMyAdmin first,
-`migrations/sql/` holds a hand-runnable equivalent for migrations where that is
-useful (e.g. `0012_performance_indexes.sql`). Those files are idempotent, run
-STEP 0 as a read-only inspection before changing anything, and do not replace the
-`.js` migration — the app still records itself in `schema_migrations` afterwards.
-
-### Writing one
-
-Create `migrations/list/00NN_short_name.js` exporting **exactly this shape**:
+To write one, create `migrations/list/00NN_short_name.js`:
 
 ```js
 module.exports = {
-  name: '00NN_short_name',      // must match, and must never change once applied
+  name: '00NN_short_name', // must match the filename and never change once applied
   async up(pool) {
     await pool.query('ALTER TABLE ...');
   },
 };
 ```
 
-The runner skips anything that doesn't have both `name` and `up`, and it does so
-**silently** — `0010_downtime_read.js` exported a bare function for weeks and was
-skipped on every single boot without ever being recorded. Check
-`npm run migrate:status` after adding one.
+- The runner **silently skips** a file without both `name` and `up`, so check `npm run migrate:status` after adding one.
+- **Never renumber an applied migration.** The name is the key, so a rename runs it twice.
+- **Make `up()` idempotent** (check `information_schema` first). A migration that throws partway is not recorded and is retried from the top.
+- Where it helps, `migrations/sql/` holds a hand-runnable phpMyAdmin equivalent.
 
-Two more rules the schema_migrations table can't enforce for you:
+Major tables are system-versioned (MariaDB `WITH SYSTEM VERSIONING`), so row history is queryable after the fact.
 
-- **Never renumber an applied migration.** `name` is the key. Renaming a file
-  that has already run makes the runner treat it as new and apply it a second
-  time — that is what the `orphaned 0008_chat_message_reactions` row above is.
-- **Make `up()` idempotent** where you can (check `information_schema` or
-  `SHOW COLUMNS` first). If a migration throws partway it is *not* recorded, so
-  the next boot retries it from the top.
-
----
-## Swagger / OpenAPI
-
-- Local: `http://localhost:3001/api-docs`
-- Production: `https://api.attlarp.gr/api-docs`
-
-The spec (`swagger_output.json`) is regenerated by `swagger-autogen.js` on every
-`npm run dev` / `npm start`. Its scanned-file list is derived from
-`ROUTE_MODULES` in `routes/index.js`, so adding a route module documents it
-automatically.
-
-Swagger UI runs in the browser and shares its cookies with the API, so if you
-are already logged in to the portal on the same site, authenticated calls just
-work. For a Bearer token instead, click **Authorize** and paste
-`Bearer <token>`.
-
----
-
-## Troubleshooting / gotchas
-
-- **Boot exits immediately with a variable name** — a required key is missing
-  from `.env`. Note it is `DB_PASS`, not `DB_PASSWORD`.
-- **`EADDRINUSE :3001`** — another instance is already running. `PORT=0` does
-  *not* pick a random port; `Number(process.env.PORT) || 3001` treats 0 as unset.
-- **401 everywhere after a deploy** — `JWT_SECRET` changed, or the user's
-  `token_version` was bumped. Both force a re-login, by design.
-- **Login works locally but not in production (Safari / iOS / Incognito)** — a
-  cookie-flag problem, not a credentials problem. See
-  `utils/authCookie.js`; set `COOKIE_SECURE=true` explicitly if the reverse
-  proxy does not forward `X-Forwarded-Proto`.
-- **CORS failures** — add the origin to `CORS_ORIGIN`. `config/cors.js` is the
-  single source of truth and is shared by HTTP, SSE and the socket.io
-  handshake; there is no "allow all" fallback because auth is a cookie.
-- **403 on admin routes** — the session's role is not `admin`. Court officers
-  (`courtuser`) pass `requireCourt` but not `requireAdmin`.
-- **Admin log viewer is empty** — `LOG_FILE` is unset.
-- **Discord features silently do nothing** — the bot runs in
-  `discordWorker.js`; without `DISCORD_BOT_TOKEN` every Discord path no-ops by
-  design (`services/discord.js` exports a null client).
-- **FK create errors (`errno:150`)** — check signed vs unsigned ID types and
-  make sure the engine is InnoDB.
-
----
-
-## cURL examples
-
-Auth is a cookie, so use a cookie jar (`-c` to save, `-b` to send). The
-`Authorization: Bearer` header works too, if you prefer.
-
-### Register
+## Testing
 
 ```bash
-curl -X POST http://localhost:3001/api/auth/register \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"admin@example.com","display_name":"Admin","password":"changeme"}'
+npm test
 ```
 
-### Login (stores the session cookie in cookies.txt)
+Integration tests build a real Fastify instance from the production route plugins (`tests/setup/testApp.js`) against an isolated database (`TEST_DB_NAME`). Auth, authorization and SQL are the real code. Only outbound side effects (ntfy, EmailJS, image uploads) are stubbed.
+
+The suite covers XP pricing and purchase, sheet edits, IDOR protection, rate limits, idempotency, comms switching and drafts, feeding cycles, ghoul upkeep, coterie rules, retainers, Court actions, news publishing and edit windows, live-session privacy, inventory, dice, and the rules catalog. `rulesCatalog.test.js` fails when `npm run catalog` needs re-running.
+
+## Backups
+
+`scripts/backup-db.js` writes a gzipped SQL dump using mysql2 rather than `mysqldump`, so it works on hosts without that binary. It imports directly in phpMyAdmin or through a client:
 
 ```bash
-curl -c cookies.txt -X POST http://localhost:3001/api/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"admin@example.com","password":"changeme"}'
+gunzip -c backups/vtm-20261030-033000.sql.gz | mysql -u USER -p vtm
 ```
 
-### Who am I
+`--no-media` skips the `premonition_media` and `news_media` image BLOBs. Those make up nearly all of the database's size, while the chronicle data itself is a few MB. A partial dump is never disguised as a full one: the filename carries `-nomedia`, the header says `PARTIAL BACKUP`, and each skipped table is marked in place.
 
-```bash
-curl -b cookies.txt http://localhost:3001/api/auth/me
-```
+The nightly job runs `--no-media` at 03:30, prunes past `BACKUP_RETENTION_DAYS` (default 14), and alerts through ntfy on failure. **Take a full backup before anything risky**, and copy backups off the box if losing the box matters.
 
-### Spend XP (discipline dot increase)
+## Deployment
 
-`Idempotency-Key` makes a retry safe — replaying the same key returns the first
-response instead of charging twice.
+Production runs on Plesk under Phusion Passenger. `npm run deploy` does the whole job:
 
-```bash
-curl -b cookies.txt -X POST http://localhost:3001/api/characters/xp/spend \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: 3f1c1f5e-1f0e-4a3f-9b47-1a2b3c4d5e6f' \
-  -d '{
-    "type":"discipline",
-    "disciplineKind":"clan",
-    "target":"Auspex",
-    "currentLevel":1,
-    "newLevel":2,
-    "patchSheet":{ "disciplines": {"Auspex":2} }
-  }'
-```
+1. Triggers a production database backup (`--no-backup` to skip).
+2. Blocks the deploy if `package.json` adds dependencies the server doesn't have yet (`--skip-deps-check` to bypass).
+3. Bumps the version in `package.json` and `version.json` (`--bump minor`, or `--no-bump`).
+4. Regenerates the Swagger spec.
+5. Uploads only changed files over FTPS, tracked by hash in `.deploy-manifest.json`.
+6. Touches `tmp/restart.txt` to reload Passenger.
+7. Polls `https://api.attlarp.gr/api/health` until the new version reports in with a live database connection.
 
-### Admin: resolve a downtime
+Configuration lives in `deploy.config.json`, which is gitignored. Start from `deploy.config.example.json`. Migrations apply themselves on the restarted boot.
 
-```bash
-curl -b cookies.txt -X PATCH http://localhost:3001/api/admin/downtimes/12 \
-  -H 'Content-Type: application/json' \
-  -d '{"status":"resolved","gm_resolution":"You tracked the ghoul and reclaimed the book."}'
-```
+**Production notes**
 
-### Upload an avatar (multipart)
+- Terminate TLS at the reverse proxy and forward `X-Forwarded-Proto` (or set `COOKIE_SECURE=true`).
+- Pass WebSocket upgrades through, or chat silently falls back to polling.
+- `sharp` is pinned to low memory use for the 2 GB host. Check headroom before changing that.
 
-```bash
-curl -b cookies.txt -X PUT http://localhost:3001/api/users/1/avatar \
-  -F 'avatar=@portrait.png'
-```
+## Troubleshooting
 
----
+| Symptom | Cause |
+| --- | --- |
+| Boot exits naming a variable | A required key is missing from `.env`. Note that it is `DB_PASS`. |
+| `EADDRINUSE :3001` | Another instance is running. `PORT=0` is treated as unset. |
+| 401 everywhere after a deploy | `JWT_SECRET` changed, or the user's `token_version` was bumped. |
+| Login fails only on Safari, iOS or Incognito | Cookie flags. Set `COOKIE_SECURE=true` if the proxy hides HTTPS. |
+| CORS errors | Add the origin to `CORS_ORIGIN`. There is no allow-all fallback, because auth is a cookie. |
+| 403 on an admin route | The role isn't `admin`. Court officers pass `requireCourt` only. |
+| 429 Too Many Requests | A rate-limit tier was hit. Wait out `Retry-After`. |
+| Empty admin log viewer | `LOG_FILE` is unset. |
+| Discord features do nothing | `DISCORD_BOT_TOKEN` is unset (no-op by design). |
+| A new migration never runs | It is missing `name` or `up`. Check `npm run migrate:status`. |
 
-## Production notes
+## The Erebus ecosystem
 
-- Run behind a reverse proxy (Apache/nginx) terminating TLS. Make sure it
-  forwards `X-Forwarded-Proto`, or set `COOKIE_SECURE=true` explicitly —
-  otherwise the session cookie's flags are guessed from the hostname.
-- The proxy must pass WebSocket upgrades through for socket.io, or realtime
-  chat silently falls back to polling.
-- Use a process manager (PM2/systemd). `npm start` regenerates the Swagger spec
-  first, so the process needs write access to `swagger_output.json`.
-- `sharp` is pinned to low memory use (`cache(false)`, `concurrency(1)`) for the
-  2GB Plesk box — don't remove that without checking headroom.
-- Keep DB backups. `initDatabase()` creates missing tables but never drops or
-  alters existing data.
-- Rotate `JWT_SECRET` deliberately: it logs every user out.
-- The Discord bot is a separate module in the same process
-  (`discordWorker.js`); it reconnects on its own and never blocks API boot.
+| Repository | Role |
+| --- | --- |
+| **back** (this repo) | API, realtime, jobs, Discord bot |
+| [front](https://github.com/MikeTsak/vtm-platform-front) | Player and Storyteller portal at [portal.attlarp.gr](https://portal.attlarp.gr) |
+| [wiki-vtm](https://github.com/MikeTsak/wiki-vtm) | Erebus Wiki at [wiki.attlarp.gr](https://wiki.attlarp.gr) |
+| [attlarp.gr](https://github.com/MikeTsak/attlarp.gr) | Public chronicle website |
+| [erebus-mobile](https://github.com/MikeTsak/erebus-mobile) | Expo mobile app for SchreckNet and Surface Web |
+| [harpy-kindle](https://github.com/MikeTsak/harpy-kindle) | E-ink Harpy terminal for live events |
+| [vampire-treasure-hunt](https://github.com/MikeTsak/vampire-treasure-hunt) | Hunt Tracker for location-based challenges |
+| [badge-for-larp](https://github.com/MikeTsak/badge-for-larp) | Printable character badge generator |
+
+## License
+
+[GNU GPL v3.0](LICENSE.txt). Copyright (C) 2025 Michail Tsakiroglou.
+
+*Vampire: The Masquerade* is a trademark of Paradox Interactive AB. This is an unofficial fan project for the Athens Through Time chronicle.
