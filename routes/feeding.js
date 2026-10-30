@@ -15,7 +15,7 @@
 // via GET /status — there is no way to discard a roll and start over.
 
 const { getSetting, setSetting } = require('../utils/settings');
-const { getCycleInfo, resolveCurrentFeedingCycle } = require('../utils/feedingCycle');
+const { getCycleInfo, cycleIndexOf, resolveCurrentFeedingCycle } = require('../utils/feedingCycle');
 const { huntingDifficulty } = require('../data/huntingDifficulty');
 const { isOwnerOrAdmin } = require('../services/guards');
 const { chasseBonus } = require('../data/chasseMerits');
@@ -27,7 +27,7 @@ const { runFeedingDecay } = require('../services/feedingDecay');
 const { parseSheet } = require('../utils/sheet');
 const { withSheetLock } = require('../utils/sheetLock');
 const { feedGhoul, ghoulStates, ghoulsFor, runGhoulUpkeep, dueUpkeepCycle, nextUpkeepAt } = require('../services/ghoulFeeding');
-const { checkSubmission } = require('../services/downtimeSchedule');
+const { checkSubmission, readCycles } = require('../services/downtimeSchedule');
 
 const HUNTS_PER_CYCLE = 3;
 // Feedings that aren't hunts: no roll, no domain, no cap.
@@ -190,6 +190,12 @@ module.exports = async function (fastify, opts) {
     return ghouls.filter((g) => states[g.id].canFeed).length;
   }
 
+  // The next cycle's opening day from the Calendar ('YYYY-MM-DD'), for the admin countdown.
+  async function nextCycleOpening() {
+    const today = new Date().toISOString().slice(0, 10);
+    return (await readCycles()).map((c) => c.opening_date).filter((d) => d && d > today).sort()[0] || null;
+  }
+
   // The next ghoul upkeep time from the Calendar.
   const upkeepAt = () => nextUpkeepAt();
 
@@ -205,6 +211,14 @@ module.exports = async function (fastify, opts) {
       willpower: track(char.sheet.willpower, attr('Composure') + attr('Resolve')),
       mendAmount: mendAmount(char.sheet, char.clan),
     };
+  }
+
+  // Admin views and undos take ?cycle=N to look at (and fix) a past cycle; default: the current one.
+  async function adminCycle(req) {
+    const current = await getCurrentCycle();
+    const asked = Number(req.query?.cycle);
+    const cycleIndex = Number.isInteger(asked) && asked >= 0 ? asked : current.cycleIndex;
+    return { cycleIndex, isCurrent: cycleIndex === current.cycleIndex, current };
   }
 
   /* -------------------- Status -------------------- */
@@ -589,8 +603,8 @@ module.exports = async function (fastify, opts) {
         const failureReason = isIncidentOutcome ? pickFlavor(feeding.predator_type) : null;
 
         await conn.query(
-          "UPDATE feedings SET status='resolved', resolved_at=NOW(), hunger_delta=?, safety_delta=?, failure_reason=? WHERE id=?",
-          [appliedHungerDelta, deltas.safety, failureReason, feedingId]
+          "UPDATE feedings SET status='resolved', resolved_at=NOW(), hunger_delta=?, safety_delta=?, safety_before=?, failure_reason=? WHERE id=?",
+          [appliedHungerDelta, deltas.safety, existingClaim.length ? clamp(existingClaim[0].safety_rating ?? 10, 0, 10) : 10, failureReason, feedingId]
         );
 
         // Domain incident: only on a bad-for-the-domain outcome, only when
@@ -688,9 +702,10 @@ module.exports = async function (fastify, opts) {
         LEFT JOIN domain_claims dc ON dc.division = f.division
         LEFT JOIN characters dc_char ON dc_char.id = dc.owner_character_id
         LEFT JOIN npcs dc_npc ON dc_npc.id = dc.owner_npc_id
+        ${req.query?.cycle != null ? 'WHERE f.cycle_index = ?' : ''}
         ORDER BY f.created_at DESC
-        LIMIT 200
-      `);
+        LIMIT 500
+      `, req.query?.cycle != null ? [Number(req.query.cycle)] : []);
       const logRows = rows.map(r => {
         const sheet = parseSheet(r.character_sheet);
         const currentHunger = sheet?.hunger !== undefined && sheet?.hunger !== null ? Number(sheet.hunger) : 1;
@@ -733,66 +748,90 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  /* ---- Admin: Allow Reroll (undo a feeding so the player can feed again) ---- */
+  /* ---- Admin: undo a feeding (the player can feed again) ---- */
   // Reverses everything the feeding applied: the Hunger change, the Willpower
-  // spent on its reroll, the domain Safety change and the Herd point, then
-  // deletes the row (its domain incident cascades) so the one-per-cycle
-  // check lets the player roll again. Downtimes already submitted stay.
+  // spent on its reroll, the domain Safety change, the Herd point and a safe
+  // feeding's downtime action, then deletes the row (its domain incident
+  // cascades) so it no longer counts toward the hunts or the "fed" gate.
+  // Other downtimes already submitted stay.
+  async function undoFeeding(feedingId, adminId) {
+    const [rows] = await pool.query('SELECT character_id FROM feedings WHERE id=?', [feedingId]);
+    if (!rows.length) return { code: 404, body: { error: 'Feeding roll not found.' } };
+
+    return withCharacterLock(rows[0].character_id, async (conn, locked) => {
+      const [[feeding]] = await conn.query('SELECT * FROM feedings WHERE id=?', [feedingId]);
+      if (!feeding) return { code: 404, body: { error: 'Feeding roll not found.' } };
+
+      const resolved = feeding.status === 'resolved';
+      const undone = {};
+      if (locked) {
+        const sheet = locked.sheet;
+        if (resolved && feeding.hunger_delta) {
+          const before = readHunger(sheet);
+          sheet.hunger = clamp(before - feeding.hunger_delta, 0, 5);
+          undone.hunger = { before, after: sheet.hunger };
+        }
+        if (feeding.wp_rerolled && Number(sheet.willpower?.superficial) > 0) {
+          sheet.willpower.superficial = Number(sheet.willpower.superficial) - 1;
+          undone.willpower = true;
+        }
+        if (feeding.outcome === 'herd' && sheet.herd_current !== undefined) {
+          sheet.herd_current = clamp(Number(sheet.herd_current) + 1, 0, getHerdDots(sheet));
+          undone.herd = sheet.herd_current;
+        }
+        await conn.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), locked.id]);
+      }
+
+      if (resolved && feeding.safety_delta) {
+        await conn.query(
+          'UPDATE domain_claims SET safety_rating = GREATEST(0, LEAST(10, IFNULL(safety_rating, 10) - ?)) WHERE division=?',
+          [feeding.safety_delta, feeding.division]
+        );
+        undone.safety = -feeding.safety_delta;
+      }
+
+      // A safe feeding filed its downtime action in the same transaction: give the slot back too.
+      if (feeding.outcome === 'downtime') {
+        await conn.query(
+          `DELETE FROM downtimes WHERE character_id=? AND title='[Feeding] Safe feeding'
+             AND ABS(TIMESTAMPDIFF(SECOND, created_at, ?)) <= 5 ORDER BY id LIMIT 1`,
+          [feeding.character_id, feeding.created_at]
+        );
+        undone.downtime = true;
+      }
+      await conn.query('DELETE FROM feedings WHERE id=?', [feedingId]);
+      log.adm('Admin undid a feeding', { admin: adminId, feeding, undone });
+      return { code: 200, body: { ok: true, undone } };
+    });
+  }
+
   fastify.post('/api/admin/feeding/:id/allow-reroll', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const feedingId = Number(req.params.id);
-      const [rows] = await pool.query('SELECT character_id FROM feedings WHERE id=?', [feedingId]);
-      if (!rows.length) return reply.status(404).send({ error: 'Feeding roll not found.' });
-
-      const result = await withCharacterLock(rows[0].character_id, async (conn, locked) => {
-        const [[feeding]] = await conn.query('SELECT * FROM feedings WHERE id=?', [feedingId]);
-        if (!feeding) return { code: 404, body: { error: 'Feeding roll not found.' } };
-
-        const resolved = feeding.status === 'resolved';
-        const undone = {};
-        if (locked) {
-          const sheet = locked.sheet;
-          if (resolved && feeding.hunger_delta) {
-            const before = readHunger(sheet);
-            sheet.hunger = clamp(before - feeding.hunger_delta, 0, 5);
-            undone.hunger = { before, after: sheet.hunger };
-          }
-          if (feeding.wp_rerolled && Number(sheet.willpower?.superficial) > 0) {
-            sheet.willpower.superficial = Number(sheet.willpower.superficial) - 1;
-            undone.willpower = true;
-          }
-          if (feeding.outcome === 'herd' && sheet.herd_current !== undefined) {
-            sheet.herd_current = clamp(Number(sheet.herd_current) + 1, 0, getHerdDots(sheet));
-            undone.herd = sheet.herd_current;
-          }
-          await conn.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), locked.id]);
-        }
-
-        if (resolved && feeding.safety_delta) {
-          await conn.query(
-            'UPDATE domain_claims SET safety_rating = GREATEST(0, LEAST(10, IFNULL(safety_rating, 10) - ?)) WHERE division=?',
-            [feeding.safety_delta, feeding.division]
-          );
-          undone.safety = -feeding.safety_delta;
-        }
-
-        // A safe feeding filed its downtime action in the same transaction: give the slot back too.
-        if (feeding.outcome === 'downtime') {
-          await conn.query(
-            `DELETE FROM downtimes WHERE character_id=? AND title='[Feeding] Safe feeding'
-               AND ABS(TIMESTAMPDIFF(SECOND, created_at, ?)) <= 5 ORDER BY id LIMIT 1`,
-            [feeding.character_id, feeding.created_at]
-          );
-          undone.downtime = true;
-        }
-        await conn.query('DELETE FROM feedings WHERE id=?', [feedingId]);
-        log.adm('Admin allowed feeding reroll', { admin: req.user.id, feeding, undone });
-        return { code: 200, body: { ok: true, undone } };
-      });
+      const result = await undoFeeding(Number(req.params.id), req.user.id);
       reply.status(result.code).send(result.body);
     } catch (err) {
       log.err('POST /api/admin/feeding/:id/allow-reroll failed', { error: err.message });
       reply.status(500).send({ error: 'Database error undoing feeding', details: err.sqlMessage || err.message });
+    }
+  });
+
+  // Undo every feeding a character made this cycle, newest first (so each
+  // Hunger change is reversed from the value it produced).
+  fastify.post('/api/admin/feeding/character/:id/undo-cycle', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const { cycleIndex } = await adminCycle(req);
+      const [rows] = await pool.query(
+        'SELECT id FROM feedings WHERE character_id=? AND cycle_index=? ORDER BY id DESC',
+        [Number(req.params.id), cycleIndex]
+      );
+      for (const r of rows) {
+        const res = await undoFeeding(r.id, req.user.id);
+        if (res.code !== 200) return reply.status(res.code).send(res.body);
+      }
+      reply.send({ ok: true, undone: rows.length });
+    } catch (err) {
+      log.err('POST /api/admin/feeding/character/:id/undo-cycle failed', { error: err.message });
+      reply.status(500).send({ error: 'Database error undoing feedings', details: err.sqlMessage || err.message });
     }
   });
 
@@ -898,8 +937,7 @@ module.exports = async function (fastify, opts) {
   /* ---- Admin: Feeding stats for current cycle ---- */
   fastify.get('/api/admin/feeding/stats', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const cycle = await getCurrentCycle();
-      const rawIndex = Number(cycle?.cycleIndex);
+      const { cycleIndex: rawIndex, isCurrent, current: cycle } = await adminCycle(req);
       const cycleIndex = Number.isInteger(rawIndex) && rawIndex >= 0 ? rawIndex : 0;
       const [rows] = await pool.query(
         "SELECT outcome, COUNT(*) as cnt FROM feedings WHERE cycle_index=? AND status='resolved' GROUP BY outcome",
@@ -929,8 +967,29 @@ module.exports = async function (fastify, opts) {
       counts.success = (byOutcome.success || 0) + (byOutcome.critical || 0) + (byOutcome.messy_critical || 0) + (byOutcome.herd || 0) + (byOutcome.manual || 0) + (byOutcome.downtime || 0);
       counts.failure = (byOutcome.failure || 0) + (byOutcome.bestial_failure || 0);
 
-      const pct = counts.total > 0 ? Math.round((counts.success / counts.total) * 100) : null;
-      reply.send({ cycleIndex, counts, successPct: pct });
+      // The split the new rules care about: rolled hunts (capped at 3 each) vs. the other feedings.
+      counts.hunts = counts.total - NOT_HUNTS.reduce((n, o) => n + (byOutcome[o] || 0), 0);
+      counts.huntSuccess = (byOutcome.success || 0) + (byOutcome.critical || 0) + (byOutcome.messy_critical || 0);
+      counts.safe = byOutcome.downtime || 0;
+      counts.manual = byOutcome.manual || 0;
+      const [[players]] = await pool.query(
+        `SELECT COUNT(*) AS active,
+                SUM(EXISTS (SELECT 1 FROM feedings f WHERE f.character_id = c.id AND f.cycle_index = ? AND f.status = 'resolved')) AS fed
+           FROM characters c WHERE c.user_id IS NOT NULL`,
+        [cycleIndex]
+      );
+
+      // Rolled hunts only: Herd, safe and Storyteller feedings can't fail.
+      const pct = counts.hunts > 0 ? Math.round((counts.huntSuccess / counts.hunts) * 100) : null;
+      reply.send({
+        cycleIndex, isCurrent, counts, successPct: pct,
+        players: { active: Number(players.active) || 0, fed: Number(players.fed) || 0 },
+        huntsPerCycle: HUNTS_PER_CYCLE,
+        huntingOpen: isHuntingOpen(cycle),
+        huntingClosesAt: cycle.cycleEnd,
+        nextOpening: await nextCycleOpening(),
+        nextUpkeepAt: await nextUpkeepAt(),
+      });
     } catch (err) {
       log.err('GET /api/admin/feeding/stats failed', { error: err.message });
       reply.status(500).send({
@@ -1055,10 +1114,10 @@ module.exports = async function (fastify, opts) {
   /* ---- Admin: every ghoul's upkeep state this cycle ---- */
   fastify.get('/api/admin/feeding/ghouls', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const { cycleIndex } = await getCurrentCycle();
+      const { cycleIndex, isCurrent } = await adminCycle(req);
       const [rows] = await pool.query(
         `SELECT r.id, r.name, r.tier, r.sheet, r.coterie_id, r.let_starve, co.name AS coterie_name,
-                COALESCE(owner.name, dom.name) AS owner_name
+                COALESCE(owner.name, dom.name) AS owner_name, COALESCE(r.character_id, r.domitor_character_id) AS owner_character_id
            FROM retainers r
            LEFT JOIN coteries co ON co.id = r.coterie_id
            LEFT JOIN characters owner ON owner.id = r.character_id
@@ -1069,12 +1128,17 @@ module.exports = async function (fastify, opts) {
       const ghouls = rows.filter((r) => parseSheet(r.sheet)?.isGhoul === true).map(({ sheet, ...r }) => r);
       const states = await ghoulStates(pool, ghouls.map((g) => g.id), cycleIndex);
       const due = await dueUpkeepCycle(new Date());
+      // A past cycle shows only what was recorded then: nothing can be fed there any more.
+      const stateFor = (g) => (isCurrent ? states[g.id] : {
+        state: states[g.id].current ? states[g.id].current.status : 'none', canFeed: false, current: states[g.id].current,
+      });
       reply.send({
         cycleIndex,
+        isCurrent,
         upkeepAt: await upkeepAt(),
         lastProcessed: await getSetting('ghoul_upkeep_last_cycle', null),
         lastDue: due ? due.cycleIndex : null,
-        ghouls: ghouls.map((g) => ({ ...g, let_starve: !!g.let_starve, ...states[g.id] })),
+        ghouls: ghouls.map((g) => ({ ...g, let_starve: !!g.let_starve, ...stateFor(g) })),
       });
     } catch (err) {
       log.err('GET /api/admin/feeding/ghouls failed', { error: err.message });
@@ -1082,31 +1146,78 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  /* ---- Admin: active characters with no feeding this cycle ---- */
-  fastify.get('/api/admin/feeding/unfed', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  /* ---- Admin: the cycles the Feeding tab can look at ---- */
+  // Every Calendar cycle up to the current one, plus any cycle that has feedings
+  // (older anchor-based cycles), newest first, with how much happened in each.
+  fastify.get('/api/admin/feeding/cycles', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const { cycleIndex } = await getCurrentCycle();
+      const current = await getCurrentCycle();
+      const [counts] = await pool.query("SELECT cycle_index, COUNT(*) AS n FROM feedings GROUP BY cycle_index");
+      const [ghoulCounts] = await pool.query('SELECT cycle_index, COUNT(*) AS n FROM ghoul_feedings GROUP BY cycle_index');
+      const byIndex = new Map();
+      const entry = (i) => {
+        if (!byIndex.has(i)) byIndex.set(i, { cycleIndex: i, title: null, opening_date: null, closing_date: null, feedings: 0, ghoulFeedings: 0 });
+        return byIndex.get(i);
+      };
+      (await readCycles()).forEach((c, i) => {
+        const idx = cycleIndexOf(c, i);
+        if (idx > current.cycleIndex) return;
+        Object.assign(entry(idx), { title: c.title || null, opening_date: c.opening_date || null, closing_date: c.closing_date || null });
+      });
+      for (const r of counts) entry(Number(r.cycle_index)).feedings = Number(r.n);
+      for (const r of ghoulCounts) entry(Number(r.cycle_index)).ghoulFeedings = Number(r.n);
+      entry(current.cycleIndex).title = entry(current.cycleIndex).title || current.cycleTitle || null;
+      const cycles = [...byIndex.values()]
+        .map((c) => ({ ...c, isCurrent: c.cycleIndex === current.cycleIndex }))
+        .sort((a, b) => b.cycleIndex - a.cycleIndex);
+      reply.send({ current: current.cycleIndex, cycles });
+    } catch (err) {
+      log.err('GET /api/admin/feeding/cycles failed', { error: err.message });
+      reply.status(500).send({ error: 'Database error listing cycles', details: err.sqlMessage || err.message });
+    }
+  });
+
+  /* ---- Admin: every active character's feeding this cycle ---- */
+  // hunts = rolled hunts (of HUNTS_PER_CYCLE); herd / safe / manual are the other ways to feed.
+  fastify.get('/api/admin/feeding/roster', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const { cycleIndex, isCurrent } = await adminCycle(req);
+      const [chars] = await pool.query('SELECT id, name, sheet FROM characters WHERE user_id IS NOT NULL ORDER BY name');
       const [rows] = await pool.query(
-        `SELECT c.id, c.name, c.sheet FROM characters c
-          WHERE c.user_id IS NOT NULL
-            AND NOT EXISTS (SELECT 1 FROM feedings f WHERE f.character_id = c.id AND f.cycle_index = ? AND f.status = 'resolved')
-          ORDER BY c.name`,
+        `SELECT id, character_id, outcome, status, division, hunger_before, hunger_delta, safety_delta, wp_rerolled, created_at
+           FROM feedings WHERE cycle_index = ? ORDER BY id`,
         [cycleIndex]
       );
+      const tally = new Map();
+      for (const r of rows) {
+        const t = tally.get(r.character_id) || { hunts: 0, herd: 0, safe: 0, manual: 0, pending: false, feedings: [] };
+        t.feedings.push(r);
+        if (r.status === 'pending') t.pending = true;
+        else if (r.outcome === 'herd') t.herd += 1;
+        else if (r.outcome === 'downtime') t.safe += 1;
+        else if (r.outcome === 'manual') t.manual += 1;
+        else t.hunts += 1;
+        tally.set(r.character_id, t);
+      }
       reply.send({
         cycleIndex,
-        characters: rows.map((r) => {
-          const sheet = parseSheet(r.sheet);
+        isCurrent,
+        huntsPerCycle: HUNTS_PER_CYCLE,
+        characters: chars.map((c) => {
+          const sheet = parseSheet(c.sheet);
           const predatorType = getPredatorType(sheet);
+          const t = tally.get(c.id) || { hunts: 0, herd: 0, safe: 0, manual: 0, pending: false, feedings: [] };
           return {
-            id: r.id, name: r.name, predatorType, hunger: readHunger(sheet),
+            id: c.id, name: c.name, predatorType, hunger: readHunger(sheet),
             canAutomate: !!predatorType && PREDATOR_HUNTING_POOLS[predatorType]?.length > 0,
+            ...t,
+            fed: t.hunts + t.herd + t.safe + t.manual > 0,
           };
         }),
       });
     } catch (err) {
-      log.err('GET /api/admin/feeding/unfed failed', { error: err.message });
-      reply.status(500).send({ error: 'Database error fetching unfed characters', details: err.sqlMessage || err.message });
+      log.err('GET /api/admin/feeding/roster failed', { error: err.message });
+      reply.status(500).send({ error: 'Database error fetching the feeding roster', details: err.sqlMessage || err.message });
     }
   });
 
@@ -1142,6 +1253,45 @@ module.exports = async function (fastify, opts) {
     } catch (err) {
       log.err('POST /api/admin/feeding/manual failed', { error: err.message });
       reply.status(500).send({ error: 'Database error recording feeding', details: err.sqlMessage || err.message });
+    }
+  });
+
+  /* ---- Admin: undo a ghoul's feeding (or starvation) this cycle ---- */
+  // The ghoul needs feeding again; a feeder whose Rouse Check raised their
+  // Hunger gets that point back.
+  fastify.post('/api/admin/feeding/ghouls/:rid/undo', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    const conn = await pool.getConnection();
+    try {
+      const { cycleIndex } = await adminCycle(req);
+      await conn.beginTransaction();
+      const [[row]] = await conn.query(
+        'SELECT * FROM ghoul_feedings WHERE retainer_id=? AND cycle_index=? FOR UPDATE',
+        [Number(req.params.rid), cycleIndex]
+      );
+      if (!row) { await conn.rollback(); return reply.status(404).send({ error: 'Nothing recorded for this ghoul this cycle.' }); }
+
+      let hunger = null;
+      const raised = Number(row.hunger_after) - Number(row.hunger_before);
+      if (row.status === 'fed' && row.fed_by_character_id && raised > 0) {
+        const [[feeder]] = await conn.query('SELECT id, sheet FROM characters WHERE id=? FOR UPDATE', [row.fed_by_character_id]);
+        if (feeder) {
+          const sheet = parseSheet(feeder.sheet);
+          const before = readHunger(sheet);
+          sheet.hunger = clamp(before - raised, 0, 5);
+          await conn.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), feeder.id]);
+          hunger = { before, after: sheet.hunger };
+        }
+      }
+      await conn.query('DELETE FROM ghoul_feedings WHERE id=?', [row.id]);
+      await conn.commit();
+      log.adm('Admin undid a ghoul feeding', { admin: req.user.id, row, hunger });
+      reply.send({ ok: true, hunger });
+    } catch (err) {
+      await conn.rollback().catch(() => {});
+      log.err('POST /api/admin/feeding/ghouls/:rid/undo failed', { error: err.message });
+      reply.status(500).send({ error: 'Database error undoing ghoul feeding', details: err.sqlMessage || err.message });
+    } finally {
+      conn.release();
     }
   });
 

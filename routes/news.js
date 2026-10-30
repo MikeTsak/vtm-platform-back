@@ -5,7 +5,7 @@
 const sharp = require('sharp');
 const { getSetting } = require('../utils/settings');
 const { sanitizeRichText } = require('../utils/sanitize');
-const { xmlEscape, getAuthorSignature, isVideoUrl, resolveMediaUrl, redactNewsAuthor, broadcastNewsEntry, NEWS_AUTHOR_COLUMNS, NEWS_AUTHOR_JOINS } = require('../services/news');
+const { xmlEscape, getAuthorSignature, isVideoUrl, resolveMediaUrl, redactNewsAuthor, broadcastNewsEntry, editableUntil, NEWS_AUTHOR_COLUMNS, NEWS_AUTHOR_JOINS } = require('../services/news');
 
 const guards = require('../services/guards');
 module.exports = async function (fastify, opts) {
@@ -72,7 +72,7 @@ module.exports = async function (fastify, opts) {
         ).catch((e) => log.err('Record news read failed', { message: e.message }));
       }
 
-      reply.send({ item: redactNewsAuthor(rows[0]) });
+      reply.send({ item: redactNewsAuthor({ ...rows[0], editable_until: editableUntil(rows[0], req.user) }) });
     } catch (e) {
       log.err('Fetch public article failed', { message: e.message });
       reply.status(500).send({ error: 'Failed to load article' });
@@ -116,7 +116,7 @@ module.exports = async function (fastify, opts) {
       ORDER BY n.created_at DESC
       LIMIT 100
     `);
-      reply.send({ items: rows.map(redactNewsAuthor) });
+      reply.send({ items: rows.map((r) => redactNewsAuthor({ ...r, editable_until: editableUntil(r, req.user) })) });
     } catch (e) {
       log.err('Fetch news failed', { message: e.message });
       reply.status(500).send({ error: 'Failed to load news' });
@@ -385,6 +385,46 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       log.err('Create news failed', { message: e.message });
       reply.status(500).send({ error: 'Failed to post' });
+    }
+  });
+
+  // PUT /api/news/:id - Edit a published article or decree, within an hour of publishing,
+  // by its author or an admin. Title, subtitle (articles), body and media; no Discord re-post.
+  // body.media_url: omitted = keep, null/'' = remove, string = the URL /api/news/upload returned.
+  fastify.put('/api/news/:id', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const [[row]] = await pool.query('SELECT * FROM news_entries WHERE id = ?', [req.params.id]);
+      if (!row) return reply.status(404).send({ error: 'Not found' });
+      if (!editableUntil(row, req.user)) {
+        return reply.status(403).send({ error: 'This can only be edited by its author (or an admin) within an hour of publishing.' });
+      }
+
+      const title = String(req.body?.title ?? '').trim();
+      const body = String(req.body?.body ?? '');
+      if (!title || !body.trim()) return reply.status(400).send({ error: 'Title and Body are required' });
+      if (title.length > 255) return reply.status(400).send({ error: 'Title is too long' });
+
+      const sets = ['title = ?', 'body = ?', 'edited_at = NOW()'];
+      const params = [title, sanitizeRichText(body)];
+      if (row.type === 'news' && req.body?.subtitle !== undefined) {
+        sets.push('subtitle = ?');
+        params.push(String(req.body.subtitle || '').trim() || null);
+      }
+      if (req.body?.media_url !== undefined) {
+        const media = req.body.media_url ? String(req.body.media_url) : null;
+        if (media && !/^(https?:\/\/|\/)/.test(media)) return reply.status(400).send({ error: 'Invalid media URL' });
+        sets.push('media_url = ?');
+        params.push(media);
+      }
+      await pool.query(`UPDATE news_entries SET ${sets.join(', ')} WHERE id = ?`, [...params, row.id]);
+
+      log.adm('News entry edited', { entry_id: row.id, type: row.type, user_id: req.user.id, by_admin: req.user.role === 'admin' });
+      const [[updated]] = await pool.query(`
+        SELECT n.*, ${NEWS_AUTHOR_COLUMNS} FROM news_entries n ${NEWS_AUTHOR_JOINS} WHERE n.id = ?`, [row.id]);
+      reply.send({ ok: true, item: redactNewsAuthor({ ...updated, editable_until: editableUntil(updated, req.user) }) });
+    } catch (e) {
+      log.err('Edit news failed', { message: e.message, entry_id: req.params.id });
+      reply.status(500).send({ error: 'Failed to save the edit' });
     }
   });
 

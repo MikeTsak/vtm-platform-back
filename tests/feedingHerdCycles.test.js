@@ -140,3 +140,19 @@ describe('Vitals on top of the Feeding page', () => {
     }
   });
 });
+
+describe('Safety before a hunt', () => {
+  it('is stored when the hunt is accepted, so the admin tab shows before -> after -> now', async () => {
+    await pool.query('DELETE FROM feedings WHERE character_id=?', [player.characterId]);
+    await setSheet({ hunger: 3, predator_type: 'Alleycat', attributes: { Strength: 2 }, skills: { Brawl: 2 } });
+    await pool.query('DELETE FROM domain_claims WHERE division=39');
+    await pool.query("INSERT INTO domain_claims (division, owner_name, color, safety_rating) VALUES (39, NULL, '#888888', 6)");
+
+    const roll = JSON.parse((await req('POST', '/api/feeding/roll', { division: 39, poolIndex: 0 })).body);
+    expect((await req('POST', `/api/feeding/${roll.feeding.id}/confirm`)).statusCode).toBe(200);
+    const [[f]] = await pool.query('SELECT safety_before, safety_delta FROM feedings WHERE id=?', [roll.feeding.id]);
+    expect(f.safety_before).toBe(6);
+    const [[claim]] = await pool.query('SELECT safety_rating FROM domain_claims WHERE division=39');
+    expect(claim.safety_rating).toBe(Math.max(0, Math.min(10, 6 + f.safety_delta)));
+  });
+});

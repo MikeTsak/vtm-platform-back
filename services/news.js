@@ -205,7 +205,23 @@ async function broadcastNewsEntry(entry, options = {}) {
   return { ok: true };
 }
 
+// A published article or decree can be edited for an hour after it went out,
+// by whoever posted it or by an admin. Returns the deadline (ISO) for `user`,
+// or null. Computed per reader, so it never tells anyone who wrote an article.
+const EDIT_WINDOW_MS = 60 * 60 * 1000;
+function editableUntil(row, user, now = Date.now()) {
+  if (!user || !row || Number(row.is_private) === 1) return null;
+  if (!['news', 'announcement'].includes(row.type) || row.theme === 'RUMOR') return null;
+  const isAdmin = user.role === 'admin';
+  if (!isAdmin && Number(row.author_id) !== Number(user.id)) return null;
+  const from = new Date(row.published_at || row.created_at).getTime();
+  const until = from + EDIT_WINDOW_MS;
+  return Number.isFinite(until) && until > now ? new Date(until).toISOString() : null;
+}
+
 module.exports = {
+  EDIT_WINDOW_MS,
+  editableUntil,
   xmlEscape,
   getAuthorSignature,
   isVideoUrl,

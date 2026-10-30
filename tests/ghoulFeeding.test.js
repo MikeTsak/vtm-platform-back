@@ -154,13 +154,73 @@ describe('feed all and Storyteller feedings', () => {
     await setHunger(eve, 4);
 
     expect((await req('POST', '/api/admin/feeding/manual', eve, { character_id: eve.characterId, hunger: 1 })).statusCode).toBe(403);
-    const unfed = JSON.parse((await req('GET', '/api/admin/feeding/unfed', st)).body).characters;
-    expect(unfed.some((c) => c.id === eve.characterId)).toBe(true);
+    const before = JSON.parse((await req('GET', '/api/admin/feeding/roster', st)).body).characters;
+    expect(before.find((c) => c.id === eve.characterId)).toMatchObject({ fed: false, hunts: 0 });
 
     expect((await req('POST', '/api/admin/feeding/manual', st, { character_id: eve.characterId, hunger: 2 })).statusCode).toBe(200);
     const status = JSON.parse((await req('GET', '/api/feeding/status', eve)).body);
     expect(status.fed).toBe(true);
     expect(status.huntsUsed).toBe(0);
     expect(await hungerOf(eve)).toBe(2);
+    const after = JSON.parse((await req('GET', '/api/admin/feeding/roster', st)).body).characters;
+    expect(after.find((c) => c.id === eve.characterId)).toMatchObject({ fed: true, hunts: 0, manual: 1 });
+    const stats = JSON.parse((await req('GET', '/api/admin/feeding/stats', st)).body);
+    expect(stats.counts.manual).toBeGreaterThanOrEqual(1);
+    expect(stats.players.fed).toBeGreaterThanOrEqual(1);
+    expect(stats.huntsPerCycle).toBe(3);
+  });
+});
+
+describe('Storyteller undo', () => {
+  it('undoes a ghoul feeding (Hunger back) and a player\'s whole cycle of feedings', async () => {
+    await setSetting('ghoul_upkeep_last_cycle', '');
+    const st = await makePlayer('Undo ST');
+    await pool.query('UPDATE users SET role="admin" WHERE id=?', [st.user.id]);
+    st.cookie = extractSessionCookie(await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: st.email, password: st.password } }));
+    const fay = await makePlayer('Fay');
+    const igor = await ghoul({ character_id: fay.characterId, name: 'Undo Igor' });
+
+    await setHunger(fay, 2);
+    expect((await req('POST', `/api/feeding/ghouls/${igor}/feed`, fay)).statusCode).toBe(200);
+    expect((await req('POST', `/api/admin/feeding/ghouls/${igor}/undo`, st)).statusCode).toBe(200);
+    expect(await hungerOf(fay)).toBe(2);
+    expect(await rowFor(igor)).toBeUndefined();
+
+    await setHunger(fay, 4);
+    await req('POST', '/api/admin/feeding/manual', st, { character_id: fay.characterId, hunger: 3 });
+    await req('POST', '/api/admin/feeding/manual', st, { character_id: fay.characterId, hunger: 1 });
+    const res = JSON.parse((await req('POST', `/api/admin/feeding/character/${fay.characterId}/undo-cycle`, st)).body);
+    expect(res.undone).toBe(2);
+    expect(await hungerOf(fay)).toBe(4);
+    expect(JSON.parse((await req('GET', '/api/feeding/status', fay)).body).fed).toBe(false);
+  });
+});
+
+describe('Admin views a past cycle', () => {
+  it('lists cycles, filters by ?cycle, and undoes a feeding from a past cycle', async () => {
+    const st = await makePlayer('Past ST');
+    await pool.query('UPDATE users SET role="admin" WHERE id=?', [st.user.id]);
+    st.cookie = extractSessionCookie(await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: st.email, password: st.password } }));
+    const gus = await makePlayer('Gus');
+    await setHunger(gus, 2);
+    const [ins] = await pool.query(
+      `INSERT INTO feedings (character_id, division, predator_type, pool_label, dice_pool, difficulty, hunger_before, outcome, status, cycle_index, hunger_delta, safety_delta)
+       VALUES (?, 39, 'Siren', 'x', 3, 3, 3, 'success', 'resolved', 5, -1, 0)`,
+      [gus.characterId]
+    );
+
+    const { cycles, current } = JSON.parse((await req('GET', '/api/admin/feeding/cycles', st)).body);
+    expect(current).toBe(CYCLE);
+    expect(cycles.find((c) => c.cycleIndex === 5)).toMatchObject({ feedings: 1, isCurrent: false });
+
+    const roster = JSON.parse((await req('GET', '/api/admin/feeding/roster?cycle=5', st)).body);
+    expect(roster.isCurrent).toBe(false);
+    expect(roster.characters.find((c) => c.id === gus.characterId)).toMatchObject({ fed: true, hunts: 1 });
+    const log = JSON.parse((await req('GET', '/api/admin/feeding/log?cycle=5', st)).body).log;
+    expect(log.map((f) => f.id)).toEqual([ins.insertId]);
+
+    expect((await req('POST', `/api/admin/feeding/character/${gus.characterId}/undo-cycle?cycle=5`, st)).statusCode).toBe(200);
+    expect(await hungerOf(gus)).toBe(3);
+    expect(JSON.parse((await req('GET', '/api/admin/feeding/log?cycle=5', st)).body).log).toHaveLength(0);
   });
 });
