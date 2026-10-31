@@ -1,5 +1,8 @@
 const { getSetting } = require('../utils/settings');
 const { attachFeeding } = require('../services/ghoulFeeding');
+const { checkGhoulGift } = require('../utils/ghoulBlood');
+const { withSetOnceDates, RETAINER_DATES } = require('../utils/sheetDates');
+const { keepTrackers, ghoulTrackers } = require('../services/ghoulTrackers');
 const { DEFAULT_DISABLED_CLANS } = require('../utils/clans');
 const { isAdmin, userOwnsCharacter } = require('../services/guards');
 const { parseSheet } = require('../utils/sheet');
@@ -359,7 +362,7 @@ module.exports = async function (fastify, opts) {
       const results = [];
       for (const row of rows) {
         row.sheet = parseSheet(row.sheet);
-        results.push({ ...row }); // Ensure it's a plain object
+        results.push({ ...row, trackers: ghoulTrackers(row.sheet || {}) }); // Ensure it's a plain object
       }
       await attachFeeding(pool, results);
         const payload = JSON.stringify(results);
@@ -410,6 +413,14 @@ module.exports = async function (fastify, opts) {
     }
   }
 
+  // A personal ghoul drinks its owner's blood: their highest-rated Discipline and
+  // a level 1 power they own (utils/ghoulBlood.js). Error string or null.
+  async function ghoulGiftOf(charId, sheet, oldSheet) {
+    if (sheet?.isGhoul !== true) return null;
+    const [[owner]] = await pool.query('SELECT sheet FROM characters WHERE id=?', [charId]);
+    return checkGhoulGift(parseSheet(owner && owner.sheet) || {}, sheet, oldSheet, 'your character');
+  }
+
   // Create a retainer on a character (owner or admin)
   fastify.post('/api/characters/:id/retainers', { preHandler: [authRequired] }, async (req, reply) => {
     try {
@@ -418,15 +429,18 @@ module.exports = async function (fastify, opts) {
         return reply.status(403).send({ error: 'Unauthorized' });
       }
 
-      const { name, sheet } = req.body;
+      const { name } = req.body;
       const admin = isAdmin(req.user);
+      // A player's dates are set once from here on (utils/sheetDates.js).
+      const sheet = keepTrackers(null, admin ? req.body.sheet : withSetOnceDates({}, req.body.sheet, RETAINER_DATES));
       const tier = Number(req.body.tier || 1);
       if (!Number.isInteger(tier) || tier < 1 || tier > 4) return reply.status(400).send({ error: 'Tier must be 1 to 4.' });
       // A retainer's own XP is the Storyteller's to set.
       const xp = admin ? Number(req.body.xp) || 0 : 0;
 
       const isGhoul = sheet?.isGhoul === true;
-      const validationError = validateRetainerSheet(tier, sheet, isGhoul);
+      const validationError = validateRetainerSheet(tier, sheet, isGhoul)
+        || (!admin && await ghoulGiftOf(charId, sheet, null));
       if (validationError) {
         return reply.status(400).send({ error: validationError });
       }
@@ -470,7 +484,8 @@ module.exports = async function (fastify, opts) {
 
   fastify.put('/api/retainers/:retainerId/upgrade', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      const { name, sheet } = req.body;
+      const { name } = req.body;
+      let { sheet } = req.body;
       const tier = Number(req.body.tier);
       if (!Number.isInteger(tier) || tier < 1 || tier > 4) return reply.status(400).send({ error: 'Tier must be 1 to 4.' });
 
@@ -481,6 +496,7 @@ module.exports = async function (fastify, opts) {
       );
       if (rows.length === 0) return reply.status(403).send({ error: 'Not authorized or retainer not found' });
       const oldRetainer = rows[0];
+      sheet = keepTrackers(parseSheet(oldRetainer.sheet), withSetOnceDates(parseSheet(oldRetainer.sheet), sheet, RETAINER_DATES));
 
       // Ensure tier is only going up or staying the same
       if (tier < oldRetainer.tier) {
@@ -489,7 +505,8 @@ module.exports = async function (fastify, opts) {
 
       // Strict V5 Validation
       const isGhoul = sheet?.isGhoul === true;
-      const validationError = validateRetainerSheet(Number(tier), sheet, isGhoul);
+      const validationError = validateRetainerSheet(Number(tier), sheet, isGhoul)
+        || await ghoulGiftOf(oldRetainer.character_id, sheet, parseSheet(oldRetainer.sheet));
       if (validationError) {
         return reply.status(400).send({ error: validationError });
       }
@@ -521,8 +538,11 @@ module.exports = async function (fastify, opts) {
 
   fastify.put('/api/retainers/:retainerId', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const { name, tier, sheet, xp } = req.body;
+      const { name, tier, xp } = req.body;
       const retainerId = req.params.retainerId;
+      // Health/Willpower change only through the tracker routes (services/ghoulTrackers.js).
+      const [[stored]] = await pool.query('SELECT sheet FROM retainers WHERE id=?', [retainerId]);
+      const sheet = keepTrackers(parseSheet(stored && stored.sheet), req.body.sheet);
 
       // Strict V5 Validation
       const isGhoul = sheet?.isGhoul === true;

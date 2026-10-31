@@ -4,6 +4,7 @@
 
 const { parseSheet } = require('../utils/sheet');
 const { attachFeeding } = require('../services/ghoulFeeding');
+const { ghoulTrackers } = require('../services/ghoulTrackers');
 const { retireCharacter, restoreCharacter } = require('../services/characterRetirement');
 
 module.exports = async function (fastify, opts) {
@@ -116,6 +117,7 @@ module.exports = async function (fastify, opts) {
           .map(([disc, id]) => [disc, names.get(Number(id)) || 'a former member']));
       }
       await attachFeeding(pool, rows);
+      for (const r of rows) r.trackers = ghoulTrackers(r.sheet || {});
       reply.send({ retainers: rows });
     } catch (e) {
       log.err('Failed to fetch all retainers', { message: e.message });

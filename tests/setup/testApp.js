@@ -158,6 +158,7 @@ function buildTestApp(pool) {
   app.register(require('../../routes/npcs'), { pool, log: testLog, authRequired, requireAdmin });
   app.register(require('../../routes/mechanics'), { pool, authRequired });
   app.register(require('../../routes/dice'), { pool, log: testLog, authRequired, requireAdmin });
+  app.register(require('../../routes/ghouls'), { pool, log: testLog, authRequired, requireAdmin });
   app.register(require('../../routes/liveSessions'), { pool, log: testLog, authRequired, requireAdmin, moderateLimiter: (req, reply, done) => done() });
 
   app.register(require('../../routes/camarilla'), { pool, log: testLog, authRequired, requireAdmin });

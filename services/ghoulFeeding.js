@@ -69,6 +69,7 @@ async function starveGhoul(conn, { ghoulId, cycleIndex, method }) {
  *   state      'fed' | 'starved' | 'hungry'
  *   canFeed    no feeding (or starvation) recorded for this cycle yet
  *   current    this cycle's row, if any, with the feeder's name
+ *   starvedAt  every cycle it went unfed, oldest first (drives its aging catch-up)
  * A ghoul starved in an earlier cycle stays 'starved' until it is fed again.
  * Once a cycle's upkeep is done (or skipped: the cycle the system went live in), a
  * ghoul with nothing recorded for it owes nothing more that cycle.
@@ -76,7 +77,7 @@ async function starveGhoul(conn, { ghoulId, cycleIndex, method }) {
 async function ghoulStates(db, ids, cycleIndex) {
   const settled = String(await getSetting('ghoul_upkeep_last_cycle', '')) === String(cycleIndex);
   const out = {};
-  for (const id of ids) out[id] = settled ? { state: 'fed', canFeed: false, current: null } : { state: 'hungry', canFeed: true, current: null };
+  for (const id of ids) out[id] = settled ? { state: 'fed', canFeed: false, current: null, starvedAt: [] } : { state: 'hungry', canFeed: true, current: null, starvedAt: [] };
   if (!ids.length) return out;
   const [rows] = await db.query(
     `SELECT g.retainer_id, g.cycle_index, g.status, g.method, g.rouse_dice, g.hunger_before, g.hunger_after, g.created_at,
@@ -89,6 +90,7 @@ async function ghoulStates(db, ids, cycleIndex) {
   const latest = new Set();
   for (const r of rows) {
     const s = out[r.retainer_id];
+    if (r.status === 'starved') s.starvedAt.unshift(r.created_at);
     if (Number(r.cycle_index) === Number(cycleIndex)) {
       s.state = r.status;
       s.canFeed = false;
@@ -231,13 +233,16 @@ async function currentCycleIndex() {
   return (await resolveCurrentFeedingCycle()).cycleIndex;
 }
 
-// Sets `feeding` ('fed' | 'hungry' | 'starved') on each ghoul of a retainer list, for the current
+// Sets `feeding` ('fed' | 'hungry' | 'starved') and `starvedAt` on each ghoul of a retainer list, for the current
 // cycle. A list without sheets can pass its own ghoul test (a coterie ghoul always has a domitor).
 async function attachFeeding(db, retainers, isGhoul = isGhoulRow) {
   const ghouls = retainers.filter(isGhoul);
   if (!ghouls.length) return retainers;
   const states = await ghoulStates(db, ghouls.map((r) => r.id), await currentCycleIndex());
-  for (const r of ghouls) r.feeding = states[r.id].state;
+  for (const r of ghouls) {
+    r.feeding = states[r.id].state;
+    r.starvedAt = states[r.id].starvedAt;
+  }
   return retainers;
 }
 

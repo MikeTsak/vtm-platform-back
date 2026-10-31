@@ -24,9 +24,17 @@ const T2 = {
   },
 };
 
+// A ghoul gets its blood-giver's highest-rated Discipline and a level 1 power they own.
+const SHEETS = {
+  Ventrue: { disciplines: { Dominate: 2, Fortitude: 2, Presence: 1 }, disciplinePowers: { Dominate: [{ id: 'compel', name: 'Compel', level: 1 }], Fortitude: [{ id: 'resilience', name: 'Resilience', level: 1 }] } },
+  Brujah: { disciplines: { Potence: 2, Celerity: 1 }, disciplinePowers: { Potence: [{ id: 'lethal_body', name: 'Lethal Body', level: 1 }], Celerity: [{ id: 'cats_grace', name: "Cat's Grace", level: 1 }] } },
+  Tremere: { disciplines: { 'Blood Sorcery': 2, Auspex: 1 }, disciplinePowers: { 'Blood Sorcery': [{ id: 'corrosive_vitae', name: 'Corrosive Vitae', level: 1 }] } },
+};
+const gift = (disc, power) => ({ isGhoul: true, disciplines: { [disc]: 1 }, powers: [{ discipline: disc, name: power }] });
+
 async function makePlayer(name, clan) {
   const u = await registerUser(app, { displayName: name });
-  const [r] = await pool.query('INSERT INTO characters (user_id, name, clan, xp) VALUES (?,?,?,0)', [u.user.id, name, clan]);
+  const [r] = await pool.query('INSERT INTO characters (user_id, name, clan, xp, sheet) VALUES (?,?,?,0,?)', [u.user.id, name, clan, JSON.stringify(SHEETS[clan] || {})]);
   return { ...u, characterId: r.insertId };
 }
 
@@ -81,7 +89,7 @@ describe('coterie retainers', () => {
   });
 
   it('requires a member domitor for a ghoul', async () => {
-    const sheet = { ...T1, isGhoul: true, disciplines: { Dominate: 1 } };
+    const sheet = { ...T1, ...gift('Dominate', 'Compel') };
     const bad = await req('POST', `/api/coteries/${coterieId}/retainers`, members[0],
       { name: 'Ghoul', tier: 1, sheet, domitor_character_id: outsider.characterId });
     expect(bad.statusCode).toBe(400);
@@ -122,11 +130,11 @@ describe('coterie retainers', () => {
 });
 
 // House rule: a coterie ghoul is bound to its domitor only, but holds one
-// Discipline per Tier; each extra is another member's clan Discipline and
+// Discipline per Tier; each extra is another member's highest-rated Discipline and
 // only that member can add it.
 describe('coterie ghoul blood from several members', () => {
   let cid, ghoulId;
-  const T2G = (disc) => ({ ...T2, isGhoul: true, disciplines: { [disc]: 1 }, powers: [] });
+  const T2G = (disc, power) => ({ ...T2, ...gift(disc, power) });
   const blood = (who, discipline, power) =>
     req('POST', `/api/coteries/${cid}/retainers/${ghoulId}/blood`, who, { discipline, power: { name: power } });
 
@@ -141,14 +149,26 @@ describe('coterie ghoul blood from several members', () => {
       JSON.stringify([{ key: 'retainers', name: 'Retainers', dots: 5, note: null }]), cid,
     ]);
     const g = await req('POST', `/api/coteries/${cid}/retainers`, members[0],
-      { name: 'Shared Ghoul', tier: 2, sheet: T2G('Dominate'), domitor_character_id: members[0].characterId });
+      { name: 'Shared Ghoul', tier: 2, sheet: T2G('Dominate', 'Compel'), domitor_character_id: members[0].characterId });
     expect(g.statusCode).toBe(200);
     ghoulId = JSON.parse(g.body).id;
   });
 
-  it('lets another member add one of their own clan Disciplines, up to one per Tier', async () => {
+  it("refuses a ghoul Discipline that is not the domitor's highest, or a power they lack", async () => {
+    const post = (sheet) => req('POST', `/api/coteries/${cid}/retainers`, members[0],
+      { name: 'Wrong Gift', tier: 1, sheet: { ...T1, ...sheet }, domitor_character_id: members[0].characterId });
+    const low = await post(gift('Presence', 'Awe'));
+    expect(low.statusCode).toBe(400);
+    expect(JSON.parse(low.body).error).toMatch(/Dominate or Fortitude/);
+    const unowned = await post(gift('Dominate', 'Cloud Memory'));
+    expect(JSON.parse(unowned.body).error).toMatch(/not a power/);
+  });
+
+  it("lets another member add their highest-rated Discipline, up to one per Tier", async () => {
     expect((await blood(members[0], 'Potence', 'Lethal Body')).statusCode).toBe(400); // the domitor
     expect((await blood(members[2], 'Celerity', "Cat's Grace")).statusCode).toBe(400); // not Tremere
+    expect((await blood(members[1], 'Celerity', "Cat's Grace")).statusCode).toBe(400); // owned, not highest
+    expect((await blood(members[1], 'Potence', 'Soaring Leap')).statusCode).toBe(400); // a power Bo lacks
     expect((await blood(members[1], 'Potence', 'Not A Power')).statusCode).toBe(400);
     expect((await blood(outsider, 'Animalism', 'Sense the Beast')).statusCode).toBe(403);
 
@@ -163,13 +183,13 @@ describe('coterie ghoul blood from several members', () => {
 
   it('keeps the other blood through a domitor rebuild, and refuses to shrink under it', async () => {
     // A client cannot forge an extra through the rebuild.
-    const forged = { ...T2G('Fortitude'), bloodSources: { Auspex: members[2].characterId }, disciplines: { Fortitude: 1, Auspex: 1 } };
+    const forged = { ...T2G('Fortitude', 'Resilience'), bloodSources: { Auspex: members[2].characterId }, disciplines: { Fortitude: 1, Auspex: 1 } };
     const rebuilt = await req('PUT', `/api/coteries/${cid}/retainers/${ghoulId}`, members[0],
       { tier: 2, sheet: forged, domitor_character_id: members[0].characterId });
     expect(rebuilt.statusCode).toBe(200);
     expect(JSON.parse(rebuilt.body).sheet.disciplines).toEqual({ Fortitude: 1, Potence: 1 });
 
-    const T1G = { ...T1, isGhoul: true, disciplines: { Fortitude: 1 } };
+    const T1G = { ...T1, ...gift('Fortitude', 'Resilience') };
     const shrink = await req('PUT', `/api/coteries/${cid}/retainers/${ghoulId}`, members[0],
       { tier: 1, sheet: T1G, domitor_character_id: members[0].characterId });
     expect(shrink.statusCode).toBe(400);

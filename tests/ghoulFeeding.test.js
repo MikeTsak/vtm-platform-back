@@ -125,6 +125,12 @@ describe('ghoul upkeep', () => {
     expect(list.find((g) => g.id === stray).state).toBe('starved');
     expect(list.find((g) => g.id === shared).state).toBe('fed');
 
+    // Each starved cycle is listed for the ghoul's aging catch-up.
+    const { ghoulStates } = require('../services/ghoulFeeding');
+    const states = await ghoulStates(pool, [stray, shared], CYCLE);
+    expect(states[stray].starvedAt).toHaveLength(1);
+    expect(states[shared].starvedAt).toEqual([]);
+
     // Running again touches nothing.
     expect(await runGhoulUpkeep(pool, null, { cycleIndex: CYCLE, notify: () => {} })).toMatchObject({ fed: 0, starved: 0 });
   });

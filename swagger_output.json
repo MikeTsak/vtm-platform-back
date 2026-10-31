@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Erebus Portal API",
-    "version": "1.0.237",
+    "version": "1.0.238",
     "description": "API documentation for the Vampire: The Masquerade RPG portal."
   },
   "servers": [
@@ -536,6 +536,9 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "sheet": {
+                    "example": "any"
+                  },
                   "tier": {
                     "example": "any"
                   },
@@ -543,9 +546,6 @@
                     "example": "any"
                   },
                   "name": {
-                    "example": "any"
-                  },
-                  "sheet": {
                     "example": "any"
                   }
                 }
@@ -674,13 +674,13 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "sheet": {
+                    "example": "any"
+                  },
                   "name": {
                     "example": "any"
                   },
                   "tier": {
-                    "example": "any"
-                  },
-                  "sheet": {
                     "example": "any"
                   },
                   "xp": {
@@ -8705,20 +8705,6 @@
           "500": {
             "description": "Internal Server Error"
           }
-        },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "name": {
-                    "example": "any"
-                  }
-                }
-              }
-            }
-          }
         }
       }
     },
@@ -10053,7 +10039,19 @@
                   "isHidden": {
                     "example": "any"
                   },
+                  "retainerId": {
+                    "example": "any"
+                  },
                   "traits": {
+                    "example": "any"
+                  },
+                  "powerName": {
+                    "example": "any"
+                  },
+                  "situational": {
+                    "example": "any"
+                  },
+                  "ignoreImpairment": {
                     "example": "any"
                   },
                   "specialty": {
@@ -10069,12 +10067,6 @@
                     "example": "any"
                   },
                   "powerIds": {
-                    "example": "any"
-                  },
-                  "situational": {
-                    "example": "any"
-                  },
-                  "ignoreImpairment": {
                     "example": "any"
                   },
                   "discipline": {
@@ -10104,8 +10096,8 @@
           }
         ],
         "responses": {
-          "default": {
-            "description": ""
+          "200": {
+            "description": "OK"
           }
         },
         "requestBody": {
@@ -10184,6 +10176,106 @@
           {
             "name": "since",
             "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        }
+      }
+    },
+    "/api/live-session/{id}/ghouls": {
+      "get": {
+        "description": "",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        }
+      }
+    },
+    "/api/ghouls/{rid}/trackers": {
+      "patch": {
+        "description": "",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionId": {
+                    "example": "any"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/live-session/{id}/ghouls/{rid}/overreach": {
+      "post": {
+        "description": "",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
             "schema": {
               "type": "string"
             }

@@ -452,4 +452,4 @@ async function runPurchase({ pool, table, id, body, isAdmin, unlockedTo, logXp =
   }
 }
 
-module.exports = { applyPurchase, runPurchase, needsDowntime, PurchaseError, allowedDots, ATTRIBUTES, SKILLS, CATALOG, INGRAINED_FLAWS };
+module.exports = { findPower, applyPurchase, runPurchase, needsDowntime, PurchaseError, allowedDots, ATTRIBUTES, SKILLS, CATALOG, INGRAINED_FLAWS };

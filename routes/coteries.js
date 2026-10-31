@@ -20,7 +20,9 @@ const { attachFeeding } = require('../services/ghoulFeeding');
 const { isAdmin, userOwnsCharacter } = require('../services/guards');
 const { parseSheet } = require('../utils/sheet');
 const { validateRetainerSheet } = require('../utils/retainerValidation');
-const RULES_CATALOG = require('../data/rulesCatalog.json');
+const { giftError, checkGhoulGift } = require('../utils/ghoulBlood');
+const { withSetOnceDates, RETAINER_DATES } = require('../utils/sheetDates');
+const { keepTrackers, ghoulTrackers } = require('../services/ghoulTrackers');
 
 const safeParse = (val, fallback) => {
   if (val == null) return fallback;
@@ -50,21 +52,8 @@ const jsonColumn = (val, fallback) => {
 // House rule (2026-10-08): a coterie ghoul is blood bound to its domitor
 // only, but may carry one Discipline per Tier. The domitor's Discipline is
 // set when the sheet is built; each extra one is 1 dot of a DIFFERENT
-// member's clan Discipline, added only by that member (their blood).
+// member's highest-rated Discipline, added only by that member (their blood).
 // `sheet.bloodSources` maps Discipline -> giving character id.
-const errataless = (n) => String(n || '').replace(/\s*\(Errata\)\s*$/i, '').trim().toLowerCase();
-
-function clanDisciplines(clan) {
-  return Object.entries(RULES_CATALOG.disciplines)
-    .filter(([name, d]) => name !== 'Thin-blood Alchemy' && (d.clanAffinity || []).includes(clan))
-    .map(([name]) => name);
-}
-
-function isLevelOnePower(discipline, powerName) {
-  const d = RULES_CATALOG.disciplines[discipline];
-  return !!d && Object.values(d.powers || {})
-    .some((p) => p.level === 1 && errataless(p.name) === errataless(powerName));
-}
 
 // Only the display fields the client's power picker produces are kept.
 const POWER_FIELDS = ['id', 'name', 'level', 'cost', 'duration', 'dice_pool', 'opposing_pool', 'notes', 'description'];
@@ -1380,6 +1369,14 @@ module.exports = async function (fastify, opts) {
     return null;
   }
 
+  // Players only (Storytellers are free): the domitor gives their highest-rated
+  // Discipline and a level 1 power they own. An unchanged gift is not re-checked.
+  async function domitorGiftError(conn, admin, input, oldSheet = null) {
+    if (admin || input.sheet?.isGhoul !== true) return null;
+    const [[dom]] = await conn.query('SELECT sheet FROM characters WHERE id=?', [input.domitorId]);
+    return checkGhoulGift(parseSheet(dom && dom.sheet) || {}, input.sheet, oldSheet && splitBlood(oldSheet).own, 'your character');
+  }
+
   // The extras on a coterie ghoul are only ever written by the blood routes:
   // anything the client sends as an extra is dropped here.
   const retainerInput = (body) => {
@@ -1418,7 +1415,7 @@ module.exports = async function (fastify, opts) {
              FROM retainers WHERE coterie_id=? ORDER BY tier DESC, name`,
           [c.id]
         );
-        for (const r of retainers) r.sheet = parseSheet(r.sheet);
+        for (const r of retainers) { r.sheet = parseSheet(r.sheet); r.trackers = ghoulTrackers(r.sheet || {}); }
         await attachFeeding(pool, retainers);
         out.push({
           id: c.id,
@@ -1442,6 +1439,8 @@ module.exports = async function (fastify, opts) {
     if (!acc.allowed) return reply.status(403).send({ error: 'Not a member of this coterie' });
     const input = retainerInput(req.body);
     if (!input.name) return reply.status(400).send({ error: 'The retainer needs a name.' });
+    if (!acc.admin && input.sheet) input.sheet = withSetOnceDates({}, input.sheet, RETAINER_DATES);
+    if (input.sheet) input.sheet = keepTrackers(null, input.sheet);
 
     const conn = await pool.getConnection();
     try {
@@ -1449,7 +1448,8 @@ module.exports = async function (fastify, opts) {
       const budget = await retainerBudget(conn, id);
       if (!budget) { await conn.rollback(); return reply.status(404).send({ error: 'Not found' }); }
       const err = await checkCoterieRetainer(conn, id, input, budget)
-        || await ghoulGuard(conn, id, req, acc.admin, { newDomitorId: input.domitorId });
+        || await ghoulGuard(conn, id, req, acc.admin, { newDomitorId: input.domitorId })
+        || await domitorGiftError(conn, acc.admin, input);
       if (err) { await conn.rollback(); return reply.status(400).send({ error: err }); }
 
       const [r] = await conn.query(
@@ -1486,9 +1486,12 @@ module.exports = async function (fastify, opts) {
       const [[old]] = await conn.query('SELECT * FROM retainers WHERE id=? AND coterie_id=? FOR UPDATE', [rid, id]);
       if (!budget || !old) { await conn.rollback(); return reply.status(404).send({ error: 'Retainer not found' }); }
       input.name = input.name || old.name;
+      if (!acc.admin && input.sheet) input.sheet = withSetOnceDates(parseSheet(old.sheet), input.sheet, RETAINER_DATES);
+      if (input.sheet) input.sheet = keepTrackers(parseSheet(old.sheet), input.sheet);
       const err = await ghoulGuard(conn, id, req, acc.admin, {
         oldDomitorId: old.domitor_character_id, newDomitorId: input.domitorId,
       }) || await checkCoterieRetainer(conn, id, input, budget)
+        || await domitorGiftError(conn, acc.admin, input, parseSheet(old.sheet))
         || bloodCarryOver(parseSheet(old.sheet), input);
       if (err) { await conn.rollback(); return reply.status(400).send({ error: err }); }
 
@@ -1531,7 +1534,7 @@ module.exports = async function (fastify, opts) {
   }
 
   // A member who is not the domitor feeds the ghoul and passes on 1 dot of
-  // one of their clan Disciplines. body: { discipline, power: { name, ... } }
+  // their highest-rated Discipline with a level 1 power they own (ghoulBlood.js). body: { discipline, power: { name, ... } }
   fastify.post('/api/coteries/:id/retainers/:rid/blood', { preHandler: [authRequired] }, async (req, reply) => {
     const id = Number(req.params.id);
     const rid = Number(req.params.rid);
@@ -1557,14 +1560,13 @@ module.exports = async function (fastify, opts) {
 
       const { own, extras } = splitBlood(sheet);
       if (extras.some((e) => e.source === myId)) return fail(400, 'Your blood already gives this ghoul a Discipline.');
-      if (!clanDisciplines(me.clan).includes(discipline)) {
-        return fail(400, `${discipline || 'That'} is not a ${me.clan || 'clan'} Discipline you can pass on.`);
-      }
       if (sheet.disciplines && sheet.disciplines[discipline]) return fail(400, `The ghoul already has ${discipline}.`);
       if (disciplineCount(sheet) >= Number(ret.tier)) {
         return fail(400, `A Tier ${ret.tier} ghoul holds at most ${ret.tier} Discipline(s). It has no room for more blood.`);
       }
-      if (!isLevelOnePower(discipline, power.name)) return fail(400, `Pick a level 1 ${discipline} power.`);
+      const [[mine]] = await conn.query('SELECT sheet FROM characters WHERE id=?', [myId]);
+      const giftErr = giftError(parseSheet(mine && mine.sheet) || {}, discipline, power, 'your character');
+      if (giftErr) return fail(400, giftErr);
 
       const next = withBlood(own, [...extras, { discipline, source: myId, power: cleanPower(power, discipline) }]);
       const err = validateRetainerSheet(Number(ret.tier), next, true, Number(ret.tier));

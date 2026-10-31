@@ -67,6 +67,7 @@ const ROUTE_MODULES = [
   { name: 'premonitions', path: './premonitions' },
   { name: 'live-sessions', path: './liveSessions' },
   { name: 'dice', path: './dice' },
+  { name: 'ghouls', path: './ghouls' },
   { name: 'news', path: './news' },
   { name: 'rumors', path: './rumors' },
   { name: 'hunts', path: './hunts' },

@@ -21,7 +21,7 @@ const BP = {
 };
 
 // Roll kinds V5 forbids a Willpower reroll on.
-const NO_REROLL = new Set(['frenzy_resistance', 'remorse', 'rouse_check', 'discipline_rouse_check', 'blush_of_life', 'blood_surge', 'mend_rouse', 'willpower_reroll']);
+const NO_REROLL = new Set(['frenzy_resistance', 'remorse', 'rouse_check', 'discipline_rouse_check', 'blush_of_life', 'blood_surge', 'mend_rouse', 'willpower_reroll', 'ghoul_overreach']);
 
 const num = (v) => Number(v) || 0;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, num(v)));

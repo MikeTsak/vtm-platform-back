@@ -1,8 +1,8 @@
 // utils/playerSheetEdit.js
 //
 // What a player may change on their own sheet WITHOUT spending XP: the
-// narrative bits (ambition, desire, touchstones, convictions, notes on their
-// merits) and two live-session flags (compulsion, Blush of Life). Frenzy is
+// narrative bits (ambition, desire, birth and Embrace dates, touchstones,
+// convictions, notes on their merits) and two live-session flags (compulsion, Blush of Life). Frenzy is
 // set by the Storyteller or a failed Rouse at Hunger 5, and cleared by a
 // server-rolled frenzy test (routes/dice.js).
 // Everything else is copied from the stored sheet: dots, powers and merits
@@ -10,6 +10,7 @@
 // through the server-rolled mechanics in routes/mechanics.js or a Storyteller.
 const { CATALOG } = require('./xpPurchase');
 const { parseSheet } = require('./sheet');
+const { setOnceDates, CHARACTER_DATES } = require('./sheetDates');
 
 const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : null);
 // Touchstones/convictions are small free-form records; cap their size, not their shape.
@@ -27,6 +28,9 @@ function mergePlayerSheetEdit(storedSheet, incoming, clan) {
   const has = (k) => Object.prototype.hasOwnProperty.call(inc, k);
 
   for (const k of ['ambition', 'desire']) if (has(k)) out[k] = str(inc[k], 2000) ?? '';
+  // Mortal birth and Embrace ("death day"): set once, then only a Storyteller changes them.
+  Object.assign(out, setOnceDates(out, inc, CHARACTER_DATES));
+  for (const k of [...CHARACTER_DATES, 'datesSetAt']) if (out[k] === undefined) delete out[k];
   if (has('compulsion')) out.compulsion = str(inc.compulsion, 500);
   if (has('blushOfLife')) out.blushOfLife = inc.blushOfLife === true;
 

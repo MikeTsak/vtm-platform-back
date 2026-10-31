@@ -9,6 +9,7 @@ const { traitPool, frenzyPool, parsePowerPool, insertRoll, formatRoll, trackers,
 const { CATALOG } = require('../utils/xpPurchase');
 const { parseSheet } = require('../utils/sheet');
 const { isAdmin, isCourt } = require('../services/guards');
+const { lockSessionGhoul, rollableSheet, ghoulImpairment, ghoulTrackers } = require('../services/ghoulTrackers');
 
 // Storyteller roll kinds that may be logged into a session feed.
 const ST_ROLL_TYPES = new Set(['admin_roll', 'opposed_roll', 'remorse', 'npc_roll']);
@@ -85,6 +86,9 @@ module.exports = async function (fastify, opts) {
    *  request  { requestId }                                      the Storyteller's requested pool, answered once
    *  power    { discipline, powerId }                            an owned power's activation pool
    *  frenzy   {}                                                 resist the current frenzy
+   *  ghoul    { retainerId, traits:[t1,t2] | powerName, difficulty, situational, ignoreImpairment }
+   *           a retainer the Storyteller brought into the session, rolled by the player who plays it:
+   *           no Hunger dice; a starved ghoul has no powers; ignoring impairment costs the ghoul 1 WP
    * Character modes take { sessionId, isHidden } and always use the caller's own character.
    */
   fastify.post('/api/dice/roll', { preHandler: [authRequired] }, async (req, reply) => {
@@ -107,6 +111,60 @@ module.exports = async function (fastify, opts) {
         });
         await afterSessionRoll(session, row);
         return reply.send({ roll: row });
+      }
+
+      if (b.mode === 'ghoul') {
+        const conn = await pool.getConnection();
+        try {
+          await conn.beginTransaction();
+          const session = await findSession(conn, b.sessionId, req.user);
+          const { row: ghoul, sheet, controller } = await lockSessionGhoul(conn, session, b.retainerId, req.user, admin);
+          const rollSheet = rollableSheet(sheet);
+          let traits = Array.isArray(b.traits) ? b.traits.slice(0, 2) : [];
+          let label = '';
+          let rollType = 'ghoul_roll';
+          if (b.powerName) {
+            const power = (sheet.powers || []).find((p) => p && String(p.name) === String(b.powerName));
+            if (!power) fail(400, `${ghoul.name} doesn't have that power.`);
+            const { ghoulStates, currentCycleIndex } = require('../services/ghoulFeeding');
+            const state = (await ghoulStates(conn, [ghoul.id], await currentCycleIndex()))[ghoul.id];
+            if (sheet.isGhoul === true && state?.state === 'starved') fail(400, `${ghoul.name} is starved: no powers until fed again.`);
+            const catalogPower = Object.values(CATALOG.disciplines[power.discipline]?.powers || {})
+              .find((p) => String(p.name).toLowerCase() === String(power.name).toLowerCase());
+            traits = parsePowerPool(catalogPower?.dicePool || power.dice_pool);
+            if (!traits) fail(400, `${power.name} has no dice pool to roll.`);
+            label = `${power.discipline} • ${power.name}: `;
+            rollType = 'ghoul_power';
+          }
+          const built = traitPool({ sheet: rollSheet, clan: null, traits, situational: b.powerName ? null : b.situational, ignoreImpairment: true });
+          const impaired = ghoulImpairment(sheet, traits);
+          if (impaired && b.ignoreImpairment) {
+            if (ghoulTrackers(sheet).willpowerLeft <= 0) fail(400, `${ghoul.name} has no Willpower left to ignore impairment.`);
+            sheet.willpower = { ...ghoulTrackers(sheet).willpower };
+            sheet.willpower.superficial += 1;
+            await conn.query('UPDATE retainers SET sheet=? WHERE id=?', [JSON.stringify(sheet), ghoul.id]);
+            built.parts.push('Impairment ignored (1 WP)');
+          } else if (impaired) {
+            built.pool = Math.max(0, built.pool - impaired);
+            built.parts.push(`Impaired −${impaired}`);
+          }
+          const difficulty = Number(b.difficulty) || 0;
+          const dice = rollPool(built.pool, 0);
+          const row = await insertRoll(conn, {
+            userId: req.user.id, characterId: controller?.id ?? null, characterName: ghoul.name, sessionId: session.id,
+            rollType, normal: dice.normal, hunger: [], hungerLevel: 0, difficulty, isHidden: !!b.isHidden,
+            note: [`${sheet.isGhoul === true ? 'Ghoul' : 'Retainer'} of ${controller?.name || 'the coterie'}`, label + built.parts.join(' + ').replace(/\+ (−|-)/g, '$1'), difficulty ? `Diff ${difficulty}` : ''].filter(Boolean).join(' · '),
+            extra: { retainer_id: ghoul.id },
+          });
+          await conn.commit();
+          await afterSessionRoll(session, row);
+          return reply.send({ roll: row, rolls: [row], ghoulSheet: sheet });
+        } catch (e) {
+          await conn.rollback().catch(() => {});
+          throw e;
+        } finally {
+          conn.release();
+        }
       }
 
       // Everything else rolls the caller's own character, from its stored sheet.
@@ -259,6 +317,31 @@ module.exports = async function (fastify, opts) {
       }
       const count = picks.length + hungerPicks.length;
       if (!count || count > 3) fail(400, 'Pick one to three dice to reroll.');
+
+      // A ghoul's roll spends the ghoul's Willpower, not the vampire's.
+      const ghoulId = roll.results.retainer_id;
+      if (ghoulId) {
+        const [[g]] = await conn.query('SELECT id, sheet FROM retainers WHERE id=? FOR UPDATE', [ghoulId]);
+        if (!g) fail(404, 'That retainer is gone.');
+        const gSheet = parseSheet(g.sheet) || {};
+        const gt = ghoulTrackers(gSheet);
+        if (gt.willpowerLeft <= 0) fail(400, 'Not enough Willpower');
+        gSheet.willpower = { ...gt.willpower, superficial: gt.willpower.superficial + 1 };
+        await conn.query('UPDATE retainers SET sheet=? WHERE id=?', [JSON.stringify(gSheet), g.id]);
+        await conn.query('UPDATE dice_rolls SET rerolled=1 WHERE id=?', [orig.id]);
+        const row = await insertRoll(conn, {
+          userId: req.user.id, characterId: orig.character_id, characterName: orig.character_name, sessionId: orig.session_id,
+          rollType: 'willpower_reroll', normal: normal.map((d, i) => (picks.includes(i) ? rollD10() : d)), hunger: [], hungerLevel: 0,
+          difficulty: roll.difficulty, extra: { retainer_id: g.id },
+          note: `Willpower reroll of ${count} ${count === 1 ? 'die' : 'dice'} (${orig.character_name} spent 1 WP)`, isHidden: !!orig.is_hidden, rerolled: true,
+        });
+        await conn.commit();
+        if (orig.session_id) {
+          const [[s]] = await pool.query('SELECT id, session_code FROM live_sessions WHERE id=?', [orig.session_id]);
+          await afterSessionRoll(s, row);
+        }
+        return reply.send({ roll: row, ghoulSheet: gSheet });
+      }
 
       const [[ch]] = await conn.query('SELECT id, sheet FROM characters WHERE id=? FOR UPDATE', [orig.character_id]);
       const sheet = parseSheet(ch.sheet);
