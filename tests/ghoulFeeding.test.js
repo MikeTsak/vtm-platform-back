@@ -230,3 +230,37 @@ describe('Admin views a past cycle', () => {
     expect(JSON.parse((await req('GET', '/api/admin/feeding/log?cycle=5', st)).body).log).toHaveLength(0);
   });
 });
+
+describe('Storyteller undoes a whole cycle of ghoul feedings', () => {
+  it('undoes the ticked rows, giving Hunger back only where asked', async () => {
+    const st = await makePlayer('Bulk ST');
+    await pool.query('UPDATE users SET role="admin" WHERE id=?', [st.user.id]);
+    st.cookie = extractSessionCookie(await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: st.email, password: st.password } }));
+    const gus = await makePlayer('Gus');
+    const hal = await makePlayer('Hal');
+    const g1 = await ghoul({ character_id: gus.characterId, name: 'Bulk One' });
+    const g2 = await ghoul({ character_id: hal.characterId, name: 'Bulk Two' });
+    // Two automatic upkeep feedings that each raised Hunger by 1.
+    for (const [g, who] of [[g1, gus], [g2, hal]]) {
+      await pool.query(`INSERT INTO ghoul_feedings (retainer_id, cycle_index, status, method, fed_by_character_id, hunger_before, hunger_after)
+        VALUES (?, ?, 'fed', 'upkeep', ?, 2, 3)`, [g, CYCLE, who.characterId]);
+      await setHunger(who, 3);
+    }
+    // Hal already complained and the Storyteller fixed his Hunger by hand.
+    await setHunger(hal, 2);
+
+    const list = JSON.parse((await req('GET', `/api/admin/feeding/ghoul-undo?cycle=${CYCLE}`, st)).body).rows;
+    const r1 = list.find((r) => r.retainer_id === g1);
+    const r2 = list.find((r) => r.retainer_id === g2);
+    expect(r1).toMatchObject({ automatic: true, raised: 1, feeder_hunger_now: 3 });
+    expect((await req('GET', `/api/admin/feeding/ghoul-undo?cycle=${CYCLE}`, gus)).statusCode).toBe(403);
+
+    const res = JSON.parse((await req('POST', `/api/admin/feeding/ghoul-undo?cycle=${CYCLE}`, st,
+      { rows: [{ id: r1.id, refund: true }, { id: r2.id, refund: false }] })).body);
+    expect(res.undone).toBe(2);
+    expect(await hungerOf(gus)).toBe(2);
+    expect(await hungerOf(hal)).toBe(2); // not refunded twice
+    expect(await rowFor(g1)).toBeUndefined();
+    expect(await rowFor(g2)).toBeUndefined();
+  });
+});

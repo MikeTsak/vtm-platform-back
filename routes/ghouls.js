@@ -11,7 +11,7 @@ const { insertRoll } = require('../services/rolls');
 const { getSessionRow, emitSessionRefresh } = require('../services/liveSession');
 const { attachFeeding } = require('../services/ghoulFeeding');
 const {
-  sessionGhoulIds, lockSessionGhoul, ghoulTrackers, applyGhoulChange, withRetainerLock,
+  sessionGhoulIds, lockSessionGhoul, ghoulTrackers, applyGhoulChange, withRetainerLock, controllerOf,
 } = require('../services/ghoulTrackers');
 
 const RETAINER_SELECT = `
@@ -139,6 +139,52 @@ module.exports = async function (fastify, opts) {
       reply.status(500).send({ error: 'Failed to apply the cost' });
     } finally {
       conn.release();
+    }
+  });
+
+  /**
+   * POST /api/retainers/:rid/unghoul — the ghoul is weaned off the Blood and is
+   * a mortal retainer again: no Disciplines or powers, no other members' blood,
+   * no ghoul-only Merits/Flaws (data/merits_flaws_retainers 'Ghouls', ids
+   * ghouls__*), no domitor. Its apparent age becomes its true age (utils/ages.js:
+   * a mortal looks their age), the years held back catching up. Allowed for the
+   * player who plays it (owner, or a coterie ghoul's domitor) and Storytellers.
+   * It can be made a ghoul again later through the normal sheet routes.
+   */
+  fastify.post('/api/retainers/:rid/unghoul', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const admin = isAdmin(req.user);
+      const refuse = (status, message) => { throw Object.assign(new Error(message), { status }); };
+      const result = await withRetainerLock(pool, Number(req.params.rid), async (sheet, row, conn) => {
+        if (sheet.isGhoul !== true) refuse(400, `${row.name} is not a ghoul.`);
+        const controller = await controllerOf(conn, row);
+        if (!admin && Number(controller?.user_id) !== Number(req.user.id)) {
+          refuse(403, row.coterie_id ? "Only this ghoul's domitor (or a Storyteller) can release them." : 'Only the owner (or a Storyteller) can release this ghoul.');
+        }
+        const ghoulOnly = (x) => /^ghouls__/.test(String(x?.id || ''));
+        sheet.isGhoul = false;
+        sheet.disciplines = {};
+        sheet.powers = [];
+        delete sheet.bloodSources;
+        sheet.advantages = (sheet.advantages || []).filter((a) => !ghoulOnly(a));
+        sheet.flaws = (sheet.flaws || []).filter((f) => !ghoulOnly(f));
+        sheet.unghouledDate = new Date().toISOString().slice(0, 10);
+        // If ghouled again, the aging freezes on the new day: the old date goes to
+        // history and the set-once lock on it is lifted (utils/sheetDates.js).
+        if (sheet.ghouledDate) sheet.pastGhoulings = [...(sheet.pastGhoulings || []), { from: sheet.ghouledDate, to: sheet.unghouledDate }];
+        delete sheet.ghouledDate;
+        if (sheet.datesSetAt) delete sheet.datesSetAt.ghouledDate;
+        applyGhoulChange(sheet); // re-fit Health to the new maximum (Crone's Curse gone)
+        if (row.coterie_id) await conn.query('UPDATE retainers SET domitor_character_id=NULL, let_starve=0 WHERE id=?', [row.id]);
+        else await conn.query('UPDATE retainers SET let_starve=0 WHERE id=?', [row.id]);
+      });
+      if (result.notFound) return reply.status(404).send({ error: 'Retainer not found' });
+      log.adm('Ghoul released from the Blood', { retainer_id: Number(req.params.rid), by_user_id: req.user.id });
+      reply.send({ ok: true, sheet: result.sheet });
+    } catch (e) {
+      if (e.status) return reply.status(e.status).send({ error: e.message });
+      log.err('Unghoul failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to release the ghoul' });
     }
   });
 };

@@ -201,6 +201,24 @@ describe('Elysium invitation', () => {
     expect(cur.invitation.design.lang).toBeUndefined(); // card then defaults to English
   });
 
+  it('players keep seeing the invitation all day on the day of the gathering; the Keeper already works on the next one', async () => {
+    const [t] = await pool.query("INSERT INTO events (title, date, is_elysium) VALUES ('Modern Day Event', NOW(), 1)");
+    const todayId = t.insertId;
+    try {
+      await pool.query('INSERT INTO elysium_invitations (event_id, name, location, published_at) VALUES (?, ?, ?, NOW())', [todayId, 'Tonight', 'The Odeon']);
+      const cur = JSON.parse((await call(player, 'GET', '/api/elysium/current')).body);
+      expect(cur.event.id).toBe(todayId);
+      expect(cur.invitation.location).toBe('The Odeon');
+
+      const work = JSON.parse((await call(keeper, 'GET', '/api/court-actions/elysium')).body);
+      expect(work.event.id).toBe(eventId); // the Keeper's cycle has already turned
+    } finally {
+      await pool.query('DELETE FROM elysium_invitations WHERE event_id = ?', [todayId]);
+      await pool.query('DELETE FROM events WHERE id = ?', [todayId]);
+    }
+    expect(JSON.parse((await call(player, 'GET', '/api/elysium/current')).body).event.id).toBe(eventId);
+  });
+
   it('autosaves drafts quietly, never onto a published invitation, and image export is locked down', async () => {
     const [e2] = await pool.query("INSERT INTO events (title, date, is_elysium) VALUES ('Modern Day Event', NOW() + INTERVAL 40 DAY, 1)");
     const id2 = e2.insertId;

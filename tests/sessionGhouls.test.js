@@ -10,6 +10,11 @@ const { parseSheet } = require('../utils/sheet');
 let pool, app, st, ana, bo, code, sessionId, ghoulId, strayId;
 
 const req = (who, method, url, payload) => app.inject({ method, url, headers: { cookie: who.cookie }, payload });
+// Tier 2: two attributes at 3, three at 2; skills 3x3, 4x2, 5x1.
+const T2 = {
+  attributes: { Strength: 3, Wits: 3, Dexterity: 2, Stamina: 2, Resolve: 2 },
+  skills: { Brawl: 3, Drive: 3, Streetwise: 3, Stealth: 2, Larceny: 2, Insight: 2, Awareness: 2, Firearms: 1, Melee: 1, Athletics: 1, Intimidation: 1, Persuasion: 1 },
+};
 const GHOUL = {
   isGhoul: true,
   attributes: { Strength: 2, Wits: 2, Stamina: 1 },
@@ -116,5 +121,27 @@ describe('choosing the Discipline of a ghoul that has none', () => {
     await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify({ disciplines: { Potence: 1 }, disciplinePowers: { Potence: [{ id: 'lethal_body', name: 'Lethal Body', level: 1 }] } }), ana.id]);
     expect((await pick('Celerity', "Cat's Grace")).statusCode).toBe(400); // not her Discipline
     expect((await pick('Potence', 'Lethal Body')).statusCode).toBe(200);
+  });
+});
+
+describe('releasing a ghoul from the Blood', () => {
+  it('makes them a mortal retainer again: no Disciplines, powers or ghoul-only Flaws; only their player or a Storyteller', async () => {
+    const sheet = { ...GHOUL, ghouledDate: '2020-01-01', datesSetAt: { ghouledDate: '2026-10-30T00:00:00.000Z' }, flaws: [{ id: "ghouls__crone's_curse", name: "Crone's Curse (Errata)", dots: 2 }], advantages: [{ id: 'looks__beautiful', name: 'Beautiful', dots: 2 }] };
+    const [g] = await pool.query('INSERT INTO retainers (character_id, name, tier, sheet) VALUES (?,?,?,?)', [ana.id, 'Weaned', 2, JSON.stringify(sheet)]);
+    expect((await req(bo, 'POST', `/api/retainers/${g.insertId}/unghoul`)).statusCode).toBe(403);
+    const ok = await req(ana, 'POST', `/api/retainers/${g.insertId}/unghoul`);
+    expect(ok.statusCode).toBe(200);
+    const [[row]] = await pool.query('SELECT sheet FROM retainers WHERE id=?', [g.insertId]);
+    const s = parseSheet(row.sheet);
+    expect(s).toMatchObject({ isGhoul: false, disciplines: {}, powers: [], flaws: [] });
+    expect(s.advantages.map((a) => a.name)).toEqual(['Beautiful']);
+    expect(s.ghouledDate).toBeUndefined();
+    expect(s.pastGhoulings[0].from).toBe('2020-01-01');
+    expect((await req(ana, 'POST', `/api/retainers/${g.insertId}/unghoul`)).statusCode).toBe(400); // already mortal
+    // Made a ghoul again: a fresh day of ghouling can be set.
+    const again = await req(ana, 'PUT', `/api/retainers/${g.insertId}/upgrade`, { name: 'Weaned', tier: 2, sheet: { ...s, ...T2, isGhoul: true, ghouledDate: '2026-11-01' } });
+    expect(JSON.parse(again.body).error).toBeUndefined();
+    const [[back]] = await pool.query('SELECT sheet FROM retainers WHERE id=?', [g.insertId]);
+    expect(parseSheet(back.sheet)).toMatchObject({ isGhoul: true, ghouledDate: '2026-11-01' });
   });
 });

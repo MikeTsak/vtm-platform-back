@@ -1256,9 +1256,29 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  /* ---- Admin: undo a ghoul's feeding (or starvation) this cycle ---- */
-  // The ghoul needs feeding again; a feeder whose Rouse Check raised their
-  // Hunger gets that point back.
+  /* ---- Admin: undo ghoul feedings (or starvations) ---- */
+  // Undoing a row deletes it: the ghoul is no longer starved, and in a cycle whose
+  // upkeep already ran it owes nothing more. With `refund`, a feeder whose Rouse
+  // Check raised their Hunger gets that back (on their Hunger as it is now).
+  // The Rouse roll stays in the dice log; push notices already sent stay sent.
+  const AUTO_METHODS = new Set(['upkeep', 'random', 'let_starve', 'hunger_5', 'no_feeder']);
+  async function undoGhoulRow(conn, row, refund) {
+    let hunger = null;
+    const raised = Number(row.hunger_after) - Number(row.hunger_before);
+    if (refund && row.status === 'fed' && row.fed_by_character_id && raised > 0) {
+      const [[feeder]] = await conn.query('SELECT id, name, sheet FROM characters WHERE id=? FOR UPDATE', [row.fed_by_character_id]);
+      if (feeder) {
+        const sheet = parseSheet(feeder.sheet);
+        const before = readHunger(sheet);
+        sheet.hunger = clamp(before - raised, 0, 5);
+        await conn.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), feeder.id]);
+        hunger = { character_id: feeder.id, name: feeder.name, before, after: sheet.hunger };
+      }
+    }
+    await conn.query('DELETE FROM ghoul_feedings WHERE id=?', [row.id]);
+    return hunger;
+  }
+
   fastify.post('/api/admin/feeding/ghouls/:rid/undo', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const conn = await pool.getConnection();
     try {
@@ -1269,20 +1289,7 @@ module.exports = async function (fastify, opts) {
         [Number(req.params.rid), cycleIndex]
       );
       if (!row) { await conn.rollback(); return reply.status(404).send({ error: 'Nothing recorded for this ghoul this cycle.' }); }
-
-      let hunger = null;
-      const raised = Number(row.hunger_after) - Number(row.hunger_before);
-      if (row.status === 'fed' && row.fed_by_character_id && raised > 0) {
-        const [[feeder]] = await conn.query('SELECT id, sheet FROM characters WHERE id=? FOR UPDATE', [row.fed_by_character_id]);
-        if (feeder) {
-          const sheet = parseSheet(feeder.sheet);
-          const before = readHunger(sheet);
-          sheet.hunger = clamp(before - raised, 0, 5);
-          await conn.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), feeder.id]);
-          hunger = { before, after: sheet.hunger };
-        }
-      }
-      await conn.query('DELETE FROM ghoul_feedings WHERE id=?', [row.id]);
+      const hunger = await undoGhoulRow(conn, row, true);
       await conn.commit();
       log.adm('Admin undid a ghoul feeding', { admin: req.user.id, row, hunger });
       reply.send({ ok: true, hunger });
@@ -1290,6 +1297,64 @@ module.exports = async function (fastify, opts) {
       await conn.rollback().catch(() => {});
       log.err('POST /api/admin/feeding/ghouls/:rid/undo failed', { error: err.message });
       reply.status(500).send({ error: 'Database error undoing ghoul feeding', details: err.sqlMessage || err.message });
+    } finally {
+      conn.release();
+    }
+  });
+
+  /* ---- Admin: undo a whole cycle's ghoul feedings at once ---- */
+  // GET lists every ghoul feeding/starvation recorded in ?cycle=N, with each
+  // feeder's Hunger now, so the Storyteller can untick the players whose Hunger
+  // they already fixed by hand. POST { rows: [{ id, refund }] } undoes the
+  // ticked ones in one transaction.
+  fastify.get('/api/admin/feeding/ghoul-undo', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const { cycleIndex } = await adminCycle(req);
+      const [rows] = await pool.query(
+        `SELECT g.id, g.retainer_id, g.status, g.method, g.fed_by_character_id, g.hunger_before, g.hunger_after, g.created_at,
+                r.name AS ghoul_name, c.name AS feeder_name, c.sheet AS feeder_sheet
+           FROM ghoul_feedings g
+           LEFT JOIN retainers r ON r.id = g.retainer_id
+           LEFT JOIN characters c ON c.id = g.fed_by_character_id
+          WHERE g.cycle_index = ?
+          ORDER BY g.created_at, g.id`,
+        [cycleIndex]
+      );
+      reply.send({
+        cycleIndex,
+        rows: rows.map(({ feeder_sheet, ...r }) => ({
+          ...r,
+          automatic: AUTO_METHODS.has(r.method),
+          raised: r.status === 'fed' ? Math.max(0, Number(r.hunger_after) - Number(r.hunger_before)) : 0,
+          feeder_hunger_now: feeder_sheet ? readHunger(parseSheet(feeder_sheet)) : null,
+        })),
+      });
+    } catch (err) {
+      log.err('GET /api/admin/feeding/ghoul-undo failed', { error: err.message });
+      reply.status(500).send({ error: 'Database error listing ghoul feedings', details: err.sqlMessage || err.message });
+    }
+  });
+
+  fastify.post('/api/admin/feeding/ghoul-undo', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    const picks = Array.isArray(req.body?.rows) ? req.body.rows.slice(0, 500) : [];
+    if (!picks.length) return reply.status(400).send({ error: 'Pick at least one feeding to undo.' });
+    const conn = await pool.getConnection();
+    try {
+      const { cycleIndex } = await adminCycle(req);
+      await conn.beginTransaction();
+      const undone = [];
+      for (const pick of picks) {
+        const [[row]] = await conn.query('SELECT * FROM ghoul_feedings WHERE id=? AND cycle_index=? FOR UPDATE', [Number(pick.id), cycleIndex]);
+        if (!row) continue; // already undone, or another cycle
+        undone.push({ id: row.id, retainer_id: row.retainer_id, status: row.status, hunger: await undoGhoulRow(conn, row, !!pick.refund) });
+      }
+      await conn.commit();
+      log.adm('Admin undid ghoul feedings in bulk', { admin: req.user.id, cycleIndex, undone });
+      reply.send({ ok: true, cycleIndex, undone: undone.length, refunds: undone.filter((u) => u.hunger).map((u) => u.hunger) });
+    } catch (err) {
+      await conn.rollback().catch(() => {});
+      log.err('POST /api/admin/feeding/ghoul-undo failed', { error: err.message });
+      reply.status(500).send({ error: 'Database error undoing ghoul feedings', details: err.sqlMessage || err.message });
     } finally {
       conn.release();
     }

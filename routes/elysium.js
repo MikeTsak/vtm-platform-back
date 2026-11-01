@@ -43,12 +43,14 @@ function cleanDesign(input) {
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin } = opts;
 
-  async function currentElysium() {
+  // The Keeper's cycle turns on the morning of the gathering (the next Elysium is
+  // current). Players keep seeing today's invitation until the day ends (stillToday).
+  async function currentElysium({ stillToday = false } = {}) {
     const [rows] = await pool.query(
       'SELECT id, title, date FROM events WHERE is_elysium = 1 AND date >= NOW() - INTERVAL 2 DAY ORDER BY date ASC LIMIT 5'
     );
     const today = athensDay(new Date());
-    return rows.find(e => athensDay(e.date) > today) || null;
+    return rows.find(e => stillToday ? athensDay(e.date) >= today : athensDay(e.date) > today) || null;
   }
 
   async function loadInvitation(eventId) {
@@ -104,7 +106,7 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/elysium/current', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       reply.header('Cache-Control', 'no-store');
-      const event = await currentElysium();
+      const event = await currentElysium({ stillToday: true });
       if (!event) return reply.send({ event: null });
 
       const { inv, character, status } = await guestView(event.id, req.user.id);
