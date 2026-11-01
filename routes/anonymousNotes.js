@@ -195,7 +195,7 @@ module.exports = async function (fastify, opts) {
 
       for (const uid of fresh) {
         signal(uid);
-        Promise.resolve(sendPushNotification?.(uid, 'Erebus Portal - Anonymous note', 'Someone left you a note.', { url: '/notes' }, 'chat')).catch(() => { });
+        Promise.resolve(sendPushNotification?.(uid, 'Erebus Portal - Anonymous note', 'Someone left you a note.', { url: '/notes' }, 'notes')).catch(() => { });
       }
 
       log.adm('Admin sent anonymous note', { admin: req.user.id, recipients: fresh, skipped_duplicates: ids.length - fresh.length, images: images.length });

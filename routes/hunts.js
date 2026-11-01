@@ -237,7 +237,7 @@ module.exports = async function (fastify, opts) {
           const title = "❌ Evidence Rejected";
           const body = `The Court found your submission for Step ${sub.step_order} unacceptable. You must acquire better evidence.`;
 
-          await sendPushNotification(sub.user_id, title, body).catch(() => { });
+          await sendPushNotification(sub.user_id, title, body, {}, 'character').catch(() => { });
           log.adm('Evidence rejected & player rolled back', { admin: req.user.id, player: sub.user_id, step: sub.step_order });
         }
       }

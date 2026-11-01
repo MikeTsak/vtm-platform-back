@@ -42,6 +42,44 @@ async function resolveIcon(icon) {
   return slug ? `/img/clans/push/${slug}.png` : null;
 }
 
+// What a player can switch on or off (users.push_settings, all off by default).
+// chat and system are the original two; the rest were split out of them so a
+// player can, say, keep Court news and mute broadcasts. A category the player
+// has never set follows its parent, so nobody's existing choice changes.
+// The labels a player sees live in front/src/features/notification/NotificationSettings.jsx.
+const PUSH_CATEGORIES = {
+  chat: null,          // SchreckNet: DMs, group chats, NPC messages
+  mail: 'chat',        // SurfaceWeb email
+  notes: 'chat',       // anonymous notes
+  downtimes: 'system', // resolutions released, ST replies on an action
+  court: 'system',     // domain claims, Blood Hunts, feeding incidents in your domain
+  character: 'system', // discipline access, ghoul upkeep, hunt evidence
+  system: null,        // Storyteller broadcasts
+};
+
+function parseSettings(raw) {
+  try {
+    const s = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return s && typeof s === 'object' ? s : {};
+  } catch {
+    return {};
+  }
+}
+
+// Is this category on for these stored settings (own value, else its parent's)?
+function categoryEnabled(settings, category) {
+  const own = settings[category];
+  if (typeof own === 'boolean') return own;
+  const parent = PUSH_CATEGORIES[category];
+  return parent ? !!settings[parent] : !!own;
+}
+
+// Every category's effective value, for the settings screen.
+function effectiveSettings(raw) {
+  const s = parseSettings(raw);
+  return Object.fromEntries(Object.keys(PUSH_CATEGORIES).map((c) => [c, categoryEnabled(s, c)]));
+}
+
 async function sendPushNotification(userId, title, body, data = {}, category = 'system') {
   try {
     data = { ...data, icon: await resolveIcon(data.icon) };
@@ -49,9 +87,9 @@ async function sendPushNotification(userId, title, body, data = {}, category = '
     const [userRows] = await pool.query('SELECT push_settings FROM users WHERE id=?', [userId]);
     if (!userRows.length) return;
 
-    const settings = userRows[0].push_settings || {};
-    // If settings are false for this category, do not send web push (off by default)
-    const isEnabled = !!settings[category];
+    // Off by default: no web push unless the player switched this category on.
+    // 'test' is the player's own "does this device get pushes" button: always sent.
+    const isEnabled = category === 'test' || categoryEnabled(parseSettings(userRows[0].push_settings), category);
 
     const origin = process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',')[0] : '';
     const clickUrl = data.url ? data.url : '/comms';
@@ -130,4 +168,4 @@ async function sendPushNotification(userId, title, body, data = {}, category = '
   }
 }
 
-module.exports = { sendPushNotification, VAPID_PUBLIC_KEY };
+module.exports = { sendPushNotification, VAPID_PUBLIC_KEY, PUSH_CATEGORIES, parseSettings, effectiveSettings };

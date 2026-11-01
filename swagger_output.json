@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Erebus Portal API",
-    "version": "1.0.242",
+    "version": "1.0.244",
     "description": "API documentation for the Vampire: The Masquerade RPG portal."
   },
   "servers": [
@@ -70,14 +70,7 @@
         "description": "",
         "parameters": [
           {
-            "name": "cf-connecting-ip",
-            "in": "header",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "x-real-ip",
+            "name": "user-agent",
             "in": "header",
             "schema": {
               "type": "string"
@@ -91,7 +84,7 @@
             }
           },
           {
-            "name": "user-agent",
+            "name": "x-real-ip",
             "in": "header",
             "schema": {
               "type": "string"
@@ -7435,6 +7428,9 @@
                   },
                   "unassign": {
                     "example": "any"
+                  },
+                  "is_abaton": {
+                    "example": "any"
                   }
                 }
               }
@@ -9108,7 +9104,7 @@
         "description": "",
         "parameters": [
           {
-            "name": "cf-connecting-ip",
+            "name": "x-forwarded-for",
             "in": "header",
             "schema": {
               "type": "string"
@@ -9318,22 +9314,11 @@
           "200": {
             "description": "OK"
           },
+          "400": {
+            "description": "Bad Request"
+          },
           "500": {
             "description": "Internal Server Error"
-          }
-        },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "settings": {
-                    "example": "any"
-                  }
-                }
-              }
-            }
           }
         }
       }
@@ -9520,6 +9505,9 @@
           },
           "404": {
             "description": "Not Found"
+          },
+          "416": {
+            "description": "Range Not Satisfiable"
           },
           "500": {
             "description": "Internal Server Error"
@@ -10884,33 +10872,6 @@
         }
       }
     },
-    "/api/news/reactions/batch": {
-      "post": {
-        "description": "",
-        "responses": {
-          "200": {
-            "description": "OK"
-          },
-          "500": {
-            "description": "Internal Server Error"
-          }
-        },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "ids": {
-                    "example": "any"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/news/drafts": {
       "get": {
         "description": "",
@@ -12175,6 +12136,45 @@
           },
           "500": {
             "description": "Internal Server Error"
+          }
+        }
+      }
+    },
+    "/api/admin/jobs": {
+      "get": {
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/jobs/{name}/run": {
+      "post": {
+        "description": "",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "409": {
+            "description": "Conflict"
           }
         }
       }

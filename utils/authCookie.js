@@ -18,21 +18,20 @@ const MAX_AGE_SECONDS = 7 * 24 * 60 * 60; // mirrors the JWT's own 7d expiresIn
 // browsers block third-party cookies outright regardless of SameSite, and
 // no client-side fix works around that — only same-site fixes it for real.
 //
-// SameSite=None+Secure is still used for any non-local production host
-// rather than switching to Lax now that it's same-site, because None+Secure
-// works correctly for same-site requests too (Lax only *adds* a restriction
-// that None doesn't have), and it keeps this code correct by default if the
-// API is ever split onto a different domain again in the future.
+// SameSite=Lax, now that it's same-site. It used to be None+Secure "to stay
+// correct if the API ever moved domains again", but None is exactly what lets
+// any other website ride the session: CORS only stops a foreign page READING
+// responses, not SENDING a form-encoded/multipart/text-plain POST — so an
+// auto-submitting form could ratify a Blood Hunt or leave a coterie as whoever
+// visited it. Lax keeps the cookie on every same-site request (portal, wiki,
+// h., attlarp.gr itself) and drops it on cross-site POSTs. Native clients
+// (Android app, erebus-mobile) use Bearer tokens and are unaffected.
+// If the API is ever split onto a different registrable domain again, this
+// has to go back to None AND every mutation needs a CSRF token or custom header.
 //
-// SameSite=None is only legal paired with Secure — browsers reject it
-// outright otherwise — and local dev runs over plain http://127.0.0.1 (Vite
-// proxies the frontend's /api calls to the backend same-origin, so it's
-// genuinely same-site there; changeOrigin: true in vite.config.js rewrites
-// the Host header the backend sees to 127.0.0.1). So Secure and SameSite are
-// decided together, from the same signal, rather than independently:
-// any non-local host gets None+Secure, same-site local dev gets Lax
-// (no Secure requirement, and it's the correct choice for genuinely
-// same-site traffic anyway).
+// Secure is decided below: local dev runs over plain http://127.0.0.1 (Vite
+// proxies /api same-origin; changeOrigin: true rewrites the Host header the
+// backend sees to 127.0.0.1), every real host gets Secure.
 //
 // This app runs behind a reverse proxy in production (Apache) that
 // terminates TLS and forwards plain HTTP to Fastify, so req.protocol alone
@@ -55,11 +54,10 @@ function isCrossSiteHttps(req) {
 }
 
 function cookieOptions(req) {
-  const secure = isCrossSiteHttps(req);
   return {
     httpOnly: true,
-    secure,
-    sameSite: secure ? 'none' : 'lax',
+    secure: isCrossSiteHttps(req),
+    sameSite: 'lax',
     path: '/',
   };
 }

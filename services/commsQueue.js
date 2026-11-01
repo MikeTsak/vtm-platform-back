@@ -53,7 +53,7 @@ async function flushQueuedMessages(pool, { log, sendPushNotification, io }) {
       const [[identity]] = await pool.query('SELECT display_name FROM email_identities WHERE id=?', [thread.identity_id]);
       const pushTitle = `📧 Reply from ${identity?.display_name || 'NPC'}`;
       const pushBody = `Re: ${thread.subject}`;
-      await sendPushNotification(thread.user_id, pushTitle, pushBody, { url: '/surfaceweb', icon: `/api/identities/${thread.identity_id}/avatar` }, 'chat').catch(() => {});
+      await sendPushNotification(thread.user_id, pushTitle, pushBody, { url: '/surfaceweb', icon: `/api/identities/${thread.identity_id}/avatar` }, 'mail').catch(() => {});
     } catch (pushErr) {
       log.err('Queued email push failed', { error: pushErr.message });
     }

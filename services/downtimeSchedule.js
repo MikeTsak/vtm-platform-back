@@ -287,7 +287,7 @@ async function releasePendingAndNotify() {
   await pool.query('UPDATE downtimes SET is_released = 1 WHERE is_released = 0');
   const { sendPushNotification } = require('./push');
   for (const o of owners) {
-    sendPushNotification(o.user_id, 'Downtime resolutions are out', 'The Storytellers have released this cycle\'s resolutions. Open Downtimes to read yours.', { url: '/downtimes' }, 'system');
+    sendPushNotification(o.user_id, 'Downtime resolutions are out', 'The Storytellers have released this cycle\'s resolutions. Open Downtimes to read yours.', { url: '/downtimes' }, 'downtimes');
   }
   return owners.length;
 }

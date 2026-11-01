@@ -2,7 +2,7 @@
 //
 // Web-push and Expo subscription management, per-category preferences, and a
 // test send.
-const { VAPID_PUBLIC_KEY } = require('../services/push');
+const { VAPID_PUBLIC_KEY, PUSH_CATEGORIES, parseSettings, effectiveSettings } = require('../services/push');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, sendPushNotification } = opts;
@@ -62,10 +62,12 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/push/test', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const { category } = req.body || {};
-      const notifCategory = category === 'chat' ? 'chat' : 'system';
+      // A known category tests that category's switch; anything else ('test')
+      // is a plain "does this device receive pushes" check, sent regardless.
+      const notifCategory = Object.prototype.hasOwnProperty.call(PUSH_CATEGORIES, category) ? category : 'test';
       // Uses your own avatar as the icon so this doubles as a live check that
       // notification icons actually render, not just that push delivery works.
-      await sendPushNotification(req.user.id, `🔔 Test: ${notifCategory.toUpperCase()}`, `If you can read this, background ${notifCategory} push works!`, { url: '/comms', tag: 'push-test', icon: `/api/users/${req.user.id}/avatar` }, notifCategory);
+      await sendPushNotification(req.user.id, `Test: ${notifCategory}`, `If you can read this, ${notifCategory === 'test' ? 'notifications reach this device' : `${notifCategory} notifications work`}.`, { url: '/', tag: 'push-test', icon: `/api/users/${req.user.id}/avatar` }, notifCategory);
       reply.send({ ok: true });
     } catch (e) {
       log.err('Push test failed', { message: e.message });
@@ -78,52 +80,35 @@ module.exports = async function (fastify, opts) {
     reply.send({ publicKey: VAPID_PUBLIC_KEY });
   });
 
-  // GET /api/push/settings
+  // GET /api/push/settings: every category's effective on/off (an unset
+  // category follows its parent, see PUSH_CATEGORIES in services/push.js).
   fastify.get('/api/push/settings', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      const [rows] = await pool.query('SELECT push_settings FROM users WHERE id=?', [req.user.id]);
-      let settings = { chat: false, system: false };
-      if (rows[0] && rows[0].push_settings) {
-        try {
-          settings = typeof rows[0].push_settings === 'string'
-            ? JSON.parse(rows[0].push_settings)
-            : rows[0].push_settings;
-          // Clean up corrupted numeric keys
-          for (const key of Object.keys(settings)) {
-            if (!isNaN(key)) delete settings[key];
-          }
-        } catch (e) { }
-      }
-      reply.send(settings);
+      const [[row]] = await pool.query('SELECT push_settings FROM users WHERE id=?', [req.user.id]);
+      reply.send(effectiveSettings(row?.push_settings));
     } catch (e) {
       reply.status(500).send({ error: 'Failed to fetch settings' });
     }
   });
 
-  // PUT /api/push/settings
+  // PUT /api/push/settings { settings: { category: boolean, ... } }: partial update.
+  // Only known categories with real booleans are stored, so the column can't
+  // fill up with junk again (a string spread here once grew rows to 75 MB).
   fastify.put('/api/push/settings', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      const { settings } = req.body;
+      const incoming = req.body?.settings;
+      if (!incoming || typeof incoming !== 'object') return reply.status(400).send({ error: 'settings object required' });
+      const updates = Object.entries(incoming).filter(([k, v]) => Object.prototype.hasOwnProperty.call(PUSH_CATEGORIES, k) && typeof v === 'boolean');
+      if (!updates.length) return reply.status(400).send({ error: 'No known notification categories in request' });
 
-      // Fetch existing settings
-      const [rows] = await pool.query('SELECT push_settings FROM users WHERE id=?', [req.user.id]);
-      let currentSettings = { chat: false, system: false };
-      try {
-        // The column can come back as a JSON string or an already-parsed object. Spreading a
-        // STRING below turns it into {"0":"{","1":"\"",…}, and every save then re-embeds the
-        // previous blob — that is how three users' rows reached 5–75 MB.
-        const raw = rows[0].push_settings;
-        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-        if (parsed && typeof parsed === 'object') currentSettings = parsed;
-      } catch (_) { /* unparseable: fall back to the defaults */ }
-      // Drop the character-indexed keys left behind by that bug (GET already hides them).
-      for (const key of Object.keys(currentSettings)) if (!isNaN(key)) delete currentSettings[key];
+      const [[row]] = await pool.query('SELECT push_settings FROM users WHERE id=?', [req.user.id]);
+      const current = parseSettings(row?.push_settings);
+      const next = {};
+      for (const k of Object.keys(PUSH_CATEGORIES)) if (typeof current[k] === 'boolean') next[k] = current[k];
+      for (const [k, v] of updates) next[k] = v;
 
-      // Merge new settings
-      const newSettings = { ...currentSettings, ...settings };
-
-      await pool.query('UPDATE users SET push_settings=? WHERE id=?', [JSON.stringify(newSettings), req.user.id]);
-      reply.send({ ok: true });
+      await pool.query('UPDATE users SET push_settings=? WHERE id=?', [JSON.stringify(next), req.user.id]);
+      reply.send({ ok: true, settings: effectiveSettings(next) });
     } catch (e) {
       reply.status(500).send({ error: 'Failed to save settings' });
     }

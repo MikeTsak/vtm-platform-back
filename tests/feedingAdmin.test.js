@@ -96,7 +96,7 @@ describe('GET /api/admin/feeding/stats', () => {
     expect(body.counts.herd).toBe(1);
     expect(body.counts.failure).toBe(1);
     expect(body.counts.success).toBe(2); // success + herd
-    expect(body.successPct).toBe(67); // 2/3 = 66.6% -> 67%
+    expect(body.successPct).toBe(50); // rolled hunts only (Herd can't fail): 1 success / 2 hunts
   });
 
   it('GET /api/admin/feeding/log returns current_hunger and domain_owner', async () => {

@@ -5,6 +5,7 @@
 const { getSetting } = require('../utils/settings');
 const { sendDiscordDM } = require('../services/discord');
 const { isVideoUrl, resolveMediaUrl } = require('../services/news');
+const { isAdmin } = require('../services/guards');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, imageClient } = opts;
@@ -329,13 +330,33 @@ module.exports = async function (fastify, opts) {
 
 
 
+  // A premonition is private to its recipients. Media ids are sequential, so
+  // this must be checked on every request, not left to the id being unguessable.
+  // `isMediaId` mirrors the lookup order below: a premonition_media id is matched
+  // only through the premonition that links to it, otherwise :id is a premonition id.
+  // (Media only reaches the browser same-site now, so <img>/<video> carry the cookie.)
+  async function canViewMedia(user, id, isMediaId) {
+    if (isAdmin(user)) return true; // Storytellers preview uploads before any premonition exists
+    const [[row]] = await pool.query(
+      `SELECT 1 FROM premonitions p
+         JOIN premonition_recipients pr ON pr.premonition_id = p.id AND pr.user_id = ?
+        WHERE ${isMediaId ? "p.content_url LIKE '%/media/%' AND SUBSTRING_INDEX(p.content_url, '/', -1) = ?" : 'p.id = ?'}
+        LIMIT 1`,
+      [user.id, isMediaId ? String(id) : id]
+    );
+    return !!row;
+  }
+
   // MEDIA: Stream media from DB or return media info
-  fastify.get('/api/premonitions/media/:id', async (req, reply) => {
+  fastify.get('/api/premonitions/media/:id', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const id = Number(req.params.id) || 0;
 
       // Check premonition_media first
       let [rows] = await pool.query('SELECT data_url, mime, size, data FROM premonition_media WHERE id=? LIMIT 1', [id]);
+      const isMediaId = rows.length > 0;
+      // 404 rather than 403: don't confirm that someone else's vision exists.
+      if (!(await canViewMedia(req.user, id, isMediaId))) return reply.status(404).send('Not found');
       if (!rows.length) {
         // Fallback: :id might be the premonitions.id
         const [pRows] = await pool.query(`
@@ -364,9 +385,12 @@ module.exports = async function (fastify, opts) {
       if (req.query.info === '1' || req.headers.accept?.includes('application/json')) {
         let mediaWarnings = [];
         try {
+          // Exact suffix match: LIKE '%/media/1%' also matched media 12, 100, ...
           const [wRows] = await pool.query(
-            `SELECT warnings FROM premonitions WHERE id = ? OR content_url LIKE ? LIMIT 1`,
-            [id, `%/media/${id}%`]
+            isMediaId
+              ? "SELECT warnings FROM premonitions WHERE content_url LIKE '%/media/%' AND SUBSTRING_INDEX(content_url, '/', -1) = ? LIMIT 1"
+              : 'SELECT warnings FROM premonitions WHERE id = ? LIMIT 1',
+            [isMediaId ? String(id) : id]
           );
           if (wRows.length && wRows[0].warnings) {
             mediaWarnings = parseWarnings(wRows[0].warnings);
@@ -395,7 +419,10 @@ module.exports = async function (fastify, opts) {
         const partialend = parts[1];
 
         const start = parseInt(partialstart, 10);
-        const end = partialend ? parseInt(partialend, 10) : size - 1;
+        const end = Math.min(partialend ? parseInt(partialend, 10) : size - 1, size - 1);
+        if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || start > end) {
+          return reply.status(416).header('Content-Range', `bytes */${size}`).send();
+        }
         const chunksize = (end - start) + 1;
 
         reply.status(206);

@@ -52,13 +52,9 @@ describe('POST /api/auth/register', () => {
     expect(cookieStr).not.toMatch(/Secure/i);
   });
 
-  it('uses SameSite=None + Secure for any non-local production host', async () => {
-    // isCrossSiteHttps() treats every non-localhost host as needing
-    // None+Secure, regardless of whether the frontend and API happen to
-    // share a registrable domain today — that's deliberate (see the comment
-    // in authCookie.js): None+Secure is also correct for same-site traffic,
-    // and staying defensive here means this doesn't quietly break again if
-    // the API is ever split onto a different domain in the future.
+  it('uses SameSite=Lax + Secure for any non-local production host', async () => {
+    // Lax, not None: portal and API are same-site (attlarp.gr), and None let
+    // any foreign page's auto-submitting form ride the session (CSRF).
     const res = await app.inject({
       method: 'POST',
       url: '/api/auth/register',
@@ -66,7 +62,7 @@ describe('POST /api/auth/register', () => {
       payload: { email: uniqueEmail(), display_name: 'Prod User', password: 'CorrectHorse123' },
     });
     const cookieStr = res.headers['set-cookie'];
-    expect(cookieStr).toMatch(/SameSite=None/i);
+    expect(cookieStr).toMatch(/SameSite=Lax/i);
     expect(cookieStr).toMatch(/Secure/i);
   });
 

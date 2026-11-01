@@ -25,6 +25,7 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { setAuthCookie } = require('../utils/authCookie');
+const { clientIp } = require('../services/guards');
 
 const CODE_TTL_MINUTES = 15;
 const SESSION_SECONDS = 2 * 60 * 60;
@@ -80,7 +81,7 @@ module.exports = async function (fastify, opts) {
       },
     },
   }, async (req, reply) => {
-    const ip = req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || req.ip || 'unknown';
+    const ip = clientIp(req);
     const email = String(req.body.email).trim(); // users.email is utf8mb4_general_ci: case-insensitive match
     const code = normalizeCode(req.body.code);
     const fail = () => reply.status(401).send({ error: 'Invalid or expired code' });

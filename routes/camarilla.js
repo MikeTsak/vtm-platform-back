@@ -188,32 +188,33 @@ module.exports = async function (fastify, opts) {
 
       const table = type === 'player' ? 'characters' : 'npcs';
 
-      let targetStatus;
+      let clampedStatus;
       if (status !== undefined || value !== undefined) {
         const raw = status !== undefined ? status : value;
-        targetStatus = parseInt(raw, 10);
+        const targetStatus = parseInt(raw, 10);
         if (Number.isNaN(targetStatus)) {
           return reply.status(400).send({ error: 'Status must be a number' });
         }
+        clampedStatus = Math.max(0, Math.min(5, targetStatus));
+        const [r] = await pool.query(`UPDATE ${table} SET status = ? WHERE id = ?`, [clampedStatus, numId]);
+        if (!r.affectedRows) return reply.status(404).send({ error: 'Kindred record not found' });
       } else if (delta !== undefined) {
         const numDelta = parseInt(delta, 10);
         if (Number.isNaN(numDelta)) {
           return reply.status(400).send({ error: 'Delta must be a number' });
         }
-        const [rows] = await pool.query(`SELECT status FROM ${table} WHERE id = ?`, [numId]);
-        if (!rows.length) {
-          return reply.status(404).send({ error: 'Kindred record not found' });
-        }
-        const current = rows[0].status ?? 1;
-        targetStatus = current + numDelta;
+        // One statement, so two Harpies nudging the same Kindred at once both
+        // count (read-then-write lost one of the two changes).
+        const [r] = await pool.query(
+          `UPDATE ${table} SET status = LEAST(5, GREATEST(0, COALESCE(status, 1) + ?)) WHERE id = ?`,
+          [numDelta, numId]
+        );
+        if (!r.affectedRows) return reply.status(404).send({ error: 'Kindred record not found' });
+        const [[row]] = await pool.query(`SELECT status FROM ${table} WHERE id = ?`, [numId]);
+        clampedStatus = row.status;
       } else {
         return reply.status(400).send({ error: 'Status or delta required' });
       }
-
-      // Clamp status between 0 and 5
-      const clampedStatus = Math.max(0, Math.min(5, targetStatus));
-
-      await pool.query(`UPDATE ${table} SET status = ? WHERE id = ?`, [clampedStatus, numId]);
       log.adm('Camarilla status updated by Harpy', { user_id: req.user.id, target_id: numId, type, status: clampedStatus });
 
       reply.send({ ok: true, id: numId, type, status: clampedStatus });

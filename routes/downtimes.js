@@ -21,10 +21,10 @@ const RESOLVER_NAME_SQL = `CASE
   ELSE res.display_name 
 END`;
 
-// Push to the player who owns a downtime ("system" category, which players switch on in their sheet).
+// Push to the player who owns a downtime ("downtimes" category: Notification settings; follows "system" until set).
 async function notifyOwner(pool, downtime, title, body) {
   const [[row]] = await pool.query('SELECT user_id FROM characters WHERE id = ?', [downtime.character_id]);
-  if (row) sendPushNotification(row.user_id, title, body, { url: '/downtimes' }, 'system');
+  if (row) sendPushNotification(row.user_id, title, body, { url: '/downtimes' }, 'downtimes');
 }
 
 // Scene ids are `scene_<ms timestamp>_<rand>`: order by the timestamp. Must match the sort of

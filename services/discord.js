@@ -180,9 +180,11 @@ async function sendDiscordChannelMessage(channelId, content) {
 async function reportErrorToDiscord(source, error) {
   const errString = (error.stack || error.message || String(error)).slice(0, 1000);
 
-  // Send to Ntfy
+  // Send to Ntfy (from every environment, so local errors reach the phone too:
+  // the title says which one, so a dev-machine error isn't mistaken for prod).
+  const env = (process.env.NODE_ENV || 'stable').toLowerCase();
   await broadcastNtfyAlert(errString, {
-    title: `🚨 Error: ${source}`,
+    title: `🚨 Error${env === 'production' ? '' : ` [${env.toUpperCase()}]`}: ${source}`,
     tags: ['rotating_light', 'error'],
     priority: 'high',
     requiresSubscription: 'errors',

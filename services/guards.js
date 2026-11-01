@@ -39,6 +39,19 @@ const requireCourt = (req, reply, next) => {
   return reply.status(403).send({ error: 'Forbidden: Court access required' });
 };
 
+// The caller's IP, for rate limiting and logs. There is no Cloudflare in front
+// of the API (Plesk nginx -> Passenger), so CF-Connecting-IP is just whatever
+// the client typed and is ignored. X-Forwarded-For is read from the RIGHT: our
+// own proxy appends the address it actually saw, so the last entry can't be
+// forged, while the first one is the client's to choose (sending a fresh fake
+// one per request used to dodge the login limiter entirely).
+// ponytail: assumes exactly one appending proxy; if a CDN/LB is ever added in
+// front, take the entry one further from the right instead.
+function clientIp(req) {
+  const xff = String(req.headers['x-forwarded-for'] || '').split(',').map((s) => s.trim()).filter(Boolean);
+  return xff[xff.length - 1] || req.headers['x-real-ip'] || req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
 // Fixed-window counter per tier + caller. Signed-in callers are keyed by user id
 // (a venue's shared wifi must not lock out a whole table of players); anonymous
 // ones by client IP, read the same way routes/auth.js reads it.
@@ -48,8 +61,7 @@ function makeLimiter(tier, max, windowMs) {
   const hits = new Map(); // key -> { count, resetAt }
   return async (req, reply) => {
     const now = Date.now();
-    const ip = req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || (req.headers['x-forwarded-for'] || '').split(',')[0]?.trim() || req.ip || 'unknown';
-    const key = req.user?.id ? `u${req.user.id}` : `ip${ip}`;
+    const key = req.user?.id ? `u${req.user.id}` : `ip${clientIp(req)}`;
     let h = hits.get(key);
     if (!h || h.resetAt <= now) {
       if (hits.size > 5000) for (const [k, v] of hits) if (v.resetAt <= now) hits.delete(k);
@@ -69,4 +81,12 @@ const authLimiter = makeLimiter('auth', 30, 15 * 60_000);      // login / regist
 const moderateLimiter = makeLimiter('moderate', 120, 60_000);  // creates and signals, per user
 const uploadLimiter = makeLimiter('upload', 30, 60_000);       // file uploads, per user
 
-module.exports = { makeLimiter, isAdmin, isCourt, isOwnerOrAdmin, userOwnsCharacter, requireCourt, globalLimiter, authLimiter, moderateLimiter, uploadLimiter };
+// Request body caps. Fastify parses the body BEFORE preHandlers run, so the
+// global cap applies to anonymous callers too: the old 550 MB limit let one
+// unauthenticated POST exhaust the 2 GB host. Real JSON tops out around 15 KB
+// (largest character sheet); only routes that post a data-URL image get more.
+// Multipart uploads are capped separately (plugins/security.js).
+const DEFAULT_BODY_LIMIT = 5 * 1024 * 1024;
+const IMAGE_BODY_LIMIT = 25 * 1024 * 1024;
+
+module.exports = { DEFAULT_BODY_LIMIT, IMAGE_BODY_LIMIT, clientIp, makeLimiter, isAdmin, isCourt, isOwnerOrAdmin, userOwnsCharacter, requireCourt, globalLimiter, authLimiter, moderateLimiter, uploadLimiter };

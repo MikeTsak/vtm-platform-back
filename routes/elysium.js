@@ -7,6 +7,7 @@
 
 const axios = require('axios');
 const { requireCapability, signingOffice } = require('../services/courtOffices');
+const { IMAGE_BODY_LIMIT } = require('../services/guards'); // these routes post the rendered card as a data URL
 const { recordVersion } = require('../services/elysiumHistory');
 const { sendDiscordChannelMessage } = require('../services/discord');
 const { sendElysiumInvitationToDiscord, getMondayBeforeEvent } = require('../services/elysiumDiscord');
@@ -208,7 +209,7 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  fastify.put('/api/court-actions/elysium/:eventId', { preHandler: [authRequired, requireCapability('keeper')] }, async (req, reply) => {
+  fastify.put('/api/court-actions/elysium/:eventId', { bodyLimit: IMAGE_BODY_LIMIT, preHandler: [authRequired, requireCapability('keeper')] }, async (req, reply) => {
     try {
       const eventId = await resolveEventId(req);
       if (!eventId) return reply.status(409).send({ error: 'Only the coming Elysium can be prepared.' });
@@ -246,7 +247,7 @@ module.exports = async function (fastify, opts) {
   });
 
   // publish: true/false. reannounce: true clears who has read it, so it pops up again for everyone.
-  fastify.post('/api/court-actions/elysium/:eventId/publish', { preHandler: [authRequired, requireCapability('keeper')] }, async (req, reply) => {
+  fastify.post('/api/court-actions/elysium/:eventId/publish', { bodyLimit: IMAGE_BODY_LIMIT, preHandler: [authRequired, requireCapability('keeper')] }, async (req, reply) => {
     const eventId = await resolveEventId(req);
     if (!eventId) return reply.status(409).send({ error: 'Only the coming Elysium can be published.' });
     const inv = await loadInvitation(eventId);
@@ -364,7 +365,7 @@ module.exports = async function (fastify, opts) {
   });
 
   // Push an image of the Elysium invitation to Discord. Called by the Admin.
-  fastify.post('/api/admin/elysium/invitations/:eventId/discord', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  fastify.post('/api/admin/elysium/invitations/:eventId/discord', { bodyLimit: IMAGE_BODY_LIMIT, preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const { image, text } = req.body || {};
       if (!image) return reply.status(400).send({ error: 'Image data URL required.' });

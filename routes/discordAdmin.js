@@ -2,7 +2,7 @@
 //
 // Discord bot configuration, connectivity tests, and manual DMs.
 const axios = require('axios');
-const { getSetting, setSetting, clearSettingCache } = require('../utils/settings');
+const { getSetting, setSetting } = require('../utils/settings');
 const {
   getDiscordClient,
   sendDiscordDM,
@@ -88,11 +88,13 @@ module.exports = async function (fastify, opts) {
         }
       }
 
-      clearSettingCache('discord_bot_last_heartbeat');
-      clearSettingCache('discord_bot_name');
-      const lastHeartbeat = await getSetting('discord_bot_last_heartbeat', '0');
-      const isOnline = (Date.now() - Number(lastHeartbeat)) < 60000;
-      const botName = await getSetting('discord_bot_name', 'N/A');
+      // Heartbeat written every 15 s by discordWorker (runtime_status, see migration 0072).
+      // Age measured by the DB clock on both ends, so app/DB clock skew can't flip it.
+      const [[beat]] = await pool.query(
+        "SELECT status_value, TIMESTAMPDIFF(SECOND, updated_at, NOW()) AS age FROM runtime_status WHERE status_key = 'discord_bot'"
+      );
+      const isOnline = !!beat && beat.age < 60;
+      const botName = beat?.status_value || 'N/A';
 
       reply.send({
         discord_channel_id: channelId,

@@ -209,7 +209,7 @@ async function runGhoulUpkeep(pool, log, { now = new Date(), cycleIndex: forced,
   log?.info?.(`Ghoul upkeep for cycle ${cycleIndex}: ${result.fed} fed, ${result.starved} starved.`);
 
   const send = notify || require('./push').sendPushNotification;
-  for (const m of messages) Promise.resolve(send(m.userId, m.title, m.body, { url: '/feeding' }, 'system')).catch(() => {});
+  for (const m of messages) Promise.resolve(send(m.userId, m.title, m.body, { url: '/feeding' }, 'character')).catch(() => {});
   return result;
 }
 

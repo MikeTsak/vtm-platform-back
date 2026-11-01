@@ -110,8 +110,10 @@ module.exports = async function (fastify, opts) {
     try {
       const [rows] = await pool.query(`
         SELECT r.id, r.division, r.note, r.created_at, r.character_id, r.npc_id,
-               c.name  AS character_name, c.clan AS character_clan, cu.id AS character_user_id,
-               n.name  AS npc_name, n.clan AS npc_clan
+               c.name  AS character_name, c.clan AS character_clan, c.user_id AS character_user_id,
+               ((cu.avatar_url IS NOT NULL OR cu.avatar_url_thumb IS NOT NULL)) AS char_has_avatar,
+               n.name  AS npc_name, n.clan AS npc_clan,
+               ((n.avatar_url IS NOT NULL OR n.avatar_url_thumb IS NOT NULL)) AS npc_has_avatar
         FROM domain_residents r
         LEFT JOIN characters c  ON c.id  = r.character_id
         LEFT JOIN users      cu ON cu.id = c.user_id
@@ -126,9 +128,11 @@ module.exports = async function (fastify, opts) {
         created_at:   r.created_at,
         character_id: r.character_id,
         npc_id:       r.npc_id,
+        user_id:      r.character_user_id || null,
         name:         r.character_name || r.npc_name || 'Unknown',
         clan:         r.character_clan || r.npc_clan || null,
         isNpc:        !!r.npc_id,
+        has_avatar:   !!(r.char_has_avatar || r.npc_has_avatar),
       }));
       reply.send({ residents });
     } catch (err) {

@@ -189,7 +189,7 @@ module.exports = async function (fastify, opts) {
         ch.user_id,
         '🩸 Discipline Unlocked',
         `Your Storyteller has granted ${ch.name} access to ${discipline}, up to level ${maxLevel}.`,
-        {}, 'system'
+        {}, 'character'
       ).catch(() => { });
 
       reply.send({ access: row });
@@ -246,7 +246,7 @@ module.exports = async function (fastify, opts) {
           request.user_id,
           '❌ Discipline Request Denied',
           `Your Storyteller denied the request for ${request.discipline}${adminNote ? `: ${adminNote}` : '.'}`,
-          {}, 'system'
+          {}, 'character'
         ).catch(() => { });
         log.adm('Discipline request rejected', { admin: req.user.id, request_id: request.id, discipline: request.discipline });
         return reply.send({ ok: true });
@@ -275,7 +275,7 @@ module.exports = async function (fastify, opts) {
         request.user_id,
         '🩸 Discipline Request Approved',
         `Your Storyteller granted ${ch?.name || 'your character'} access to ${request.discipline}, up to level ${grantedLevel}.`,
-        {}, 'system'
+        {}, 'character'
       ).catch(() => { });
       log.adm('Discipline request approved', { admin: req.user.id, request_id: request.id, discipline: request.discipline, grantedLevel });
 

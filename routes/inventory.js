@@ -16,6 +16,7 @@
 const crypto = require('crypto');
 const { isAdmin, userOwnsCharacter } = require('../services/guards');
 
+const { IMAGE_BODY_LIMIT } = require('../services/guards'); // admin item create/edit post the image as a data URL
 // Mirrors the enum on inventory_items.item_type.
 const ITEM_TYPES = ['Relic', 'Artifact', 'Blood Magic', 'Weapon', 'Armor', 'Mundane'];
 const TRANSFER_MINUTES = 10;
@@ -431,7 +432,7 @@ module.exports = async function (fastify, opts) {
     return fields;
   }
 
-  fastify.post('/api/admin/inventory', { preHandler: adminOnly }, async (req, reply) => {
+  fastify.post('/api/admin/inventory', { bodyLimit: IMAGE_BODY_LIMIT, preHandler: adminOnly }, async (req, reply) => {
     try {
       const fields = await readItemBody(req.body || {}, { creating: true });
       fields.claim_code = newCode(); // every item can be put out in the world later
@@ -445,7 +446,7 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  fastify.put('/api/admin/inventory/:id', { preHandler: adminOnly }, async (req, reply) => {
+  fastify.put('/api/admin/inventory/:id', { bodyLimit: IMAGE_BODY_LIMIT, preHandler: adminOnly }, async (req, reply) => {
     try {
       const id = Number(req.params.id);
       const fields = await readItemBody(req.body || {}, { creating: false });

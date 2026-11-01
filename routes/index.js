@@ -72,6 +72,7 @@ const ROUTE_MODULES = [
   { name: 'rumors', path: './rumors' },
   { name: 'hunts', path: './hunts' },
   { name: 'admin-misc', path: './adminMisc' },
+  { name: 'jobs', path: './jobs' },
   { name: 'mechanics', path: './mechanics' },
   { name: 'activity', path: './activity', prefix: '/api/activity' },
 ];

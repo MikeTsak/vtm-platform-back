@@ -466,7 +466,7 @@ module.exports = async function (fastify, opts) {
       return reply.status(400).send({ error: 'division must be an integer' });
     }
 
-  const { character_id, npc_id, color, unassign } = req.body || {};
+  const { character_id, npc_id, color, unassign, is_abaton } = req.body || {};
 
     try {
       if (unassign) {
@@ -481,11 +481,55 @@ module.exports = async function (fastify, opts) {
          SET previous_owner_name=?, previous_owner_character_id=?, previous_claimed_at=?,
              owner_character_id=NULL, owner_npc_id=NULL, owner_name=NULL, color='#888888', is_abaton=0, assigned_by=NULL
          WHERE division=?`,
-          [row.owner_name, row.owner_character_id, row.claimed_at, division]
+          [
+            row.is_abaton ? row.previous_owner_name : row.owner_name,
+            row.is_abaton ? row.previous_owner_character_id : row.owner_character_id,
+            row.is_abaton ? row.previous_claimed_at : row.claimed_at,
+            division
+          ]
         );
         const [updated] = await pool.query('SELECT * FROM domain_claims WHERE division=?', [division]);
         log.adm('Court unassigned domain', { court_user: req.user.id, division });
         return reply.send({ claim: updated[0] });
+      }
+
+      // ── Declare Abaton ──
+      if (is_abaton) {
+        const [[existing]] = await pool.query('SELECT * FROM domain_claims WHERE division=?', [division]);
+        const prevName = existing?.is_abaton ? existing.previous_owner_name : (existing?.owner_name || null);
+        const prevCharId = existing?.is_abaton ? existing.previous_owner_character_id : (existing?.owner_character_id || null);
+        const prevClaimed = existing?.is_abaton ? existing.previous_claimed_at : (existing?.claimed_at || null);
+
+        if (existing) {
+          await pool.query(
+            `UPDATE domain_claims
+             SET previous_owner_name=?, previous_owner_character_id=?, previous_claimed_at=?,
+                 owner_character_id=NULL, owner_npc_id=NULL, owner_name='Abaton', color='#ef4444',
+                 is_abaton=1, claimed_at=NOW(), assigned_by=?
+             WHERE division=?`,
+            [prevName, prevCharId, prevClaimed, req.user?.id || null, division]
+          );
+        } else {
+          await pool.query(
+            `INSERT INTO domain_claims (division, owner_character_id, owner_npc_id, owner_name, color, is_abaton, safety_rating, assigned_by)
+             VALUES (?, NULL, NULL, 'Abaton', '#ef4444', 1, NULL, ?)`,
+            [division, req.user?.id || null]
+          );
+        }
+
+        // Clean up residents & guests since Abaton cannot host Kindred residents/guests
+        await pool.query('DELETE FROM domain_residents WHERE division=?', [division]);
+        await pool.query('DELETE FROM domain_guests WHERE division=?', [division]);
+
+        // Reject any pending claim requests for this territory
+        await pool.query(
+          "UPDATE domain_claim_requests SET status='rejected', resolved_at=NOW(), resolved_by=? WHERE division=? AND status='pending'",
+          [req.user?.id || null, division]
+        );
+
+        const [row] = await pool.query('SELECT * FROM domain_claims WHERE division=?', [division]);
+        log.adm('Court declared domain Abaton', { court_user: req.user.id, division });
+        return reply.send({ claim: row[0] });
       }
 
       // ── Assign ──
@@ -493,7 +537,7 @@ module.exports = async function (fastify, opts) {
         return reply.status(400).send({ error: 'Provide character_id OR npc_id, not both' });
       }
       if (character_id == null && npc_id == null) {
-        return reply.status(400).send({ error: 'Provide character_id or npc_id, or set unassign: true' });
+        return reply.status(400).send({ error: 'Provide character_id or npc_id, or set unassign: true or is_abaton: true' });
       }
 
       let ownerName = null;
@@ -724,8 +768,10 @@ module.exports = async function (fastify, opts) {
     try {
       const [rows] = await pool.query(`
         SELECT g.id, g.division, g.note, g.created_at, g.character_id, g.npc_id,
-               c.name AS character_name, c.clan AS character_clan, cu.id AS character_user_id,
-               n.name AS npc_name, n.clan AS npc_clan
+               c.name AS character_name, c.clan AS character_clan, c.user_id AS character_user_id,
+               ((cu.avatar_url IS NOT NULL OR cu.avatar_url_thumb IS NOT NULL)) AS char_has_avatar,
+               n.name AS npc_name, n.clan AS npc_clan,
+               ((n.avatar_url IS NOT NULL OR n.avatar_url_thumb IS NOT NULL)) AS npc_has_avatar
         FROM domain_guests g
         LEFT JOIN characters c ON c.id = g.character_id
         LEFT JOIN users cu ON cu.id = c.user_id
@@ -740,9 +786,11 @@ module.exports = async function (fastify, opts) {
         created_at: r.created_at,
         character_id: r.character_id,
         npc_id: r.npc_id,
+        user_id: r.character_user_id || null,
         name: r.character_name || r.npc_name || 'Unknown',
         clan: r.character_clan || r.npc_clan || null,
         isNpc: !!r.npc_id,
+        has_avatar: !!(r.char_has_avatar || r.npc_has_avatar),
         // lets a guest recognise (and later remove) their own entry
         isSelf: !!(r.character_user_id && r.character_user_id === req.user.id),
       }));

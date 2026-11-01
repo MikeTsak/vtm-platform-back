@@ -2,7 +2,7 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require('discord.js');
 const { log } = require('./logger');
 const pool = require('./db');
-const { getSetting, setSetting } = require('./utils/settings');
+const { getSetting } = require('./utils/settings');
 // The !roll command called computeV5Outcome without ever importing it, so it
 // threw ReferenceError. Same shared implementation the API routes use.
 const { computeV5Outcome } = require('./services/dice');
@@ -50,7 +50,7 @@ if (process.env.DISCORD_BOT_TOKEN) {
 
     try {
       await pool.query(
-        "INSERT INTO app_settings (setting_key, setting_value) VALUES ('discord_bot_active_instance', ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)",
+        "INSERT INTO runtime_status (status_key, status_value) VALUES ('discord_bot_active_instance', ?) ON DUPLICATE KEY UPDATE status_value = VALUES(status_value)",
         [BOT_INSTANCE_ID]
       );
     } catch (e) {
@@ -61,9 +61,9 @@ if (process.env.DISCORD_BOT_TOKEN) {
     setInterval(async () => {
       try {
         const [[row]] = await pool.query(
-          "SELECT setting_value FROM app_settings WHERE setting_key = 'discord_bot_active_instance'"
+          "SELECT status_value FROM runtime_status WHERE status_key = 'discord_bot_active_instance'"
         );
-        const active = row ? row.setting_value : BOT_INSTANCE_ID;
+        const active = row ? row.status_value : BOT_INSTANCE_ID;
         if (active && active !== BOT_INSTANCE_ID) {
           log.warn(`Secondary Discord bot instance detected (${BOT_INSTANCE_ID} vs active ${active}). Disconnecting redundant worker.`);
           if (discordClient) {
@@ -71,8 +71,13 @@ if (process.env.DISCORD_BOT_TOKEN) {
           }
           return;
         }
-        await setSetting('discord_bot_last_heartbeat', Date.now().toString());
-        await setSetting('discord_bot_name', discordClient.user.tag);
+        // runtime_status, not app_settings: that table is system-versioned and
+        // this beat used to add ~11.5k history rows a day (migration 0072).
+        // updated_at is the heartbeat; the value is the bot's tag for the admin panel.
+        await pool.query(
+          "INSERT INTO runtime_status (status_key, status_value) VALUES ('discord_bot', ?) ON DUPLICATE KEY UPDATE status_value = VALUES(status_value), updated_at = CURRENT_TIMESTAMP",
+          [discordClient.user.tag]
+        );
       } catch (_) { }
     }, 15000);
 
@@ -105,9 +110,9 @@ if (process.env.DISCORD_BOT_TOKEN) {
     // Deduplicate against rolling restart worker instances
     try {
       const [[row]] = await pool.query(
-        "SELECT setting_value FROM app_settings WHERE setting_key = 'discord_bot_active_instance'"
+        "SELECT status_value FROM runtime_status WHERE status_key = 'discord_bot_active_instance'"
       );
-      const active = row ? row.setting_value : BOT_INSTANCE_ID;
+      const active = row ? row.status_value : BOT_INSTANCE_ID;
       if (active && active !== BOT_INSTANCE_ID) {
         log.warn(`Message received by inactive bot instance (${BOT_INSTANCE_ID} vs active ${active}). Disconnecting.`);
         if (discordClient) {

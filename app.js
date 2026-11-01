@@ -9,7 +9,7 @@ const pool = require('./db');
 const wikiPool = require('./wikiDb');
 const { log } = require('./logger');
 const { authRequired, optionalAuth, requireAdmin } = require('./authMiddleware.fastify');
-const { requireCourt, authLimiter, moderateLimiter, uploadLimiter } = require('./services/guards');
+const { requireCourt, authLimiter, moderateLimiter, uploadLimiter, DEFAULT_BODY_LIMIT } = require('./services/guards');
 const { broadcastNtfyAlert } = require('./utils/ntfy');
 const { sendPushNotification } = require('./services/push');
 const { getMimeType, imageClient } = require('./services/media');
@@ -29,7 +29,7 @@ const INFRA_PLUGINS = ['multipart', 'helmet', 'cors', 'cookie', 'static', 'compr
 function buildApp(overrides = {}) {
   const fastify = require('fastify')({
     logger: false,
-    bodyLimit: 576716800,
+    bodyLimit: DEFAULT_BODY_LIMIT, // see services/guards.js; image routes raise it per route
   });
 
   startBootProgress([...INFRA_PLUGINS, ...ROUTE_MODULES.map((m) => m.name)]);

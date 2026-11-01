@@ -123,7 +123,7 @@ module.exports = async function (fastify, opts) {
           const pushTitle = `Erebus Portal - 📧 Reply from ${identity?.display_name || 'NPC'}`;
           const pushBody = `Re: ${thread.subject}`;
 
-          await sendPushNotification(thread.user_id, pushTitle, pushBody, { url: '/surfaceweb', icon: `/api/identities/${thread.identity_id}/avatar` }, 'chat').catch(() => { });
+          await sendPushNotification(thread.user_id, pushTitle, pushBody, { url: '/surfaceweb', icon: `/api/identities/${thread.identity_id}/avatar` }, 'mail').catch(() => { });
         } catch (e) { log.err('Email push to player failed', { error: e.message }); }
         // --------------------------------
       }
@@ -256,7 +256,7 @@ module.exports = async function (fastify, opts) {
         const pushBody = `From ${senderName}: ${subject || 'New Reply'}`;
 
         for (const admin of admins) {
-          if (admin.id !== req.user.id) await sendPushNotification(admin.id, pushTitle, pushBody, { url: '/surfaceweb', icon: `/api/users/${req.user.id}/avatar` }, 'chat').catch(() => { });
+          if (admin.id !== req.user.id) await sendPushNotification(admin.id, pushTitle, pushBody, { url: '/surfaceweb', icon: `/api/users/${req.user.id}/avatar` }, 'mail').catch(() => { });
         }
       } catch (e) { log.err('Email push to admin failed', { error: e.message }); }
       // --------------------------------
@@ -332,7 +332,7 @@ module.exports = async function (fastify, opts) {
         try {
           const pushTitle = `Erebus Portal - 📧 New message from ${display_name}`;
           const pushBody = `Re: ${subject}`;
-          await sendPushNotification(user_id, pushTitle, pushBody, { url: '/surfaceweb', icon: `/api/identities/${identity.id}/avatar` }, 'chat').catch(() => {});
+          await sendPushNotification(user_id, pushTitle, pushBody, { url: '/surfaceweb', icon: `/api/identities/${identity.id}/avatar` }, 'mail').catch(() => {});
         } catch (e) { log.err('Admin DM push failed', { error: e.message }); }
       }
 

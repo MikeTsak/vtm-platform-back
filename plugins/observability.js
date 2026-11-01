@@ -60,6 +60,13 @@ module.exports = fp(async function observability(fastify) {
       return reply.status(400).send({ error: 'Validation Error', details: error.validation });
     }
 
+    // Fastify's own client errors (413 body too large, 415 content type, 400
+    // malformed JSON...) are the caller's fault: answer with their status, and
+    // don't page Discord for them — they used to surface as 500s.
+    if (error.statusCode >= 400 && error.statusCode < 500) {
+      return reply.status(error.statusCode).send({ error: error.message });
+    }
+
     log.err('Unhandled Fastify Error', { error: error.message, stack: error.stack, url: request.url });
     await reportErrorToDiscord(`Fastify Route ${request.url}`, error).catch(() => { });
 

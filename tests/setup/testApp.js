@@ -165,6 +165,9 @@ function buildTestApp(pool) {
   app.register(require('../../routes/courtActions'), { pool, log: testLog, authRequired, requireAdmin });
   app.register(require('../../routes/elysium'), { pool, log: testLog, authRequired, requireAdmin });
   app.register(require('../../routes/news'), { pool, log: testLog, authRequired, optionalAuth, requireAdmin });
+  app.register(require('../../routes/premonitions'), { pool, log: testLog, authRequired, requireAdmin });
+  app.register(require('../../routes/jobs'), { pool, authRequired, requireAdmin });
+  app.register(require('../../routes/push'), { pool, log: testLog, authRequired, sendPushNotification: async () => {} });
 
   app.register(require('../../routes/disciplineAccess'), {
     pool,

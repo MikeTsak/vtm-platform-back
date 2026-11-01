@@ -92,6 +92,30 @@ function attachRealtime(fastify) {
       }
     }
 
+    // The handshake is the only auth check a socket gets, so without this a
+    // revoked session (password reset, "log out everywhere"), an expired JWT or
+    // a demoted courtuser kept its live feed and the admin_chat room for as long
+    // as the tab stayed open. Re-validated against the DB (getAuthState is the
+    // same 15 s-cached read authRequired uses) rather than disconnected from the
+    // revoking route, because that route may run in another Passenger process.
+    if (uid) {
+      const recheck = setInterval(async () => {
+        let state;
+        try { state = await getAuthState(uid); } catch { return; } // DB hiccup: keep the socket
+        const expired = socket.user.exp && Date.now() >= socket.user.exp * 1000;
+        if (!state || state.version !== (socket.user.tv ?? 0) || expired) {
+          socket.disconnect(true);
+          return;
+        }
+        if (state.role !== socket.user.role) {
+          socket.user = { ...socket.user, role: state.role };
+          if (isCourt(socket.user)) socket.join('admin_chat');
+          else socket.leave('admin_chat');
+        }
+      }, 60_000);
+      socket.on('disconnect', () => clearInterval(recheck));
+    }
+
     socket.on('presence:get', (ack) => {
       if (typeof ack === 'function') ack(presenceSnapshot());
     });
@@ -149,27 +173,6 @@ function attachRealtime(fastify) {
     socket.on('disconnecting', () => {
       const rooms = [...socket.rooms].filter((r) => /^session_\d+$/.test(r));
       if (rooms.length) setTimeout(() => emitSessionPresence(io, rooms), 3000);
-    });
-
-    socket.on('chat_message', (payload) => {
-      if (!payload || !payload.sessionId) return;
-      const room = `session_${payload.sessionId}`;
-      // socket.rooms is server-maintained state — the only way into a room is
-      // the membership-checked join_session handler above, so this is an
-      // authoritative check that this socket was actually let into this
-      // session, not something a client can fake by just sending a sessionId.
-      if (!socket.rooms.has(room)) return;
-
-      // Overwrite (not merge-if-missing) sender identity from the verified
-      // socket.user, discarding whatever the client put in the payload —
-      // otherwise any authenticated socket could put an arbitrary sender in
-      // the payload and impersonate someone else in a session it may not even
-      // belong to.
-      io.to(room).emit('chat_message', {
-        ...payload,
-        senderId: socket.user.id,
-        senderName: socket.user.display_name,
-      });
     });
   });
 

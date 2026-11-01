@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const { setAuthCookie, clearAuthCookie } = require('../utils/authCookie');
 const { bumpTokenVersion, clearTokenVersionCache } = require('../utils/tokenVersion');
 const loginThrottle = require('../utils/loginThrottle');
+const { clientIp } = require('../services/guards');
 
 // Hash of a throwaway password; only ever compared against, to equalise login timing.
 const DUMMY_HASH = bcrypt.hashSync('not-a-real-password', 12);
@@ -71,7 +72,7 @@ module.exports = async function (fastify, opts) {
       }
     }
   }, async (req, reply) => {
-    const ip = req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || (req.headers['x-forwarded-for'] || '').split(',')[0]?.trim() || req.ip || req.socket?.remoteAddress || 'unknown';
+    const ip = clientIp(req);
     const ua = req.headers['user-agent'] || 'unknown';
 
     const { email, password } = req.body;
@@ -180,7 +181,13 @@ module.exports = async function (fastify, opts) {
       try { reqOrigin = new URL(req.headers.referer).origin; } catch {}
     }
     const defaultBase = IS_PROD ? 'https://portal.attlarp.gr' : 'http://localhost:3002';
-    const appBase = ((!IS_PROD && reqOrigin) ? reqOrigin : (process.env.APP_BASE_URL || reqOrigin || defaultBase)).replace(/\/$/, '');
+    // Production never builds the link from request headers: Origin/Referer are
+    // attacker-controlled, and a forged one would mail the victim a reset link
+    // to the attacker's domain, token included.
+    const appBase = (IS_PROD
+      ? (process.env.APP_BASE_URL || defaultBase)
+      : (reqOrigin || process.env.APP_BASE_URL || defaultBase)
+    ).replace(/\/$/, '');
     const link = `${appBase}/reset?token=${encodeURIComponent(combined)}`;
 
     if (log.mail) log.mail('Reset token created', { email: maskEmail(norm), link_path: new URL(link).pathname, expires_min: 1440, cooldown_min: COOLDOWN_MIN });

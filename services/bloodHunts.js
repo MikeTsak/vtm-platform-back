@@ -38,7 +38,7 @@ async function expireBloodHunts() {
 // Fire-and-forget: a failed push must never fail the court action.
 function pushEveryone(title, body, url) {
   pool.query('SELECT id FROM users')
-    .then(([users]) => Promise.all(users.map(u => sendPushNotification(u.id, title, body, { url }, 'system'))))
+    .then(([users]) => Promise.all(users.map(u => sendPushNotification(u.id, title, body, { url }, 'court'))))
     .catch(e => log.err('Court push failed', { message: e.message }));
 }
 
@@ -48,7 +48,7 @@ function pushOfficeHolders(offices, title, body, url) {
   )
     .then(([rows]) => {
       const ids = [...new Set(rows.filter(r => parseTitles(r.camarilla_titles).some(t => offices.includes(t))).map(r => r.user_id))];
-      return Promise.all(ids.map(id => sendPushNotification(id, title, body, { url }, 'system')));
+      return Promise.all(ids.map(id => sendPushNotification(id, title, body, { url }, 'court')));
     })
     .catch(e => log.err('Court office push failed', { message: e.message }));
 }
