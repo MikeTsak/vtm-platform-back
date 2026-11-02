@@ -1,5 +1,5 @@
 // tests/sheetDates.test.js — player-entered life dates are set once.
-const { withSetOnceDates, RETAINER_DATES } = require('../utils/sheetDates');
+const { withSetOnceDates, newDatesMessage, RETAINER_DATES, CHARACTER_DATES } = require('../utils/sheetDates');
 const { mergePlayerSheetEdit } = require('../utils/playerSheetEdit');
 
 const NOW = new Date('2026-10-30T12:00:00Z');
@@ -26,5 +26,26 @@ describe('set-once dates', () => {
     expect(Object.keys(first.datesSetAt)).toEqual(['birthDate', 'deathDate']);
     const again = mergePlayerSheetEdit(first, { birthDate: '', deathDate: '1950-01-01' }, 'Brujah');
     expect(again).toMatchObject({ birthDate: '1900-05-01', deathDate: '1930-06-01' });
+  });
+});
+
+describe('Storyteller push when dates are set', () => {
+  it('reports a vampire: looks their age at the Embrace', () => {
+    const msg = newDatesMessage({}, { birthDate: '1900-05-01', deathDate: '1930-06-01' }, CHARACTER_DATES, { who: 'Ana', now: NOW });
+    expect(msg).toContain('**Ana** set their dates');
+    expect(msg).toContain('Embraced **1 Jun 1930**');
+    expect(msg).toContain('Apparent age **30**, true age **126**');
+  });
+
+  it('reports a ghoul: frozen at the ghouling, Crone\'s Curse adds ten', () => {
+    const sheet = { isGhoul: true, birthDate: '1980-02-03', ghouledDate: '2010-02-03', flaws: [{ name: "Crone's Curse" }] };
+    const msg = newDatesMessage({}, sheet, RETAINER_DATES, { who: 'Ana', retainerName: 'Vana', now: NOW });
+    expect(msg).toContain('the dates of **Vana** (ghoul)');
+    expect(msg).toContain('Apparent age **40**, true age **46**');
+  });
+
+  it('stays quiet when nothing new was set', () => {
+    const stored = { birthDate: '1980-02-03' };
+    expect(newDatesMessage(stored, stored, RETAINER_DATES, { who: 'Ana', retainerName: 'Vana', now: NOW })).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 const { getSetting } = require('../utils/settings');
 const { attachFeeding } = require('../services/ghoulFeeding');
 const { checkGhoulGift } = require('../utils/ghoulBlood');
-const { withSetOnceDates, RETAINER_DATES } = require('../utils/sheetDates');
+const { withSetOnceDates, notifyNewDates, RETAINER_DATES, CHARACTER_DATES } = require('../utils/sheetDates');
 const { keepTrackers, ghoulTrackers } = require('../services/ghoulTrackers');
 const { DEFAULT_DISABLED_CLANS } = require('../utils/clans');
 const { isAdmin, userOwnsCharacter } = require('../services/guards');
@@ -42,6 +42,7 @@ module.exports = async function (fastify, opts) {
       const next = isAdmin(req.user) ? incoming : mergePlayerSheetEdit(row.sheet, incoming, row.clan);
       await conn.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(next), row.id]);
       await conn.commit();
+      if (!isAdmin(req.user)) notifyNewDates(opts, req.user.id, parseSheet(row.sheet), next, CHARACTER_DATES);
 
       const [[ch]] = await pool.query('SELECT * FROM characters WHERE id=?', [row.id]);
       if (ch) ch.sheet = parseSheet(ch.sheet);
@@ -455,6 +456,7 @@ module.exports = async function (fastify, opts) {
         );
         return result.insertId;
       });
+      if (!admin) notifyNewDates(opts, req.user.id, {}, sheet, RETAINER_DATES, { retainerName: name });
       reply.send({ id, character_id: charId, name, tier, sheet, xp });
     } catch (e) {
       if (e.status) return reply.status(e.status).send({ error: e.message });
@@ -520,7 +522,8 @@ module.exports = async function (fastify, opts) {
         'UPDATE retainers SET name=?, tier=?, sheet=? WHERE id=?',
         [name || oldRetainer.name, tier, JSON.stringify(sheet), req.params.retainerId]
       ));
-      
+      if (!isAdmin(req.user)) notifyNewDates(opts, req.user.id, parseSheet(oldRetainer.sheet), sheet, RETAINER_DATES, { retainerName: name || oldRetainer.name, createdAt: oldRetainer.created_at });
+
       const [updatedRows] = await pool.query('SELECT * FROM retainers WHERE id=?', [req.params.retainerId]);
       if (updatedRows.length > 0) {
          const ret = updatedRows[0];

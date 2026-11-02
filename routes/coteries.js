@@ -21,7 +21,7 @@ const { isAdmin, userOwnsCharacter } = require('../services/guards');
 const { parseSheet } = require('../utils/sheet');
 const { validateRetainerSheet } = require('../utils/retainerValidation');
 const { giftError, checkGhoulGift } = require('../utils/ghoulBlood');
-const { withSetOnceDates, RETAINER_DATES } = require('../utils/sheetDates');
+const { withSetOnceDates, notifyNewDates, RETAINER_DATES } = require('../utils/sheetDates');
 const { keepTrackers, ghoulTrackers } = require('../services/ghoulTrackers');
 
 const safeParse = (val, fallback) => {
@@ -1458,6 +1458,7 @@ module.exports = async function (fastify, opts) {
       );
       await conn.commit();
       log.adm('Coterie retainer created', { coterie_id: id, retainer_id: r.insertId, tier: input.tier, by_user_id: req.user.id });
+      if (!acc.admin) notifyNewDates(opts, req.user.id, {}, input.sheet, RETAINER_DATES, { retainerName: input.name });
       const [[row]] = await pool.query('SELECT * FROM retainers WHERE id=?', [r.insertId]);
       row.sheet = parseSheet(row.sheet);
       reply.send(row);
@@ -1501,6 +1502,7 @@ module.exports = async function (fastify, opts) {
       );
       await conn.commit();
       log.adm('Coterie retainer updated', { coterie_id: id, retainer_id: rid, from_tier: old.tier, to_tier: input.tier, by_user_id: req.user.id });
+      if (!acc.admin) notifyNewDates(opts, req.user.id, parseSheet(old.sheet), input.sheet, RETAINER_DATES, { retainerName: input.name, createdAt: old.created_at });
       const [[row]] = await pool.query('SELECT * FROM retainers WHERE id=?', [rid]);
       row.sheet = parseSheet(row.sheet);
       reply.send(row);
