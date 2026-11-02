@@ -57,6 +57,15 @@ module.exports = async function (fastify, opts) {
     return rows.length ? id : null;
   }
 
+  // The ids that are real accounts: a retired character's archive account
+  // (migration 0075) is never seated in a group.
+  async function liveUserIds(ids) {
+    if (!ids.length) return [];
+    const [rows] = await pool.query('SELECT id FROM users WHERE id IN (?) AND archived_character_id IS NULL', [ids]);
+    const live = new Set(rows.map(r => r.id));
+    return ids.filter(id => live.has(id));
+  }
+
   // Any current member (or a global admin) may rename a group, change its
   // icon, or add/kick members — this isn't creator-only.
   async function isMemberOrAdmin(groupId, user) {
@@ -364,7 +373,7 @@ module.exports = async function (fastify, opts) {
       const groupId = g.insertId;
 
       // 2. Add Creator to Members
-      const allMembers = [req.user.id, ...members.map(Number)].filter((v, i, a) => a.indexOf(v) === i && !isNaN(v));
+      const allMembers = await liveUserIds([req.user.id, ...members.map(Number)].filter((v, i, a) => a.indexOf(v) === i && !isNaN(v)));
       const values = allMembers.map(uid => [groupId, uid]);
 
       await conn.query('INSERT INTO chat_group_members (group_id, user_id) VALUES ?', [values]);
@@ -406,7 +415,7 @@ module.exports = async function (fastify, opts) {
             r.attachment_id AS reply_attachment_id, COALESCE(rc.name, ru.display_name) AS reply_sender_name
       FROM chat_group_messages m
       LEFT JOIN users u ON m.sender_id = u.id
-      LEFT JOIN characters c ON c.user_id = u.id
+      LEFT JOIN characters c ON c.user_id = u.id OR c.id = u.archived_character_id
       LEFT JOIN chat_group_messages r ON r.id = m.reply_to_id
       LEFT JOIN users ru ON ru.id = r.sender_id
       LEFT JOIN characters rc ON rc.user_id = r.sender_id
@@ -435,10 +444,12 @@ module.exports = async function (fastify, opts) {
 
       const [members] = await pool.query(`
       SELECT u.id, u.display_name, c.name as char_name, c.clan,
-             c.camarilla_titles AS titles, c.status AS court_status, c.is_hidden
+             c.camarilla_titles AS titles, c.status AS court_status, c.is_hidden,
+             (u.archived_character_id IS NOT NULL) AS is_archived, c.is_deceased
       FROM chat_group_members cgm
       JOIN users u ON cgm.user_id = u.id
-      LEFT JOIN characters c ON c.user_id = u.id
+      -- A retired character keeps its seat through its archive account (0075).
+      LEFT JOIN characters c ON c.user_id = u.id OR c.id = u.archived_character_id
       WHERE cgm.group_id = ?
       ORDER BY COALESCE(c.name, u.display_name) ASC
     `, [groupId]);
@@ -460,7 +471,7 @@ module.exports = async function (fastify, opts) {
       if (!g.length) return reply.status(404).send({ error: 'Group not found' });
       if (!(await isMemberOrAdmin(groupId, req.user))) return reply.status(403).send({ error: 'Not a member of this group' });
 
-      const requestedIds = members.map(Number).filter(v => !isNaN(v));
+      const requestedIds = await liveUserIds(members.map(Number).filter(v => !isNaN(v)));
       if (!requestedIds.length) return reply.status(400).send({ error: 'No members provided' });
 
       // Only the ids that weren't already members get a system line — an
@@ -720,7 +731,7 @@ module.exports = async function (fastify, opts) {
             u.display_name, c.name as char_name, c.clan
       FROM chat_group_messages m
       LEFT JOIN users u ON m.sender_id = u.id
-      LEFT JOIN characters c ON c.user_id = u.id
+      LEFT JOIN characters c ON c.user_id = u.id OR c.id = u.archived_character_id
       WHERE m.group_id = ?
       ORDER BY m.created_at ASC
     `, [groupId]);
@@ -764,17 +775,23 @@ module.exports = async function (fastify, opts) {
           SELECT COUNT(*) 
           FROM chat_messages 
           WHERE sender_id = u.id AND recipient_id = ? AND read_at IS NULL
-        ) as unread_count
+        ) as unread_count,
+        MAX(u.archived_character_id IS NOT NULL) AS is_archived
       FROM users u
-      LEFT JOIN characters c ON c.user_id = u.id
+      LEFT JOIN characters c ON c.user_id = u.id OR c.id = u.archived_character_id
       WHERE (? = 1 OR u.id <> ?)
+        -- A retired character (archive account, migration 0075) is listed only
+        -- to those who talked with them: their old thread, read-only.
+        AND (u.archived_character_id IS NULL OR EXISTS (
+          SELECT 1 FROM chat_messages
+           WHERE (sender_id = u.id AND recipient_id = ?) OR (sender_id = ? AND recipient_id = u.id)))
       GROUP BY u.id, u.display_name, u.role
       ORDER BY 
         unread_count DESC,   -- Unread first
         last_message_at DESC, -- Then most recent
         u.display_name ASC    -- Then alphabetical
       `,
-        [myId, myId, myId, req.query.include_self ? 1 : 0, myId]
+        [myId, myId, myId, req.query.include_self ? 1 : 0, myId, myId, myId]
       );
 
       const [standings] = await pool.query(
@@ -795,6 +812,7 @@ module.exports = async function (fastify, opts) {
           const isTilemachos = isTilemachosEntity(r.id, r.char_id, r.char_name, r.display_name);
           const isActive = Boolean(
             r.char_id &&
+            !r.is_archived &&
             r.is_char_active &&
             !r.is_deceased &&
             !r.is_left &&
@@ -811,12 +829,14 @@ module.exports = async function (fastify, opts) {
             is_deceased: Boolean(r.is_deceased),
             is_left: Boolean(r.is_left),
             is_missing: Boolean(r.is_missing),
+            is_archived: Boolean(r.is_archived),
             is_active: isActive
           };
         })
         .filter(u => {
-          // Exclude deactivated players from comms entirely
-          if (u.char_id && !u.is_char_active) return false;
+          // Exclude deactivated players from comms entirely (a retired
+          // character's old thread stays, read-only).
+          if (u.char_id && !u.is_char_active && !u.is_archived) return false;
           return true;
         });
 
@@ -922,6 +942,10 @@ module.exports = async function (fastify, opts) {
       if (!recipient_id || (!attachment_id && (!body || !body.trim()))) {
         return reply.status(400).send({ error: 'Recipient and content required' });
       }
+      // A retired character's archive account (migration 0075) reads nothing.
+      const [[to]] = await pool.query('SELECT archived_character_id FROM users WHERE id=?', [recipient_id]);
+      if (!to) return reply.status(404).send({ error: 'Recipient not found' });
+      if (to.archived_character_id) return reply.status(409).send({ error: 'This character is no longer in play' });
 
       const replyTo = await validReplyTo(reply_to_id,
         "SELECT id FROM chat_messages WHERE id=? AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)) AND IFNULL(type, 'text') != 'system'",
@@ -1557,8 +1581,9 @@ module.exports = async function (fastify, opts) {
             FROM chat_messages cm
             JOIN users s ON cm.sender_id = s.id
             JOIN users r ON cm.recipient_id = r.id
-            LEFT JOIN characters cs ON cs.user_id = s.id
-            LEFT JOIN characters cr ON cr.user_id = r.id
+            -- An archive account (retired character, migration 0075) wears its character.
+            LEFT JOIN characters cs ON cs.user_id = s.id OR cs.id = s.archived_character_id
+            LEFT JOIN characters cr ON cr.user_id = r.id OR cr.id = r.archived_character_id
             ORDER BY cm.created_at DESC`
       );
       log.adm('Admin fetched all chat messages', { count: messages.length });

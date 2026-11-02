@@ -15,7 +15,7 @@ module.exports = async function (fastify, opts) {
     
     const searchStr = `%${q}%`;
     const [rows] = await fastify.db.query(
-      'SELECT id, display_name, email FROM users WHERE email LIKE ? OR display_name LIKE ? LIMIT 10',
+      'SELECT id, display_name, email FROM users WHERE (email LIKE ? OR display_name LIKE ?) AND archived_character_id IS NULL LIMIT 10',
       [searchStr, searchStr]
     );
     reply.send({ users: rows });

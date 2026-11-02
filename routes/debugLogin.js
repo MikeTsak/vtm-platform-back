@@ -50,7 +50,7 @@ module.exports = async function (fastify, opts) {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) return reply.status(400).send({ error: 'Invalid user id' });
 
-    const [[target]] = await pool.query('SELECT id, email, role FROM users WHERE id = ?', [id]);
+    const [[target]] = await pool.query('SELECT id, email, role FROM users WHERE id = ? AND archived_character_id IS NULL', [id]);
     if (!target) return reply.status(404).send({ error: 'User not found' });
     if (target.role === 'admin') return reply.status(400).send({ error: 'Admin accounts cannot be debug-logged into' });
 

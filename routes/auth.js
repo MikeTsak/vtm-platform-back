@@ -83,7 +83,8 @@ module.exports = async function (fastify, opts) {
       return reply.status(429).header('Retry-After', wait).send({ error: 'Too many failed attempts for this account. Try again later or reset your password.' });
     }
 
-    const [rows] = await fastify.db.query('SELECT * FROM users WHERE email=?', [email]);
+    // Archive accounts (a retired character's comms, migration 0075) never log in.
+    const [rows] = await fastify.db.query('SELECT * FROM users WHERE email=? AND archived_character_id IS NULL', [email]);
     const user = rows[0];
 
     // Always run one bcrypt compare, even for an unknown email, so a missing account
@@ -145,7 +146,7 @@ module.exports = async function (fastify, opts) {
       return okResponse();
     }
 
-    const [rows] = await fastify.db.query('SELECT id, display_name FROM users WHERE email = ? LIMIT 1', [norm]);
+    const [rows] = await fastify.db.query('SELECT id, display_name FROM users WHERE email = ? AND archived_character_id IS NULL LIMIT 1', [norm]);
     const user = rows[0];
     if (!user) {
       if (log.mail) log.mail('Forgot: email not found (OK sent)', { email: maskEmail(norm) });

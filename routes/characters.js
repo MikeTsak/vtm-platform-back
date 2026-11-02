@@ -7,7 +7,7 @@ const { DEFAULT_DISABLED_CLANS } = require('../utils/clans');
 const { isAdmin, userOwnsCharacter } = require('../services/guards');
 const { parseSheet } = require('../utils/sheet');
 const { mergePlayerSheetEdit } = require('../utils/playerSheetEdit');
-const { retireCharacter } = require('../services/characterRetirement');
+const { retireCharacter, isOutOfPlay } = require('../services/characterRetirement');
 
 async function isClanDisabled(clan) {
   const raw = await getSetting('disabled_clans', JSON.stringify(DEFAULT_DISABLED_CLANS));
@@ -163,11 +163,11 @@ module.exports = async function (fastify, opts) {
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
-      // A character that met Final Death (Storyteller-set is_deceased) is
-      // retired here, so the player can start their next one. Any other
-      // current character blocks creation.
-      const [[current]] = await conn.query('SELECT id, is_deceased FROM characters WHERE user_id=? FOR UPDATE', [req.user.id]);
-      if (current && !current.is_deceased) {
+      // A character out of play (Storyteller-set Final Death, left the city,
+      // exiled) is retired here, so the player can start their next one. Any
+      // other current character blocks creation.
+      const [[current]] = await conn.query('SELECT id, is_deceased, is_left, is_exiled FROM characters WHERE user_id=? FOR UPDATE', [req.user.id]);
+      if (current && !isOutOfPlay(current)) {
         await conn.rollback();
         log.warn('Create character already exists', { user_id: req.user.id });
         return reply.status(409).send({ error: 'Character already exists' });
@@ -187,7 +187,7 @@ module.exports = async function (fastify, opts) {
       const [rows] = await pool.query('SELECT * FROM characters WHERE id=?', [r.insertId]);
       const ch = rows[0];
       if (ch) ch.sheet = parseSheet(ch.sheet);
-      if (current) log.char('Deceased character retired', { id: current.id, user_id: req.user.id });
+      if (current) log.char('Out-of-play character retired', { id: current.id, user_id: req.user.id });
       log.char('Character created', { id: r.insertId, user_id: req.user.id, name, clan, xp: ch?.xp });
       broadcastNtfyAlert(`**${name}** (Clan: **${clan}**) was created by ${req.user.display_name} (${req.user.id}).`, { title: 'New Character', tags: 'vampire', priority: 'default' });
       reply.send({ character: ch });

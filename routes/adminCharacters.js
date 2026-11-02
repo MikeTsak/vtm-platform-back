@@ -196,37 +196,6 @@ module.exports = async function (fastify, opts) {
     reply.send({ character: ch });
   });
 
-  // Delete Character (admin)
-  fastify.delete('/api/admin/characters/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id <= 0) {
-      return reply.status(400).send({ error: 'Invalid character id' });
-    }
-
-    const conn = await pool.getConnection();
-    try {
-      await conn.beginTransaction();
-
-      // Remove/neutralize references to this character
-      await conn.query('DELETE FROM domain_members WHERE character_id=?', [id]);
-      await conn.query('DELETE FROM downtimes WHERE character_id=?', [id]);
-      try { await conn.query('DELETE FROM xp_log WHERE character_id=?', [id]); } catch (_) { /* xp_log may not exist */ }
-      await conn.query('UPDATE domain_claims SET owner_character_id=NULL WHERE owner_character_id=?', [id]);
-
-      // Finally delete the character
-      const [result] = await conn.query('DELETE FROM characters WHERE id=?', [id]);
-      await conn.commit();
-
-      if (result.affectedRows === 0) return reply.status(404).send({ error: 'Character not found' });
-
-      log.adm('Character deleted', { id, by_user_id: req.user.id });
-      reply.send({ ok: true });
-    } catch (e) {
-      await conn.rollback();
-      log.err('Delete character failed', { message: e.message, stack: e.stack, id });
-      reply.status(500).send({ error: 'Failed to delete character' });
-    } finally {
-      conn.release();
-    }
-  });
+  // No delete: a character leaves play through Retire (POST .../retire), which
+  // keeps its sheet, downtimes, XP log and comms.
 };

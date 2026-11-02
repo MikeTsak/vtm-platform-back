@@ -20,6 +20,7 @@ module.exports = async function (fastify, opts) {
             c.is_deceased, c.is_left, c.is_missing
      FROM users u
      LEFT JOIN characters c ON c.user_id=u.id
+     WHERE u.archived_character_id IS NULL
      ORDER BY u.created_at DESC`
     );
 

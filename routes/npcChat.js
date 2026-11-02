@@ -413,9 +413,12 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/admin/chat/npc/all', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const [rows] = await pool.query(`
-      SELECT id, npc_id, user_id, from_side, body, created_at, status, attachment_id, edited
-      FROM npc_messages
-      ORDER BY created_at ASC
+      SELECT m.id, m.npc_id, m.user_id, m.from_side, m.body, m.created_at, m.status, m.attachment_id, m.edited,
+             COALESCE(c.name, u.display_name) AS user_name
+      FROM npc_messages m
+      LEFT JOIN users u ON u.id = m.user_id
+      LEFT JOIN characters c ON c.user_id = u.id OR c.id = u.archived_character_id
+      ORDER BY m.created_at ASC
     `);
 
       reply.send({ messages: rows });

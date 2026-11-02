@@ -48,6 +48,7 @@ module.exports = async function (fastify, opts) {
         FROM domain_overlay_grants
         GROUP BY user_id
       ) g ON g.user_id = u.id
+      WHERE u.archived_character_id IS NULL
       ORDER BY (character_name IS NULL), character_name, u.display_name, u.email
     `, [req.user.id]);
       const users = rows.map(r => {

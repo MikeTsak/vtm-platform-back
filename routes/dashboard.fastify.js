@@ -1,6 +1,7 @@
 module.exports = async function (fastify, opts) {
   const pool = require('../db');
   const { getSetting } = require('../utils/settings');
+  const { characterAtSql } = require('../services/characterRetirement');
   const { authRequired } = require('../authMiddleware.fastify');
   const { log } = require('../logger');
   const { parseSheet } = require('../utils/sheet');
@@ -40,7 +41,7 @@ module.exports = async function (fastify, opts) {
       SELECT n.id, n.title, n.subtitle, n.type, n.theme, n.journalist_name, n.media_url, n.created_at, n.is_private,
              IF(n.type = 'announcement', COALESCE(np.name, c.name), NULL) AS char_name
       FROM news_entries n
-      LEFT JOIN characters c ON c.user_id = n.author_id
+      LEFT JOIN characters c ON c.id = ${characterAtSql('n.author_id', 'n.created_at')}
       LEFT JOIN npcs np ON np.id = n.npc_id
       WHERE (n.is_private = 0 OR ? = 'admin') AND n.theme != 'RUMOR'
       ORDER BY n.created_at DESC

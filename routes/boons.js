@@ -2,6 +2,8 @@
 //
 // The boon ledger: who owes what to whom. Court officers write, everyone reads.
 
+const { characterAtSql } = require('../services/characterRetirement');
+
 const BOON_SELECT_SQL = `
   SELECT b.*,
     CASE 
@@ -35,8 +37,8 @@ const BOON_SELECT_SQL = `
   FROM boons b
   LEFT JOIN users u_rec ON u_rec.id = b.recorded_by
   LEFT JOIN users u_res ON u_res.id = b.resolved_by
-  LEFT JOIN characters c_rec ON c_rec.user_id = u_rec.id
-  LEFT JOIN characters c_res ON c_res.user_id = u_res.id
+  LEFT JOIN characters c_rec ON c_rec.id = ${characterAtSql('u_rec.id', 'b.created_at')}
+  LEFT JOIN characters c_res ON c_res.id = ${characterAtSql('u_res.id', 'b.resolved_at')}
 `;
 
 module.exports = async function (fastify, opts) {
@@ -47,11 +49,15 @@ module.exports = async function (fastify, opts) {
   // GET /api/boons/entities (All logged-in users need this to resolve avatars)
   fastify.get('/api/boons/entities', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      const [characters] = await pool.query('SELECT id, user_id, name, clan FROM characters ORDER BY name ASC');
+      const [characters] = await pool.query('SELECT id, user_id, name, clan, avatar_url, avatar_url_thumb FROM characters ORDER BY name ASC');
       const [npcs] = await pool.query('SELECT id, name, clan FROM npcs ORDER BY name ASC');
 
-      // Using user_id for players because avatars are tied to users, not characters
-      const players = characters.map(c => ({ type: 'player', id: c.user_id, name: `${c.name} (${c.clan || 'Unknown'})` }));
+      // Using user_id for players because avatars are tied to users, not characters.
+      // A retired character has no account: it carries the portrait saved at retirement.
+      const players = characters.map(c => ({
+        type: 'player', id: c.user_id, name: `${c.name} (${c.clan || 'Unknown'})`,
+        ...(c.user_id ? {} : { avatar_url: c.avatar_url_thumb || c.avatar_url || null }),
+      }));
       const nonPlayers = npcs.map(n => ({ type: 'npc', id: n.id, name: `${n.name} (NPC)` }));
 
       reply.send({ entities: [...players, ...nonPlayers] });

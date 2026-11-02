@@ -170,7 +170,7 @@ module.exports = async function (fastify, opts) {
       if (images.length > MAX_IMAGES) return reply.status(400).send({ error: `At most ${MAX_IMAGES} images` });
       if (text.length > MAX_BODY_CHARS) return reply.status(400).send({ error: 'Note is too long' });
 
-      const [found] = await pool.query('SELECT id FROM users WHERE id IN (?)', [ids]);
+      const [found] = await pool.query('SELECT id FROM users WHERE id IN (?) AND archived_character_id IS NULL', [ids]);
       if (found.length !== ids.length) return reply.status(400).send({ error: 'Unknown recipient' });
 
       const storedBody = hasText ? text : null;

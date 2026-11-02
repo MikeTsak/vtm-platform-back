@@ -3,6 +3,7 @@
 // Helpers shared by the news and rumour routes.
 
 const discord = require('./discord');
+const { characterAtSql } = require('./characterRetirement');
 const { getSetting } = require('../utils/settings');
 
 const XML_ENTITIES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&apos;', '"': '&quot;' };
@@ -21,7 +22,7 @@ const NEWS_AUTHOR_COLUMNS = `
   IF(np.id IS NULL, c.image_url, np.image_url) as char_image`;
 const NEWS_AUTHOR_JOINS = `
   LEFT JOIN users u ON n.author_id = u.id
-  LEFT JOIN characters c ON c.user_id = u.id
+  LEFT JOIN characters c ON c.id = ${characterAtSql('u.id', 'n.created_at')}
   LEFT JOIN npcs np ON np.id = n.npc_id`;
 
 // News articles are signed by journalist_name only; who posted them stays in

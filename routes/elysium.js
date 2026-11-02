@@ -12,6 +12,7 @@ const { recordVersion } = require('../services/elysiumHistory');
 const { sendDiscordChannelMessage } = require('../services/discord');
 const { sendElysiumInvitationToDiscord, getMondayBeforeEvent } = require('../services/elysiumDiscord');
 const { getSetting } = require('../utils/settings');
+const { characterAtSql } = require('../services/characterRetirement');
 
 const TEXT_FIELDS = { name: 160, location: 255, salutation: 255, body: 8000, dress_code: 160, signature: 160 };
 const DESIGN_SLUGS = ['cardPreset', 'bannerPreset', 'accent', 'ornament', 'font', 'seal'];
@@ -315,7 +316,7 @@ module.exports = async function (fastify, opts) {
         `SELECT v.*, u.display_name AS actor_user, COALESCE(c.name, u.display_name) AS actor_name
            FROM elysium_invitation_versions v
            LEFT JOIN users u ON u.id = v.actor_id
-           LEFT JOIN characters c ON c.id = (SELECT MIN(id) FROM characters WHERE user_id = v.actor_id)
+           LEFT JOIN characters c ON c.id = ${characterAtSql('v.actor_id', 'v.created_at')}
           WHERE v.event_id = ? ORDER BY v.id ASC`,
         [eventId]
       );
@@ -326,7 +327,7 @@ module.exports = async function (fastify, opts) {
                 c.id AS character_id, c.name AS character_name, c.clan
            FROM elysium_invitation_reads r
            JOIN users u ON u.id = r.user_id
-           LEFT JOIN characters c ON c.id = (SELECT MIN(id) FROM characters WHERE user_id = r.user_id)
+           LEFT JOIN characters c ON c.id = ${characterAtSql('r.user_id', 'r.read_at')}
           WHERE r.event_id = ? ORDER BY r.read_at ASC`,
         [eventId]
       );

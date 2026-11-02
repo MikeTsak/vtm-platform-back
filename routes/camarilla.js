@@ -5,6 +5,11 @@
 const { MAIN_COURT, parseTitles, getCourtContext } = require('../services/courtOffices');
 const { parseSheet } = require('../utils/sheet');
 
+// A retired character (no account playing it) stays on the court roster with
+// its fate: the dead, the departed, the missing, the exiled, the hunted. One
+// retired with no fate flag is left off, or it would read as a living member.
+const RETIRED_WITH_FATE = '(c.is_deceased = 1 OR c.is_left = 1 OR c.is_missing = 1 OR c.is_exiled = 1 OR c.is_bloodhunted = 1)';
+
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin } = opts;
 
@@ -22,7 +27,7 @@ module.exports = async function (fastify, opts) {
               c.sheet
        FROM characters c
        LEFT JOIN users u ON c.user_id = u.id
-       WHERE c.user_id IS NOT NULL
+       WHERE (c.user_id IS NOT NULL OR ${RETIRED_WITH_FATE})
          AND (c.is_bloodhunted = 1 OR c.is_deceased = 1 OR c.is_missing = 1 OR c.sheet IS NULL OR (JSON_EXTRACT(c.sheet, '$.is_active') = true OR JSON_UNQUOTE(JSON_EXTRACT(c.sheet, '$.is_active')) IN ('true', '1')))`
       );
       const [npcs] = await pool.query(
@@ -78,7 +83,7 @@ module.exports = async function (fastify, opts) {
               c.sheet
        FROM characters c
        LEFT JOIN users u ON c.user_id = u.id
-       WHERE c.user_id IS NOT NULL
+       WHERE (c.user_id IS NOT NULL OR ${RETIRED_WITH_FATE})
          AND (c.is_bloodhunted = 1 OR c.is_deceased = 1 OR c.is_missing = 1 OR c.sheet IS NULL OR (JSON_EXTRACT(c.sheet, '$.is_active') = true OR JSON_UNQUOTE(JSON_EXTRACT(c.sheet, '$.is_active')) IN ('true', '1')))`
       );
       const [npcs] = await pool.query(

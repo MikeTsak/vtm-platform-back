@@ -8,6 +8,7 @@
 const { getCourtContext, requireCapability, signingOffice, getOffices, CAN } = require('../services/courtOffices');
 const { expireBloodHunts, setBloodhuntFlag, pushEveryone, pushOfficeHolders } = require('../services/bloodHunts');
 const { broadcastDiscordAnnouncement } = require('../services/discord');
+const { characterAtSql } = require('../services/characterRetirement');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin } = opts;
@@ -19,9 +20,9 @@ module.exports = async function (fastify, opts) {
            ur.role AS ratified_by_role
       FROM blood_hunts h
       LEFT JOIN users up ON up.id = h.proposed_by
-      LEFT JOIN characters cp ON cp.id = (SELECT MIN(id) FROM characters WHERE user_id = h.proposed_by)
+      LEFT JOIN characters cp ON cp.id = ${characterAtSql('h.proposed_by', 'h.created_at')}
       LEFT JOIN users ur ON ur.id = h.ratified_by
-      LEFT JOIN characters cr ON cr.id = (SELECT MIN(id) FROM characters WHERE user_id = h.ratified_by)`;
+      LEFT JOIN characters cr ON cr.id = ${characterAtSql('h.ratified_by', 'h.ratified_at')}`;
 
   const parseExpiry = (v) => {
     if (v === undefined) return undefined;
@@ -219,7 +220,7 @@ module.exports = async function (fastify, opts) {
       `SELECT w.*, COALESCE(c.name, u.display_name) AS posted_by_name
          FROM court_wanted w
          LEFT JOIN users u ON u.id = w.posted_by
-         LEFT JOIN characters c ON c.id = (SELECT MIN(id) FROM characters WHERE user_id = w.posted_by)
+         LEFT JOIN characters c ON c.id = ${characterAtSql('w.posted_by', 'w.created_at')}
         ORDER BY w.created_at DESC`
     );
     reply.send({ wanted });
@@ -232,7 +233,7 @@ module.exports = async function (fastify, opts) {
       `SELECT w.*, COALESCE(c.name, u.display_name) AS posted_by_name
          FROM court_wanted w
          LEFT JOIN users u ON u.id = w.posted_by
-         LEFT JOIN characters c ON c.id = (SELECT MIN(id) FROM characters WHERE user_id = w.posted_by)
+         LEFT JOIN characters c ON c.id = ${characterAtSql('w.posted_by', 'w.created_at')}
         WHERE w.closed_at IS NULL
         ORDER BY w.created_at DESC`
     );
@@ -283,7 +284,7 @@ module.exports = async function (fastify, opts) {
       `SELECT w.*, COALESCE(c.name, u.display_name) AS posted_by_name
          FROM court_wanted w
          LEFT JOIN users u ON u.id = w.posted_by
-         LEFT JOIN characters c ON c.id = (SELECT MIN(id) FROM characters WHERE user_id = w.posted_by)
+         LEFT JOIN characters c ON c.id = ${characterAtSql('w.posted_by', 'w.created_at')}
         WHERE w.id=? AND w.closed_at IS NULL`, [req.params.id]);
         
     if (!wanted) return reply.status(404).send({ error: 'No active wanted notice' });
@@ -348,7 +349,7 @@ module.exports = async function (fastify, opts) {
                COALESCE(cp.name, up.display_name) AS updated_by_name
           FROM court_ghoul_registry r
           LEFT JOIN users up ON up.id = r.updated_by
-          LEFT JOIN characters cp ON cp.id = (SELECT MIN(id) FROM characters WHERE user_id = r.updated_by)
+          LEFT JOIN characters cp ON cp.id = ${characterAtSql('r.updated_by', 'r.updated_at')}
          ORDER BY r.updated_at DESC
       `);
       reply.send({ entries: rows });
@@ -397,7 +398,7 @@ module.exports = async function (fastify, opts) {
                COALESCE(cp.name, up.display_name) AS updated_by_name
           FROM court_ghoul_registry r
           LEFT JOIN users up ON up.id = r.updated_by
-          LEFT JOIN characters cp ON cp.id = (SELECT MIN(id) FROM characters WHERE user_id = r.updated_by)
+          LEFT JOIN characters cp ON cp.id = ${characterAtSql('r.updated_by', 'r.updated_at')}
          WHERE r.target_type = ? AND r.target_id = ?
       `, [targetType, numId]);
 
