@@ -44,18 +44,21 @@ test('players cannot create items; admin can, and mechanics hide until researche
   expect((await call(admin, 'POST', '/api/admin/inventory', { name: 'x', item_type: 'Spaceship' })).statusCode).toBe(400);
   expect((await call(admin, 'POST', '/api/admin/inventory', { name: 'x', character_id: 999999 })).statusCode).toBe(400);
 
-  const res = await call(admin, 'POST', '/api/admin/inventory', { name: 'Bullets', character_id: giverChar, quantity: 10, mechanic_notes: '+1 dmg', item_type: 'Weapon' });
+  const res = await call(admin, 'POST', '/api/admin/inventory', { name: 'Bullets', character_id: giverChar, quantity: 10, mechanic_notes: '+1 dmg', st_notes: 'cursed', item_type: 'Weapon' });
   expect(res.statusCode).toBe(201);
   const { item } = json(res);
+  expect(item.st_notes).toBe('cursed'); // the ST sees it
   let [mine] = await inv(giver, giverChar);
   expect(mine.mechanic_notes).toBeNull();
   expect(mine).not.toHaveProperty('claim_code');
+  expect(mine).not.toHaveProperty('st_notes');
   expect((await call(taker, 'GET', `/api/characters/${giverChar}/inventory`)).statusCode).toBe(403);
   expect((await call(taker, 'PUT', `/api/characters/${giverChar}/inventory/${item.id}/notes`, { player_notes: 'mine now' })).statusCode).toBe(403);
 
   await call(admin, 'PUT', `/api/admin/inventory/${item.id}`, { researched: true });
   [mine] = await inv(giver, giverChar);
   expect(mine.mechanic_notes).toBe('+1 dmg');
+  expect(mine).not.toHaveProperty('st_notes'); // still hidden once researched
   expect(mine.name).toBe('Bullets'); // partial PUT left the rest alone
 });
 
@@ -184,4 +187,21 @@ test('world items: once goes to the first scanner, copies give one each', async 
   expect((await scan(giver, 'nope')).statusCode).toBe(404);
   expect((await scan(giver, '')).statusCode).toBe(400);
   expect((await scan(giver, 'x'.repeat(65))).statusCode).toBe(400);
+});
+
+test('admin can give an item straight to a character; copies stay in the world', async () => {
+  const { item: lamp } = json(await call(admin, 'POST', '/api/admin/inventory', { name: 'Lamp' }));
+  expect((await call(giver, 'POST', `/api/admin/inventory/${lamp.id}/give`, { character_id: takerChar })).statusCode).toBe(403);
+  expect((await call(admin, 'POST', `/api/admin/inventory/${lamp.id}/give`, { character_id: 999999 })).statusCode).toBe(400);
+  expect((await call(admin, 'POST', `/api/admin/inventory/${lamp.id}/give`, { character_id: takerChar })).statusCode).toBe(200);
+  expect((await inv(taker, takerChar)).find(i => i.id === lamp.id)).toBeTruthy();
+  expect((await call(admin, 'POST', `/api/admin/inventory/${lamp.id}/give`, { character_id: takerChar })).statusCode).toBe(409);
+  await call(admin, 'POST', `/api/admin/inventory/${lamp.id}/give`, { character_id: giverChar }); // moves on to someone else
+  expect((await inv(taker, takerChar)).find(i => i.id === lamp.id)).toBeUndefined();
+
+  const { item: flyer } = json(await call(admin, 'POST', '/api/admin/inventory', { name: 'Handout', claim_copies: true }));
+  const res = json(await call(admin, 'POST', `/api/admin/inventory/${flyer.id}/give`, { character_id: takerChar }));
+  expect(res.item.id).not.toBe(flyer.id);
+  const all = json(await call(admin, 'GET', '/api/admin/inventory')).items;
+  expect(all.find(i => i.id === flyer.id).character_id).toBeNull();
 });

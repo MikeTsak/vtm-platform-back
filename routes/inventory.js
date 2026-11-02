@@ -11,14 +11,15 @@
 //
 // Research: until an item is `researched`, players see what it is (name,
 // description, picture) but not what it does — mechanic_notes is stripped
-// server-side. player_notes belongs to the holder.
+// server-side. player_notes belongs to the holder. st_notes is Storyteller-only:
+// forPlayer drops it from every player response, researched or not.
 
 const crypto = require('crypto');
 const { isAdmin, userOwnsCharacter } = require('../services/guards');
 
 const { IMAGE_BODY_LIMIT } = require('../services/guards'); // admin item create/edit post the image as a data URL
 // Mirrors the enum on inventory_items.item_type.
-const ITEM_TYPES = ['Relic', 'Artifact', 'Blood Magic', 'Weapon', 'Armor', 'Mundane'];
+const ITEM_TYPES = ['Relic', 'Artifact', 'Blood Magic', 'Magic Item', 'Weapon', 'Armor', 'Mundane'];
 const TRANSFER_MINUTES = 10;
 const CONFIRM_MINUTES = 5; // time the giver has to confirm once someone has scanned
 const MAX_TEXT = 20000;
@@ -33,7 +34,7 @@ const text = (v) => (v == null || v === '' ? null : String(v).slice(0, MAX_TEXT)
 
 // What a player is allowed to see of an item they hold.
 function forPlayer(item) {
-  const { claim_code, claim_copies, source_item_id, granted_by, ...rest } = item;
+  const { claim_code, claim_copies, source_item_id, granted_by, st_notes, ...rest } = item;
   if (!rest.researched) rest.mechanic_notes = null;
   return rest;
 }
@@ -92,8 +93,8 @@ module.exports = async function (fastify, opts) {
   // copied: a copy a player holds gets none, one sent to the world a fresh one.
   const copyItem = (conn, srcId, { characterId, quantity, playerNotes, sourceItemId, claimCode = null }) => conn.query(
     `INSERT INTO inventory_items
-       (character_id, name, item_type, description, mechanic_notes, player_notes, quantity, image, researched, granted_by, source_item_id, claim_code)
-     SELECT ?, name, item_type, description, mechanic_notes, ?, ?, image, researched, granted_by, ?, ?
+       (character_id, name, item_type, description, mechanic_notes, st_notes, player_notes, quantity, image, researched, granted_by, source_item_id, claim_code)
+     SELECT ?, name, item_type, description, mechanic_notes, st_notes, ?, ?, image, researched, granted_by, ?, ?
      FROM inventory_items WHERE id = ?`,
     [characterId, playerNotes, quantity, sourceItemId, claimCode, srcId]
   );
@@ -415,7 +416,7 @@ module.exports = async function (fastify, opts) {
       if (!ITEM_TYPES.includes(body.item_type)) throw httpError(400, `Invalid item type. Expected one of: ${ITEM_TYPES.join(', ')}`);
       fields.item_type = body.item_type;
     }
-    for (const k of ['description', 'mechanic_notes', 'player_notes']) if (has(k)) fields[k] = text(body[k]);
+    for (const k of ['description', 'mechanic_notes', 'st_notes', 'player_notes']) if (has(k)) fields[k] = text(body[k]);
     if (has('quantity')) fields.quantity = normaliseQty(body.quantity);
     if (has('researched')) fields.researched = body.researched ? 1 : 0;
     if (has('claim_copies')) fields.claim_copies = body.claim_copies ? 1 : 0;
@@ -459,6 +460,36 @@ module.exports = async function (fastify, opts) {
       reply.send({ item });
     } catch (e) {
       fail(reply, e, 'update item');
+    }
+  });
+
+  // Hand an item straight to a character, no QR. A "copies" world item stays out
+  // in the world and the character gets their own copy; anything else moves
+  // (the previous holder's private notes and any live Pass QR are dropped).
+  fastify.post('/api/admin/inventory/:id/give', { preHandler: adminOnly }, async (req, reply) => {
+    try {
+      const charId = toId(req.body?.character_id);
+      if (!charId) return reply.status(400).send({ error: 'Pick a character.' });
+      const itemId = Number(req.params.id);
+      const out = await inTransaction(async (conn) => {
+        const [[c]] = await conn.query('SELECT id FROM characters WHERE id = ?', [charId]);
+        if (!c) throw httpError(400, 'Character not found');
+        const [[item]] = await conn.query('SELECT * FROM inventory_items WHERE id = ? FOR UPDATE', [itemId]);
+        if (!item) throw httpError(404, 'Item not found');
+        if (Number(item.character_id) === charId) throw httpError(409, 'They already have this item.');
+        if (item.character_id == null && item.claim_copies) {
+          const [ins] = await copyItem(conn, item.id, { characterId: charId, quantity: item.quantity || 1, playerNotes: null, sourceItemId: item.id });
+          return ins.insertId;
+        }
+        await conn.query('UPDATE inventory_items SET character_id = ?, player_notes = NULL WHERE id = ?', [charId, item.id]);
+        await conn.query("UPDATE inventory_transfers SET status = 'cancelled' WHERE item_id = ? AND status IN ('open','pending')", [item.id]);
+        return item.id;
+      });
+      log.adm('Inventory item given', { admin_id: req.user.id, item_id: itemId, character_id: charId });
+      const [[item]] = await pool.query('SELECT * FROM inventory_items WHERE id = ?', [out]);
+      reply.send({ item });
+    } catch (e) {
+      fail(reply, e, 'give item');
     }
   });
 
