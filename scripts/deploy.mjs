@@ -14,6 +14,8 @@
  *
  * Usage:
  *   npm run deploy            Upload changed files, bump patch version, restart server, verify health
+ *   npm run deploy:fast       Same, minus the pre-deploy DB backup and swagger regen (the
+ *                             nightly backup still runs; use plain deploy for migrations)
  *   npm run deploy:dry        Dry run preview (upload nothing, no bump, no restart)
  *   npm run deploy:force      Re-upload all candidate files regardless of cached hash
  *   npm run deploy:restart    Restart the production server directly and verify health

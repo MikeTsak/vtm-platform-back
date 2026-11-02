@@ -1,7 +1,7 @@
 const { getSetting } = require('../utils/settings');
 const { attachFeeding } = require('../services/ghoulFeeding');
 const { checkGhoulGift } = require('../utils/ghoulBlood');
-const { withSetOnceDates, notifyNewDates, RETAINER_DATES, CHARACTER_DATES } = require('../utils/sheetDates');
+const { withSetOnceDates, notifyNewDates, newDatesMessage, RETAINER_DATES, CHARACTER_DATES } = require('../utils/sheetDates');
 const { keepTrackers, ghoulTrackers } = require('../services/ghoulTrackers');
 const { DEFAULT_DISABLED_CLANS } = require('../utils/clans');
 const { isAdmin, userOwnsCharacter } = require('../services/guards');
@@ -175,7 +175,8 @@ module.exports = async function (fastify, opts) {
       }
       if (current) await retireCharacter(conn, current.id);
 
-      let sheetObj = parseSheet(sheet);
+      // Birth and Embrace dates chosen in the creator are set once (utils/sheetDates.js).
+      const sheetObj = withSetOnceDates({}, parseSheet(sheet), CHARACTER_DATES);
       sheetObj.is_active = false;
       delete sheetObj.allow_reset; // only a Storyteller grants re-rolls
 
@@ -183,6 +184,12 @@ module.exports = async function (fastify, opts) {
         'INSERT INTO characters (user_id, name, clan, sheet, xp) VALUES (?,?,?,?,?)',
         [req.user.id, name, clan, JSON.stringify(sheetObj), 50]
       );
+      if (clan === 'Nosferatu') {
+        await conn.query(
+          'INSERT IGNORE INTO domain_overlay_grants (user_id, overlay_key, granted_by) VALUES (?, ?, ?)',
+          [req.user.id, 'necropolis_old', null]
+        );
+      }
       await conn.commit();
 
       const [rows] = await pool.query('SELECT * FROM characters WHERE id=?', [r.insertId]);
@@ -190,7 +197,8 @@ module.exports = async function (fastify, opts) {
       if (ch) ch.sheet = parseSheet(ch.sheet);
       if (current) log.char('Out-of-play character retired', { id: current.id, user_id: req.user.id });
       log.char('Character created', { id: r.insertId, user_id: req.user.id, name, clan, xp: ch?.xp });
-      broadcastNtfyAlert(`**${name}** (Clan: **${clan}**) was created by ${req.user.display_name} (${req.user.id}).`, { title: 'New Character', tags: 'vampire', priority: 'default' });
+      const dates = newDatesMessage({}, sheetObj, CHARACTER_DATES, { who: name });
+      broadcastNtfyAlert(`**${name}** (Clan: **${clan}**) was created by ${req.user.display_name} (${req.user.id}).${dates ? `\n${dates}` : ''}`, { title: 'New Character', tags: 'vampire', priority: 'default' });
       reply.send({ character: ch });
     } catch (e) {
       await conn.rollback().catch(() => {});
@@ -635,7 +643,8 @@ module.exports = async function (fastify, opts) {
         await pool.query('DELETE FROM xp_log WHERE character_id=?', [charId]);
       } catch (e) { /* ignore if table missing */ }
 
-      let sheetObj = parseSheet(sheet);
+      // A re-roll starts over, life dates included: set once from here.
+      const sheetObj = withSetOnceDates({}, parseSheet(sheet), CHARACTER_DATES);
       sheetObj.is_active = false;
       delete sheetObj.allow_reset; // one re-roll per grant
 
@@ -645,6 +654,14 @@ module.exports = async function (fastify, opts) {
         'UPDATE characters SET name=?, clan=?, sheet=?, xp=50 WHERE id=?',
         [name, clan, rebuildSheetJson, charId]
       );
+      if (clan === 'Nosferatu') {
+        try {
+          await pool.query(
+            'INSERT IGNORE INTO domain_overlay_grants (user_id, overlay_key, granted_by) VALUES (?, ?, ?)',
+            [req.user.id, 'necropolis_old', null]
+          );
+        } catch (_) { /* non-fatal */ }
+      }
       try {
         await pool.query(
           'INSERT INTO character_sheet_versions (character_id, editor_id, sheet, change_summary) VALUES (?, ?, ?, ?)',
@@ -660,6 +677,7 @@ module.exports = async function (fastify, opts) {
       if (ch) ch.sheet = parseSheet(ch.sheet);
 
       log.char('Character rebuilt', { id: charId, user_id: req.user.id, name, clan });
+      notifyNewDates(opts, req.user.id, {}, sheetObj, CHARACTER_DATES);
       reply.send({ character: ch });
     } catch (e) {
       log.err('Failed to rebuild character', e);

@@ -1,12 +1,13 @@
 {
   "name": "back",
-  "version": "1.0.266",
+  "version": "1.0.270",
   "private": true,
   "scripts": {
     "dev": "node swagger-autogen.js && nodemon server.fastify.js",
     "dv": "npm run dev",
     "start": "node swagger-autogen.js && node server.fastify.js",
     "deploy": "node scripts/deploy.mjs",
+    "deploy:fast": "node scripts/deploy.mjs --no-backup --no-swagger",
     "deploy:dry": "node scripts/deploy.mjs --dry-run",
     "deploy:force": "node scripts/deploy.mjs --force",
     "deploy:restart": "node scripts/deploy.mjs --restart-only",
