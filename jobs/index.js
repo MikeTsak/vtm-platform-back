@@ -229,7 +229,7 @@ const JOBS = [
     // (default 7), since images uploaded since the last full dump exist nowhere
     // else. Full dumps are ~media-sized; set it to 0 if the disk quota can't take two.
     name: 'backup', label: 'Database backup', cron: process.env.BACKUP_SCHEDULE_CRON || '30 3 * * *',
-    boot: 2 * 60 * 1000, maxGapMin: DAY_MIN + 180, enabled: backupEnabled, alertOnFailure: true,
+    boot: false, maxGapMin: DAY_MIN + 180, enabled: backupEnabled, alertOnFailure: true,
     async run() {
       const { backup, listBackups } = require('../scripts/backup-db');
       const all = await listBackups();
@@ -343,19 +343,24 @@ function startJobs(fastify) {
     return;
   }
 
-  let bootChain = Promise.resolve(); // runJob never throws, so the chain never breaks
   for (const job of JOBS) {
     if (job.enabled === false) {
       log.info(`Job ${job.name} is disabled.`);
       continue;
     }
     if (job.cron) cron.schedule(job.cron, () => runJob(job, ctx), { timezone: TZ });
-    // Boot catch-ups run ONE AT A TIME: each running job holds a pool connection
-    // for its lock and needs another for its work, so nine at once could take the
-    // whole pool (5) and leave logins queued behind them.
-    if (job.boot === true) bootChain = bootChain.then(() => runJob(job, ctx));
-    else if (typeof job.boot === 'number') setTimeout(() => runJob(job, ctx), job.boot).unref();
   }
+
+  // Boot catch-ups run ONE AT A TIME with a 30s warmup delay so the server can
+  // warm up, accept incoming traffic, and establish socket connections before maintenance jobs run.
+  setTimeout(() => {
+    let bootChain = Promise.resolve();
+    for (const job of JOBS) {
+      if (job.enabled === false) continue;
+      if (job.boot === true) bootChain = bootChain.then(() => runJob(job, ctx));
+      else if (typeof job.boot === 'number') setTimeout(() => runJob(job, ctx), job.boot).unref();
+    }
+  }, 30000).unref();
 
   // Comms switch: the calendar opens and closes comms on its own, and an
   // emergency override expires at the calendar's next change. Every process

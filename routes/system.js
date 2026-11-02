@@ -27,13 +27,26 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/health', async (req, reply) => {
     try {
       // Quick DB ping (remove if you don't want DB coupled to health)
-      const [rows] = await pool.query('SELECT 1 AS ok');
+      let rows;
+      try {
+        const ping = Promise.race([
+          pool.query('SELECT 1 AS ok'),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000)),
+        ]);
+        [rows] = await ping;
+      } catch {
+        rows = [];
+      }
       const dbOk = rows?.[0]?.ok === 1;
 
       let wikiDbOk = false;
       if (wikiDb) {
         try {
-          const [wRows] = await wikiDb.query('SELECT 1 AS ok');
+          const pingWiki = Promise.race([
+          wikiDb.query('SELECT 1 AS ok'),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000)),
+        ]);
+        const [wRows] = await pingWiki;
           wikiDbOk = wRows?.[0]?.ok === 1;
         } catch {
           wikiDbOk = false;
@@ -97,7 +110,16 @@ module.exports = async function (fastify, opts) {
     let dbLatencyMs = 0;
     try {
       const startDb = Date.now();
-      const [rows] = await pool.query('SELECT 1 AS ok');
+      let rows;
+      try {
+        const ping = Promise.race([
+          pool.query('SELECT 1 AS ok'),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000)),
+        ]);
+        [rows] = await ping;
+      } catch {
+        rows = [];
+      }
       dbLatencyMs = Date.now() - startDb;
       dbStatus = rows?.[0]?.ok === 1 ? 'OK' : 'DOWN';
     } catch (e) {
@@ -111,7 +133,11 @@ module.exports = async function (fastify, opts) {
     if (wikiDb) {
       try {
         const startWikiDb = Date.now();
-        const [wRows] = await wikiDb.query('SELECT 1 AS ok');
+        const pingWiki = Promise.race([
+          wikiDb.query('SELECT 1 AS ok'),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000)),
+        ]);
+        const [wRows] = await pingWiki;
         wikiDbLatencyMs = Date.now() - startWikiDb;
         wikiDbStatus = wRows?.[0]?.ok === 1 ? 'OK' : 'DOWN';
       } catch (e) {
@@ -135,7 +161,8 @@ module.exports = async function (fastify, opts) {
         if (!global.cachedDiscordTag) {
           try {
             const discordRes = await fetch('https://discord.com/api/v10/users/@me', {
-              headers: { Authorization: `Bot ${process.env.DISCORD_BOT_TOKEN}` }
+              headers: { Authorization: `Bot ${process.env.DISCORD_BOT_TOKEN}` },
+              signal: AbortSignal.timeout(3000)
             });
             if (discordRes.ok) {
               const data = await discordRes.json();

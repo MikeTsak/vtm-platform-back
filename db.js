@@ -15,7 +15,7 @@ const pool = mysql.createPool({
   // Passenger process (each has its own pool), so total = processes x this.
   // Requests beyond the limit queue here instead of failing with
   // ER_TOO_MANY_USER_CONNECTIONS.
-  connectionLimit: Number(process.env.DB_POOL_SIZE) || 5,
+  connectionLimit: Number(process.env.DB_POOL_SIZE) || 4,
   // Close idle connections so quiet or stale processes (e.g. old ones still
   // draining after a restart) don't sit on the user's quota. mysql2 defaults
   // maxIdle to connectionLimit, i.e. never closes them.
@@ -50,14 +50,16 @@ for (const method of ['query', 'execute', 'getConnection']) {
 
 // Improved Error Handling
 pool.on('connection', (connection) => {
-  // Log connection acquire/release for debugging
-  connection.on('acquire', () => {
-    log.debug('Connection acquired from pool');
-  });
+  // Log connection acquire/release for debugging only when explicitly enabled
+  if (process.env.LOG_LEVEL === 'debug') {
+    connection.on('acquire', () => {
+      log.debug('Connection acquired from pool');
+    });
 
-  connection.on('release', () => {
-    log.debug('Connection released to pool');
-  });
+    connection.on('release', () => {
+      log.debug('Connection released to pool');
+    });
+  }
 
   // Check for errors on individual connections
   connection.on('error', (err) => {

@@ -134,7 +134,7 @@ async function backup({ quiet = false, skipMedia = false, onProgress } = {}) {
 
   const suffix = skipMedia ? '-nomedia' : '';
   const outFile = path.join(dir, `${dbName}-${stamp()}${suffix}.sql.gz`);
-  const gzip = zlib.createGzip({ level: 9 });
+  const gzip = zlib.createGzip({ level: 6 });
   const out = fs.createWriteStream(outFile);
   gzip.pipe(out);
 

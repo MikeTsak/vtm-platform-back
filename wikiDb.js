@@ -20,7 +20,7 @@ const wikiPool = mysql.createPool({
   waitForConnections: true,
   // Low traffic; small and idle-closing so it never competes for the
   // max_user_connections quota (see db.js) if it shares the DB user.
-  connectionLimit: Number(process.env.WIKI_DB_POOL_SIZE) || 3,
+  connectionLimit: Number(process.env.WIKI_DB_POOL_SIZE) || 2,
   maxIdle: 0,
   idleTimeout: 60000,
   queueLimit: 0,
@@ -28,13 +28,15 @@ const wikiPool = mysql.createPool({
 require('./utils/unrefIdleSweeper')(wikiPool);
 
 wikiPool.on('connection', (connection) => {
-  connection.on('acquire', () => {
-    log.debug('Wiki DB connection acquired from pool');
-  });
+  if (process.env.LOG_LEVEL === 'debug') {
+    connection.on('acquire', () => {
+      log.debug('Wiki DB connection acquired from pool');
+    });
 
-  connection.on('release', () => {
-    log.debug('Wiki DB connection released to pool');
-  });
+    connection.on('release', () => {
+      log.debug('Wiki DB connection released to pool');
+    });
+  }
 
   connection.on('error', (err) => {
     if (err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ECONNRESET') {
