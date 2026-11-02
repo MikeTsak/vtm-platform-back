@@ -15,6 +15,7 @@
 // forPlayer drops it from every player response, researched or not.
 
 const crypto = require('crypto');
+const axios = require('axios');
 const { isAdmin, userOwnsCharacter } = require('../services/guards');
 
 const { IMAGE_BODY_LIMIT } = require('../services/guards'); // admin item create/edit post the image as a data URL
@@ -391,14 +392,48 @@ module.exports = async function (fastify, opts) {
   fastify.get('/api/admin/inventory', { preHandler: adminOnly }, async (req, reply) => {
     try {
       const [items] = await pool.query(
-        `SELECT i.*, c.name AS character_name,
+        `SELECT i.*, c.name AS character_name, c.clan AS character_clan,
+                c.avatar_url_thumb AS character_avatar_thumb,
+                c.avatar_url AS character_avatar,
+                COALESCE(c.user_id, c.retired_user_id) AS user_id,
+                u.display_name AS user_name, u.email AS user_email,
+                COALESCE(u.avatar_url_thumb, u.avatar_url) AS user_avatar,
                 (SELECT COUNT(*) FROM inventory_items x WHERE x.source_item_id = i.id AND x.character_id IS NOT NULL) AS copies_claimed
-         FROM inventory_items i LEFT JOIN characters c ON c.id = i.character_id
+         FROM inventory_items i
+         LEFT JOIN characters c ON c.id = i.character_id
+         LEFT JOIN users u ON u.id = COALESCE(c.user_id, c.retired_user_id)
          ORDER BY i.character_id IS NOT NULL, i.updated_at DESC`
       );
       reply.send({ items });
     } catch (e) {
       fail(reply, e, 'fetch items');
+    }
+  });
+
+  // Admin image proxy: fetches remote CDN images server-side to bypass browser CORS restrictions during report generation and canvas export
+  fastify.get('/api/admin/inventory/image-proxy', { preHandler: adminOnly }, async (req, reply) => {
+    let url;
+    try {
+      url = new URL(String(req.query?.u || ''));
+    } catch {
+      return reply.status(400).send({ error: 'Invalid image address' });
+    }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+      return reply.status(400).send({ error: 'Invalid image protocol' });
+    }
+    try {
+      const r = await axios.get(url.href, {
+        responseType: 'arraybuffer',
+        timeout: 15000,
+        maxContentLength: 15 * 1024 * 1024,
+        maxRedirects: 3,
+        validateStatus: (s) => s === 200,
+      });
+      const type = String(r.headers['content-type'] || 'image/jpeg');
+      reply.header('Content-Type', type).header('Cache-Control', 'private, max-age=86400').send(Buffer.from(r.data));
+    } catch (e) {
+      log.warn('Inventory image proxy failed', { message: e.message });
+      reply.status(502).send({ error: 'The image could not be fetched' });
     }
   });
 

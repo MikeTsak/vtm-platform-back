@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Erebus Portal API",
-    "version": "1.0.276",
+    "version": "1.0.279",
     "description": "API documentation for the Vampire: The Masquerade RPG portal."
   },
   "servers": [
@@ -950,6 +950,19 @@
         "responses": {
           "201": {
             "description": "Created"
+          }
+        }
+      }
+    },
+    "/api/admin/inventory/image-proxy": {
+      "get": {
+        "description": "",
+        "responses": {
+          "400": {
+            "description": "Bad Request"
+          },
+          "502": {
+            "description": "Bad Gateway"
           }
         }
       }
