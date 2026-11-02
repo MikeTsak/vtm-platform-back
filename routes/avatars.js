@@ -3,6 +3,7 @@
 // Avatar read/write for every portrait-bearing entity (users, NPCs, retainers,
 // email identities). Uploads are resized and pushed to the image CDN.
 
+const crypto = require('crypto');
 const axios = require('axios');
 const { isOwnerOrAdmin } = require('../services/guards');
 
@@ -24,20 +25,39 @@ const { isOwnerOrAdmin } = require('../services/guards');
 // never load on my phone" bug. A real failure status lets the client's own
 // retry wrapper (fetchAvatarWithRetry) try again through the same working
 // channel instead of being funneled into a dead end every time.
-async function sendAvatar(reply, log, targetUrl, wantRaw) {
-  if (wantRaw) {
+//
+// Caching: /api/<entity>/:id/avatar is a stable URL whose target changes on
+// every upload (the CDN names each upload uniquely). It used to be cached for a
+// day, so after a new upload the browser kept showing the old portrait, and
+// only on the variants it had already cached (full vs ?size=thumb vs ?raw=1):
+// the home page and the sheet disagreed, players re-uploaded, and everyone else
+// saw the old face for up to 24 h. Now the browser revalidates every time and
+// gets a 304 while the target is unchanged; the CDN image itself (immutable,
+// unique URL) stays cached normally.
+async function sendAvatar(req, reply, log, targetUrl) {
+  const etag = `"${crypto.createHash('sha1').update(targetUrl).digest('base64url')}"`;
+  reply.header('Cache-Control', 'no-cache');
+  reply.header('ETag', etag);
+  if (req.headers['if-none-match'] === etag) return reply.status(304).send();
+
+  if (wantsRaw(req)) {
     try {
       const up = await axios.get(targetUrl, { responseType: 'arraybuffer', timeout: 10000 });
       reply.header('Content-Type', up.headers['content-type'] || 'image/webp');
-      reply.header('Cache-Control', 'public, max-age=86400');
       return reply.send(Buffer.from(up.data));
     } catch (err) {
       log.warn('Avatar raw proxy failed', { url: targetUrl, error: err.message });
       return reply.status(502).send('Avatar proxy failed');
     }
   }
-  reply.header('Cache-Control', 'public, max-age=86400');
   return reply.redirect(targetUrl);
+}
+
+// Legacy avatars still stored as bytes: same stale-cache problem, no ETag needed.
+function sendAvatarBlob(reply, getMimeType, blob) {
+  reply.header('Content-Type', getMimeType(blob));
+  reply.header('Cache-Control', 'no-cache');
+  return reply.send(blob);
 }
 
 const wantsRaw = (req) => req.query.raw === '1' || req.query.raw === 'true';
@@ -55,16 +75,9 @@ module.exports = async function (fastify, opts) {
           : (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) ? rows[0].avatar
             : null;
 
-      if (targetUrl) {
-        return sendAvatar(reply, log, targetUrl, wantsRaw(req));
-      }
-
+      if (targetUrl) return sendAvatar(req, reply, log, targetUrl);
       if (!rows[0].avatar) return reply.status(404).send('Avatar not found');
-
-      const mime = getMimeType(rows[0].avatar);
-      reply.header('Content-Type', mime);
-      reply.header('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
-      reply.send(rows[0].avatar);
+      return sendAvatarBlob(reply, getMimeType, rows[0].avatar);
     } catch (e) {
       log.err('NPC Avatar GET error', { message: e.message });
       reply.status(500).send({ error: 'Server error retrieving avatar.' });
@@ -116,23 +129,13 @@ module.exports = async function (fastify, opts) {
     try {
       const [rows] = await pool.query('SELECT avatar_url, avatar_url_thumb, avatar FROM retainers WHERE id = ?', [req.params.id]);
       if (rows.length === 0) return reply.status(404).send('No avatar found');
-      if (req.query.size === 'thumb' && rows[0].avatar_url_thumb) {
-        reply.header('Cache-Control', 'public, max-age=86400');
-        return reply.redirect(rows[0].avatar_url_thumb);
-      }
-      if (rows[0].avatar_url) {
-        reply.header('Cache-Control', 'public, max-age=86400');
-        return reply.redirect(rows[0].avatar_url);
-      }
+      const targetUrl = (req.query.size === 'thumb' && rows[0].avatar_url_thumb) ? rows[0].avatar_url_thumb
+        : rows[0].avatar_url ? rows[0].avatar_url
+          : (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) ? rows[0].avatar
+            : null;
+      if (targetUrl) return sendAvatar(req, reply, log, targetUrl);
       if (!rows[0].avatar) return reply.status(404).send('No avatar found');
-      if (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) {
-        reply.header('Cache-Control', 'public, max-age=86400');
-        return reply.redirect(rows[0].avatar);
-      }
-      const mime = getMimeType(rows[0].avatar);
-      reply.header('Content-Type', mime);
-      reply.header('Cache-Control', 'public, max-age=86400');
-      reply.send(rows[0].avatar);
+      return sendAvatarBlob(reply, getMimeType, rows[0].avatar);
     } catch (e) {
       log.err('Failed to get retainer avatar', { error: e.message });
       reply.status(500).send('Server Error');
@@ -204,11 +207,7 @@ module.exports = async function (fastify, opts) {
         : rows[0].avatar_url ? rows[0].avatar_url
           : null;
 
-      if (targetUrl) {
-        reply.header('Cache-Control', 'public, max-age=86400');
-        return reply.redirect(targetUrl);
-      }
-
+      if (targetUrl) return sendAvatar(req, reply, log, targetUrl);
       return reply.status(404).send('Avatar not found');
     } catch (err) {
       log.err('Identity avatar fetch error', err);
@@ -279,16 +278,9 @@ module.exports = async function (fastify, opts) {
           : (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) ? rows[0].avatar
             : null;
 
-      if (targetUrl) {
-        return sendAvatar(reply, log, targetUrl, wantsRaw(req));
-      }
-
+      if (targetUrl) return sendAvatar(req, reply, log, targetUrl);
       if (!rows[0].avatar) return reply.status(404).send('Avatar not found');
-
-      const mime = getMimeType(rows[0].avatar);
-      reply.header('Content-Type', mime);
-      reply.header('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
-      reply.send(rows[0].avatar);
+      return sendAvatarBlob(reply, getMimeType, rows[0].avatar);
     } catch (e) {
       log.err('Avatar GET error', { message: e.message });
       reply.status(500).send({ error: 'Server error retrieving avatar.' });
