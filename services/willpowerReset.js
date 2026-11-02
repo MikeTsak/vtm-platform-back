@@ -1,8 +1,8 @@
 // services/willpowerReset.js
 //
 // Willpower heals session to session: the day after a Modern Day event (any event that is not a
-// "Past Time" one, same rule as downtimes.js's next_modern_event) every character's Willpower damage,
-// Superficial and Aggravated, is cleared. The admin Calendar derives its "WP RESET" marker from the
+// "Past Time" one, same rule as downtimes.js's next_modern_event) every character restores Superficial
+// Willpower damage equal to Composure or Resolve (higher); Aggravated stays. The admin Calendar derives its "WP RESET" marker from the
 // same rule, so moving an event moves the reset.
 //
 // resetDueDay is pure. `willpower_reset_through` (the last event day handled) makes the daily cron
@@ -31,6 +31,14 @@ function resetDueDay(eventDays, today, through) {
   return !through && nextDay(due) !== today ? null : due;
 }
 
+// V5 rule: at the start of a session, restore Superficial Willpower damage equal to Composure or
+// Resolve (the higher). Aggravated Willpower damage is not touched. Returns the new Superficial value.
+function restoredSuperficial(sheet) {
+  const comp = Number(sheet.attributes?.Composure) || 1;
+  const reso = Number(sheet.attributes?.Resolve) || 1;
+  return Math.max(0, (Number(sheet.willpower?.superficial) || 0) - Math.max(comp, reso));
+}
+
 async function resetAllWillpower() {
   const [rows] = await pool.query("SELECT id FROM characters WHERE user_id IS NOT NULL AND sheet LIKE '%willpower%'");
   let reset = 0;
@@ -40,8 +48,8 @@ async function resetAllWillpower() {
       await conn.beginTransaction();
       const [[row]] = await conn.query('SELECT sheet FROM characters WHERE id=? FOR UPDATE', [id]);
       const sheet = parseSheet(row?.sheet);
-      if (Number(sheet.willpower?.superficial) || Number(sheet.willpower?.aggravated)) {
-        sheet.willpower = { ...sheet.willpower, superficial: 0, aggravated: 0 };
+      if (Number(sheet.willpower?.superficial) > 0) {
+        sheet.willpower = { ...sheet.willpower, superficial: restoredSuperficial(sheet) };
         await conn.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), id]);
         reset += 1;
       }
@@ -68,10 +76,14 @@ async function runWillpowerReset(now = new Date()) {
   return { day, reset };
 }
 
-module.exports = { runWillpowerReset, resetDueDay };
+module.exports = { runWillpowerReset, resetDueDay, restoredSuperficial };
 
 if (require.main === module) {
   const assert = require('assert');
+  const sh = (comp, reso, superficial) => ({ attributes: { Composure: comp, Resolve: reso }, willpower: { superficial } });
+  assert.strictEqual(restoredSuperficial(sh(2, 3, 5)), 2);  // heals the higher (3)
+  assert.strictEqual(restoredSuperficial(sh(3, 2, 2)), 0);  // never below 0
+
   assert.strictEqual(resetDueDay(['2026-10-10'], '2026-10-11', ''), '2026-10-10');
   assert.strictEqual(resetDueDay(['2026-10-10'], '2026-10-10', ''), null);        // event day itself
   assert.strictEqual(resetDueDay(['2026-10-10'], '2026-10-12', ''), null);        // first run: no retro reset

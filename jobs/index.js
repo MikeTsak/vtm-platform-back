@@ -267,12 +267,12 @@ const JOBS = [
     },
   },
   {
-    // Day after a Modern Day event: spent Willpower back to full. See services/willpowerReset.js.
+    // Day after a Modern Day event: Superficial Willpower damage restored by Composure or Resolve (higher). See services/willpowerReset.js.
     name: 'willpower-reset', label: 'Willpower reset', cron: '8 0 * * *', boot: true, maxGapMin: DAY_MIN + 120,
     async run() {
       const r = await runWillpowerReset();
       if (!r) return 'no event to reset after';
-      await broadcastNtfyAlert(`Willpower reset to full after the ${r.day} event.\n${r.reset} character(s) had spent Willpower restored.`, { title: 'Willpower Reset', tags: ['sparkles'] });
+      await broadcastNtfyAlert(`Willpower restored after the ${r.day} event (Superficial damage healed by Composure or Resolve, higher).\n${r.reset} character(s) had Willpower damage restored.`, { title: 'Willpower Reset', tags: ['sparkles'] });
       return `after ${r.day}: ${r.reset} character(s)`;
     },
   },

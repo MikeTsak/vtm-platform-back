@@ -1079,7 +1079,7 @@ module.exports = async function (fastify, opts) {
           const r = await feedGhoul(conn, { ghoul, feederId: char.id, cycleIndex, method: 'early' });
           if (r.error) { await conn.rollback(); stopped = r.error; break; }
           await conn.commit();
-          fed.push({ id: ghoul.id, name: ghoul.name, success: r.success, hungerAfter: r.hungerAfter });
+          fed.push({ id: ghoul.id, name: ghoul.name, success: r.success, dice: r.dice, hungerAfter: r.hungerAfter });
         } catch (err) {
           await conn.rollback().catch(() => {});
           if (err.code !== 'ER_DUP_ENTRY') throw err; // someone else fed it meanwhile

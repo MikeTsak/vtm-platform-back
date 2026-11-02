@@ -43,7 +43,18 @@ module.exports = {
       // A real table, not TEMPORARY: if the re-insert below fails, the kept history
       // survives the connection and can be restored by hand. Dropped only on success.
       const [[leftover]] = await conn.query("SHOW TABLES LIKE '_0072_app_settings_history'");
-      if (leftover) throw new Error('_0072_app_settings_history exists from a failed run: restore it into app_settings by hand, then drop it');
+      if (leftover) {
+        // A failed earlier run left its copy behind. The purge is all-or-nothing, and it
+        // removes the junk history along with the rest: if junk history is still here the
+        // purge never ran, the copy is a redundant snapshot, and this run rebuilds it. If
+        // none is left the purge DID run and the copy may be the only one: stop, by hand.
+        const [[{ n: junk }]] = await conn.query(
+          `SELECT COUNT(*) AS n FROM app_settings FOR SYSTEM_TIME ALL WHERE ROW_END < NOW(6) AND setting_key IN (${ph})`,
+          MOVED_KEYS
+        );
+        if (!junk) throw new Error('_0072_app_settings_history exists from a failed run and the purge already ran: restore it into app_settings by hand, then drop it');
+        await conn.query('DROP TABLE _0072_app_settings_history');
+      }
       await conn.query(
         `CREATE TABLE _0072_app_settings_history AS
            SELECT setting_key, setting_value, updated_at, ROW_START AS rs, ROW_END AS re
@@ -52,7 +63,15 @@ module.exports = {
         MOVED_KEYS
       );
       const [[{ n: keep }]] = await conn.query('SELECT COUNT(*) AS n FROM _0072_app_settings_history');
-      await conn.query('DELETE HISTORY FROM app_settings');
+      try {
+        await conn.query('DELETE HISTORY FROM app_settings');
+      } catch (e) {
+        // Refused (e.g. the DB user lacks the DELETE HISTORY privilege): nothing was deleted.
+        // Housekeeping only, so skip it rather than block every migration queued behind this one.
+        await conn.query('DROP TABLE _0072_app_settings_history');
+        console.warn('[0072] skipped app_settings history purge:', e.message);
+        return;
+      }
       await conn.query(
         `INSERT INTO app_settings (setting_key, setting_value, updated_at, ROW_START, ROW_END)
          SELECT setting_key, setting_value, updated_at, rs, re FROM _0072_app_settings_history`
