@@ -18,9 +18,14 @@ const wikiPool = mysql.createPool({
   database: getEnv('WIKI_DB_NAME', 'wiki.larp'),
   charset: 'utf8mb4',
   waitForConnections: true,
-  connectionLimit: 10,
+  // Low traffic; small and idle-closing so it never competes for the
+  // max_user_connections quota (see db.js) if it shares the DB user.
+  connectionLimit: Number(process.env.WIKI_DB_POOL_SIZE) || 3,
+  maxIdle: 0,
+  idleTimeout: 60000,
   queueLimit: 0,
 });
+require('./utils/unrefIdleSweeper')(wikiPool);
 
 wikiPool.on('connection', (connection) => {
   connection.on('acquire', () => {

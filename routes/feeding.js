@@ -23,7 +23,7 @@ const { PREDATOR_HUNTING_POOLS, PREDATOR_SPECIALTIES } = require('../data/predat
 const { rollDice, computeFeedingOutcome, OUTCOME_DELTAS } = require('../services/feedingDice');
 const { mendAmount } = require('../services/dice');
 const { pickFlavor } = require('../data/predatorFlavor');
-const { runFeedingDecay } = require('../services/feedingDecay');
+const { runHerdRegen, runSafetyRecovery } = require('../services/feedingCycleEnd');
 const { parseSheet } = require('../utils/sheet');
 const { withSheetLock } = require('../utils/sheetLock');
 const { feedGhoul, ghoulStates, ghoulsFor, runGhoulUpkeep, dueUpkeepCycle, nextUpkeepAt } = require('../services/ghoulFeeding');
@@ -735,16 +735,17 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  fastify.post('/api/admin/feeding/run-decay', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  // The daily job, now: Safety recovery (+1 per 3 clean months) and the cycle's
+  // Herd regen. Both are no-ops when nothing is due, so a misclick costs nothing.
+  fastify.post('/api/admin/feeding/run-cycle-end', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      // No force: re-running an already processed cycle would stack a second
-      // -1 on every division (this happened once on prod via a misclick).
-      const result = await runFeedingDecay(pool, log);
-      log.adm('Feeding decay manually triggered', { user: req.user.id, result });
-      reply.send(result);
+      const safety = await runSafetyRecovery(pool);
+      const herd = await runHerdRegen(pool);
+      log.adm('Feeding cycle-end upkeep manually triggered', { user: req.user.id, safety, herd });
+      reply.send({ recovered: safety.recovered, herd });
     } catch (err) {
-      log.err('POST /api/admin/feeding/run-decay failed', { error: err.message });
-      reply.status(500).send({ error: 'Database error running decay', details: err.sqlMessage || err.message });
+      log.err('POST /api/admin/feeding/run-cycle-end failed', { error: err.message });
+      reply.status(500).send({ error: 'Database error running cycle-end upkeep', details: err.sqlMessage || err.message });
     }
   });
 

@@ -47,14 +47,11 @@ function defaultReleaseFor(closingDate) {
   return `${dateOnly(d)}T${DEFAULT_RELEASE_TIME}`;
 }
 
-// Pre-fill for a cycle's ghoul upkeep: the evening before the event (closing is a Sunday, the event
-// the next Saturday). Same 'YYYY-MM-DDTHH:mm' format as the release.
+// Pre-fill for a cycle's ghoul upkeep: the evening the downtimes close (user rule 2026-11-02).
+// Same 'YYYY-MM-DDTHH:mm' format as the release.
 function defaultGhoulFeedingFor(closingDate) {
   const close = dateOnly(closingDate);
-  if (!close) return '';
-  const d = new Date(`${close}T12:00:00`);
-  d.setDate(d.getDate() + 5);
-  return `${dateOnly(d)}T${DEFAULT_GHOUL_FEEDING_TIME}`;
+  return close ? `${close}T${DEFAULT_GHOUL_FEEDING_TIME}` : '';
 }
 
 function releaseOf(cycle) {

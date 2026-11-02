@@ -5,7 +5,6 @@ const { sendDiscordChannelMessage } = require('../services/discord');
 const { getSetting } = require('../utils/settings');
 const { sanitizeRichText } = require('../utils/sanitize');
 const { isVideoUrl, resolveMediaUrl } = require('../services/news');
-const { parseSheet } = require('../utils/sheet');
 
 const guards = require('../services/guards');
 module.exports = async function (fastify, opts) {
@@ -50,16 +49,8 @@ module.exports = async function (fastify, opts) {
     try {
       const { title, body, media_url, discord_prefix } = req.body;
 
-      if (!guards.isCourt(req.user)) {
-        const [chars] = await pool.query('SELECT id, sheet FROM characters WHERE user_id = ?', [req.user.id]);
-        let isActive = false;
-        if (chars.length > 0) {
-          const sheetData = parseSheet(chars[0].sheet);
-          if (sheetData && sheetData.is_active) isActive = true;
-        }
-        if (!isActive) {
-          return reply.status(403).send({ error: 'You must have an active character to post rumors.' });
-        }
+      if (!(await guards.canPostRumors(pool, req.user))) {
+        return reply.status(403).send({ error: 'You must have an active character to post rumors.' });
       }
 
       if (!title || !body) return reply.status(400).send({ error: 'Title and Body are required' });

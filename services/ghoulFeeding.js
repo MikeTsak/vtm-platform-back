@@ -13,7 +13,7 @@
 
 const { randomInt } = require('crypto');
 const { parseSheet } = require('../utils/sheet');
-const { getSetting, setSetting } = require('../utils/settings');
+const { getSetting, getSettingStrict, setSetting } = require('../utils/settings');
 const { cycleIndexOf, resolveCurrentFeedingCycle } = require('../utils/feedingCycle');
 const { readCycles, withDefaultDates } = require('./downtimeSchedule');
 const { rouse } = require('./dice');
@@ -138,7 +138,7 @@ async function runGhoulUpkeep(pool, log, { now = new Date(), cycleIndex: forced,
   let cycleIndex = forced;
   if (cycleIndex == null) {
     const due = await dueUpkeepCycle(now);
-    const last = await getSetting('ghoul_upkeep_last_cycle', null);
+    const last = await getSettingStrict('ghoul_upkeep_last_cycle', null); // a failed read must not re-baseline
     if (last === null || last === '') {
       const current = await resolveCurrentFeedingCycle(now);
       const baseline = current.cycleEnd < now ? current.cycleIndex : (due ? due.cycleIndex : current.cycleIndex - 1);

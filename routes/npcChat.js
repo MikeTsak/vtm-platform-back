@@ -414,9 +414,11 @@ module.exports = async function (fastify, opts) {
     try {
       const [rows] = await pool.query(`
       SELECT m.id, m.npc_id, m.user_id, m.from_side, m.body, m.created_at, m.status, m.attachment_id, m.edited,
+             med.mime AS attachment_mime,
              COALESCE(c.name, u.display_name) AS user_name
       FROM npc_messages m
       LEFT JOIN users u ON u.id = m.user_id
+      LEFT JOIN chat_media med ON m.attachment_id = med.id
       LEFT JOIN characters c ON c.user_id = u.id OR c.id = u.archived_character_id
       ORDER BY m.created_at ASC
     `);

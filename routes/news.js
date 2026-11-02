@@ -143,14 +143,15 @@ module.exports = async function (fastify, opts) {
   });
 
 
-  // POST /api/news/upload (Admin/Court) - Upload media
-  fastify.post('/api/news/upload', { preHandler: [authRequired] }, async (req, reply) => {
+  // POST /api/news/upload - Upload media for an article, decree or rumor.
+  // Allowed: staff, anyone with a news permission, or anyone who may post a rumor
+  // (an active character; players attach pictures to rumors through this).
+  fastify.post('/api/news/upload', { preHandler: [authRequired, guards.uploadLimiter] }, async (req, reply) => {
     try {
-      // Check permissions: Admin or Court or has any news permission
-      if (!guards.isCourt(req.user)) {
+      if (!(await guards.canPostRumors(pool, req.user))) {
         const [perms] = await pool.query('SELECT id FROM user_news_permissions WHERE user_id=? LIMIT 1', [req.user.id]);
         if (perms.length === 0) {
-          return reply.status(403).send({ error: 'Forbidden' });
+          return reply.status(403).send({ error: 'You need an active character (or a news permission) to upload pictures.' });
         }
       }
 

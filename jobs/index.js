@@ -14,10 +14,10 @@
 const cron = require('node-cron');
 const pool = require('../db');
 const { log } = require('../logger');
-const { getSetting, setSetting, clearSettingCache } = require('../utils/settings');
+const { getSetting, getSettingStrict, setSetting, clearSettingCache } = require('../utils/settings');
 const { broadcastNtfyAlert } = require('../utils/ntfy');
 const { sendDiscordDM, sendDiscordMailNotifications } = require('../services/discord');
-const { runFeedingDecay } = require('../services/feedingDecay');
+const { runHerdRegen, runSafetyRecovery } = require('../services/feedingCycleEnd');
 const { runGhoulUpkeep } = require('../services/ghoulFeeding');
 const { sendPushNotification } = require('../services/push');
 const { flushQueuedMessages } = require('../services/commsQueue');
@@ -95,7 +95,7 @@ async function runJob(job, ctx = {}) {
     outcome = { ok: false, note: null, error: String(e.stack || e.message || e).slice(0, 2000) };
     if (job.alertOnFailure) {
       broadcastNtfyAlert(`${job.label} failed:\n${e.message}`, {
-        title: `🚨 ${job.label} failed`, tags: ['rotating_light'], priority: 'high', requiresSubscription: 'errors',
+        title: `ðŸš¨ ${job.label} failed`, tags: ['rotating_light'], priority: 'high', requiresSubscription: 'errors',
       }).catch(() => {});
     }
   }
@@ -122,7 +122,7 @@ const JOBS = [
       if (hour < 12 || hour > 21) return 'outside 12:00-21:59';
       const deadlineStr = await getSetting('downtime_deadline', null);
       if (!deadlineStr) return 'no deadline set';
-      if ((await getSetting('downtime_deadline_ping_sent', '')) === deadlineStr) return 'already sent for this deadline';
+      if ((await getSettingStrict('downtime_deadline_ping_sent', '')) === deadlineStr) return 'already sent for this deadline';
 
       const hoursLeft = Math.ceil((new Date(deadlineStr).getTime() - Date.now()) / 3600000);
       if (hoursLeft <= 24 || hoursLeft > 48) return `deadline ${hoursLeft}h away`;
@@ -165,7 +165,7 @@ const JOBS = [
       if ((await getSetting('downtime_mass_release_notified', 'false')) === 'true') return 'already released';
 
       await broadcastNtfyAlert('The countdown is over. Downtime Resolutions have just been released to all players!', {
-        title: '🦇 Downtimes Released', tags: ['loudspeaker', 'vampire'], priority: 'high',
+        title: 'ðŸ¦‡ Downtimes Released', tags: ['loudspeaker', 'vampire'], priority: 'high',
       });
       await setSetting('downtime_mass_release_notified', 'true');
       const notified = await releasePendingAndNotify().catch((e) => { log.err('Mass release push failed', { error: e.message }); return 0; });
@@ -195,7 +195,7 @@ const JOBS = [
       const currentTime = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: TZ });
       const today = athensToday();
       if (currentTime < targetTime) return `waiting for ${targetTime}`;
-      if ((await getSetting('discord_mail_digest_last_date', '')) === today) return 'sent today';
+      if ((await getSettingStrict('discord_mail_digest_last_date', '')) === today) return 'sent today';
       await setSetting('discord_mail_digest_last_date', today);
       await sendDiscordMailNotifications();
       return 'digest sent';
@@ -208,7 +208,7 @@ const JOBS = [
     name: 'daily-summary', label: 'End-of-day summary', cron: '59 23 * * *', maxGapMin: DAY_MIN + 120,
     async run() {
       const today = athensToday();
-      if ((await getSetting('daily_summary_last_date', '')) === today) return 'sent today';
+      if ((await getSettingStrict('daily_summary_last_date', '')) === today) return 'sent today';
       await setSetting('daily_summary_last_date', today);
       const [[startsRow]] = await pool.query("SELECT setting_value FROM app_settings WHERE setting_key = 'daily_server_starts'");
       const [[loginsRow]] = await pool.query("SELECT setting_value FROM app_settings WHERE setting_key = 'daily_logins'");
@@ -244,13 +244,14 @@ const JOBS = [
     },
   },
   {
-    // The Feeding system's cycle-end passive Masquerade decay for the most
-    // recently completed cycle. Latched per cycle (feeding_last_decay_cycle_index).
-    name: 'feeding-decay', label: 'Feeding cycle decay', cron: '5 0 * * *', boot: true, maxGapMin: DAY_MIN + 120,
+    // Daily: +1 domain Safety per 3 months without a failed hunt there, and
+    // Herd regen once per completed cycle. Safety never drops on its own.
+    name: 'feeding-cycle-end', label: 'Safety recovery + Herd regen', cron: '5 0 * * *', boot: true, maxGapMin: DAY_MIN + 120,
     async run() {
-      const r = await runFeedingDecay(pool, log);
-      if (r?.skipped) return `skipped: ${r.skipped}`;
-      return `cycle ${r?.completedCycle}: ${r?.decayed || 0} division(s) decayed${r?.herdRegen ? `, ${r.herdRegen} herd(s) regrown` : ''}`;
+      const s = await runSafetyRecovery(pool);
+      const h = await runHerdRegen(pool);
+      const herd = h?.skipped ? `herd ${h.skipped}` : `cycle ${h.completedCycle}: ${h.herdRegen} herd(s) regrown`;
+      return `${s.recovered} division(s) +1 Safety; ${herd}`;
     },
   },
   {
@@ -342,13 +343,17 @@ function startJobs(fastify) {
     return;
   }
 
+  let bootChain = Promise.resolve(); // runJob never throws, so the chain never breaks
   for (const job of JOBS) {
     if (job.enabled === false) {
       log.info(`Job ${job.name} is disabled.`);
       continue;
     }
     if (job.cron) cron.schedule(job.cron, () => runJob(job, ctx), { timezone: TZ });
-    if (job.boot === true) runJob(job, ctx);
+    // Boot catch-ups run ONE AT A TIME: each running job holds a pool connection
+    // for its lock and needs another for its work, so nine at once could take the
+    // whole pool (5) and leave logins queued behind them.
+    if (job.boot === true) bootChain = bootChain.then(() => runJob(job, ctx));
     else if (typeof job.boot === 'number') setTimeout(() => runJob(job, ctx), job.boot).unref();
   }
 

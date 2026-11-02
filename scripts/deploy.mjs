@@ -804,6 +804,7 @@ async function health() {
   try {
     const r = await fetch(`${API}/api/health?_=${Date.now()}`, {
       headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(8000), // a hung server must not block the restart that fixes it
     });
     if (!r.ok) return null;
     const b = await r.json();

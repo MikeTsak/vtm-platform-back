@@ -15,23 +15,34 @@ const settingsCache = new Map();
  * @param {any} [defaultValue=null] - Value to return if key not found
  */
 async function getSetting(key, defaultValue = null) {
-  const cached = settingsCache.get(key);
-  if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.value;
-
   try {
-    const [[row]] = await pool.query(
-      'SELECT setting_value FROM app_settings WHERE setting_key = ?',
-      [key]
-    );
-    const hasValue = row && row.setting_value !== null && row.setting_value !== undefined && row.setting_value !== '';
-    const value = hasValue ? row.setting_value : defaultValue;
-    if (hasValue) settingsCache.set(key, { value, at: Date.now() }); // Only cache if it exists in DB with valid value
-    else settingsCache.delete(key);
-    return value;
+    return await getSettingStrict(key, defaultValue);
   } catch (e) {
     log.err('getSetting failed', { key, message: e.message });
     return defaultValue;
   }
+}
+
+/**
+ * Like getSetting, but a database error THROWS instead of returning the default.
+ * Use it for run-once latches ("last cycle processed", "sent today"): there the
+ * default means "never ran", so a failed read would run the job a second time.
+ * That happened on 2026-11-02: a boot during a max_user_connections storm read
+ * feeding_last_decay_cycle_index as -1 and decayed every division twice.
+ */
+async function getSettingStrict(key, defaultValue = null) {
+  const cached = settingsCache.get(key);
+  if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.value;
+
+  const [[row]] = await pool.query(
+    'SELECT setting_value FROM app_settings WHERE setting_key = ?',
+    [key]
+  );
+  const hasValue = row && row.setting_value !== null && row.setting_value !== undefined && row.setting_value !== '';
+  const value = hasValue ? row.setting_value : defaultValue;
+  if (hasValue) settingsCache.set(key, { value, at: Date.now() }); // Only cache if it exists in DB with valid value
+  else settingsCache.delete(key);
+  return value;
 }
 
 /**
@@ -68,6 +79,7 @@ function clearSettingCache(key = null) {
 
 module.exports = {
   getSetting,
+  getSettingStrict,
   setSetting,
   clearSettingCache
 };

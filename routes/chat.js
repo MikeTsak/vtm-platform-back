@@ -714,7 +714,11 @@ module.exports = async function (fastify, opts) {
   // ADMIN: Get all group messages (for stats)
   fastify.get('/api/admin/chat/groups/messages/all', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-      const [messages] = await pool.query('SELECT * FROM chat_group_messages');
+      const [messages] = await pool.query(`
+        SELECT cgm.*, med.mime AS attachment_mime
+        FROM chat_group_messages cgm
+        LEFT JOIN chat_media med ON cgm.attachment_id = med.id
+      `);
       reply.send({ messages });
     } catch (e) {
       reply.status(500).send({ error: 'Failed to fetch group messages' });
@@ -1574,6 +1578,7 @@ module.exports = async function (fastify, opts) {
         `SELECT
                 cm.id, cm.body, cm.created_at, cm.attachment_id, cm.edited,
                 cm.read_at, cm.delivered_at,
+                med.mime AS attachment_mime,
                 s.id as sender_id, s.display_name as sender_name,
                 cs.name as sender_char_name, cs.clan as sender_clan,
                 r.id as recipient_id, r.display_name as recipient_name,
@@ -1581,6 +1586,7 @@ module.exports = async function (fastify, opts) {
             FROM chat_messages cm
             JOIN users s ON cm.sender_id = s.id
             JOIN users r ON cm.recipient_id = r.id
+            LEFT JOIN chat_media med ON cm.attachment_id = med.id
             -- An archive account (retired character, migration 0075) wears its character.
             LEFT JOIN characters cs ON cs.user_id = s.id OR cs.id = s.archived_character_id
             LEFT JOIN characters cr ON cr.user_id = r.id OR cr.id = r.archived_character_id

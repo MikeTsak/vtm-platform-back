@@ -6,9 +6,9 @@
 const { buildTestApp } = require('./setup/testApp');
 const { setupTestDatabase, getTestPool, truncateAll } = require('./setup/testDb');
 const { registerUser, extractSessionCookie } = require('./setup/helpers');
-const { setSetting } = require('../utils/settings');
+const { setSetting, clearSettingCache } = require('../utils/settings');
 const { parseSheet } = require('../utils/sheet');
-const { runFeedingDecay } = require('../services/feedingDecay');
+const { runHerdRegen, runSafetyRecovery } = require('../services/feedingCycleEnd');
 
 const day = (offset) => new Date(Date.now() + offset * 86400000).toISOString().slice(0, 10);
 let app, pool, player;
@@ -69,12 +69,74 @@ describe('Herd across cycles', () => {
     await setSheet({ ...(await sheetOf()), herd_current: 0 });
     await setSetting('feeding_last_decay_cycle_index', '5');
 
-    const first = await runFeedingDecay(pool, null);
+    const first = await runHerdRegen(pool);
     expect(first.completedCycle).toBe(6);
     expect((await sheetOf()).herd_current).toBe(1);
 
-    expect((await runFeedingDecay(pool, null)).skipped).toBe('already processed');
+    expect((await runHerdRegen(pool)).skipped).toBe('already processed');
     expect((await sheetOf()).herd_current).toBe(1);
+  });
+
+  // 2026-11-02: a boot during a connection storm read the latch as "never ran" and decayed twice.
+  it('fails instead of regrowing again when the latch cannot be read', async () => {
+    const db = require('../db');
+    const real = db.query.bind(db);
+    clearSettingCache();
+    const spy = vi.spyOn(db, 'query').mockImplementation((sql, params) => (
+      Array.isArray(params) && params[0] === 'feeding_last_decay_cycle_index'
+        ? Promise.reject(new Error('max_user_connections')) : real(sql, params)));
+    try {
+      await expect(runHerdRegen(pool)).rejects.toThrow('max_user_connections');
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await sheetOf()).herd_current).toBe(1);
+  });
+});
+
+// Safety never drops on its own: only failed hunts (or a Storyteller) lower it,
+// and 3 months without a failed hunt give +1, up to 10.
+describe('Domain Safety recovery', () => {
+  const D = 70;
+  const safety = async () => (await pool.query('SELECT safety_rating FROM domain_claims WHERE division=?', [D]))[0][0].safety_rating;
+  const failedHunt = (resolvedAgo) => pool.query(
+    `INSERT INTO feedings (character_id, division, predator_type, pool_label, dice_pool, difficulty, hunger_before,
+       normal_dice, hunger_dice, outcome, status, cycle_index, hunger_delta, safety_delta, resolved_at)
+     VALUES (?, ?, 'Alleycat', 'x', 1, 2, 2, '[]', '[]', 'failure', 'resolved', 0, 0, -1, NOW() - INTERVAL ${resolvedAgo})`,
+    [player.characterId, D]
+  );
+  beforeEach(async () => {
+    await pool.query('DELETE FROM feedings WHERE division=?', [D]);
+    await pool.query('DELETE FROM domain_claims WHERE division=?', [D]);
+  });
+
+  it('does not touch a quiet division before 3 months, then gives +1 once', async () => {
+    await pool.query("INSERT INTO domain_claims (division, color, safety_rating, safety_recovered_at) VALUES (?, '#888888', 6, NOW() - INTERVAL 2 MONTH)", [D]);
+    await runSafetyRecovery(pool);
+    expect(await safety()).toBe(6);
+
+    await pool.query('UPDATE domain_claims SET safety_recovered_at = NOW() - INTERVAL 3 MONTH - INTERVAL 1 DAY WHERE division=?', [D]);
+    await runSafetyRecovery(pool);
+    await runSafetyRecovery(pool); // the clock restarted: no second point
+    expect(await safety()).toBe(7);
+  });
+
+  it('a failed hunt in the last 3 months holds it; once 3 months old, it recovers', async () => {
+    await pool.query("INSERT INTO domain_claims (division, color, safety_rating, safety_recovered_at) VALUES (?, '#888888', 4, NOW() - INTERVAL 1 YEAR)", [D]);
+    await failedHunt('1 MONTH');
+    await runSafetyRecovery(pool);
+    expect(await safety()).toBe(4);
+
+    await pool.query('DELETE FROM feedings WHERE division=?', [D]);
+    await failedHunt('4 MONTH');
+    await runSafetyRecovery(pool);
+    expect(await safety()).toBe(5);
+  });
+
+  it('never goes above 10', async () => {
+    await pool.query("INSERT INTO domain_claims (division, color, safety_rating, safety_recovered_at) VALUES (?, '#888888', 10, NOW() - INTERVAL 1 YEAR)", [D]);
+    await runSafetyRecovery(pool);
+    expect(await safety()).toBe(10);
   });
 });
 

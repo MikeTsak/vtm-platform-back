@@ -9,6 +9,7 @@
 // which tier it wants; tuning a tier is a change to this file alone.
 
 const { log } = require('../logger');
+const { parseSheet } = require('../utils/sheet');
 
 // Single definition of "is this user an admin" — every route should check
 // through here instead of inlining `role === 'admin'` (or a stale
@@ -29,6 +30,14 @@ const isOwnerOrAdmin = (user, ownerId) => isAdmin(user) || (!!user && Number(use
 async function userOwnsCharacter(pool, userId, charId) {
   const [rows] = await pool.query('SELECT id FROM characters WHERE id = ? AND user_id = ?', [charId, userId]);
   return rows.length > 0;
+}
+
+// May post a rumor (and upload its picture): staff, or a player whose current
+// character is active. One definition for routes/rumors.js and the news upload.
+async function canPostRumors(pool, user) {
+  if (isCourt(user)) return true;
+  const [[c]] = await pool.query('SELECT sheet FROM characters WHERE user_id = ? LIMIT 1', [user.id]);
+  return !!c && !!parseSheet(c.sheet)?.is_active;
 }
 
 const requireCourt = (req, reply, next) => {
@@ -89,4 +98,4 @@ const uploadLimiter = makeLimiter('upload', 30, 60_000);       // file uploads, 
 const DEFAULT_BODY_LIMIT = 5 * 1024 * 1024;
 const IMAGE_BODY_LIMIT = 25 * 1024 * 1024;
 
-module.exports = { DEFAULT_BODY_LIMIT, IMAGE_BODY_LIMIT, clientIp, makeLimiter, isAdmin, isCourt, isOwnerOrAdmin, userOwnsCharacter, requireCourt, globalLimiter, authLimiter, moderateLimiter, uploadLimiter };
+module.exports = { DEFAULT_BODY_LIMIT, IMAGE_BODY_LIMIT, clientIp, makeLimiter, isAdmin, isCourt, isOwnerOrAdmin, userOwnsCharacter, canPostRumors, requireCourt, globalLimiter, authLimiter, moderateLimiter, uploadLimiter };
