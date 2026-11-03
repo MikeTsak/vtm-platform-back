@@ -78,14 +78,10 @@ async function runHerdRegen(pool) {
   for (const row of charRows) {
     // Re-read under a row lock: the sheet above may be stale by the time we write.
     const r = await withSheetLock(pool, row.id, (sheet) => {
-      const merits = Array.isArray(sheet.advantages?.merits) ? sheet.advantages.merits : [];
-      const herdEntry = merits.find(b =>
-        String(b.id || '').toLowerCase().includes('herd__herd') ||
-        String(b.name || '').toLowerCase() === 'herd'
-      );
-      if (!herdEntry) return { skip: true };
+      const herd = herdEntry(sheet);
+      if (!herd) return { skip: true };
 
-      const herdDots = Math.max(0, Math.min(5, Number(herdEntry.dots) || 0));
+      const herdDots = Math.max(0, Math.min(5, Number(herd.dots) || 0));
       if (herdDots < 1) return { skip: true };
 
       // If never used, herd_current is implicitly full — nothing to regen
@@ -102,4 +98,17 @@ async function runHerdRegen(pool) {
   return { completedCycle, herdRegen };
 }
 
-module.exports = { runSafetyRecovery, runHerdRegen };
+// The Herd background on a sheet (it lives in sheet.advantages.merits), or null.
+// Matched by id, or by name ignoring a note in brackets: the Roadside Killer
+// predator type grants "Herd (migrating)" (front data/predator_types.js), saved
+// without an id, and an exact-name match told those players they had no Herd.
+// The one Herd lookup for feeding, regen and the admin tools.
+function herdEntry(sheet) {
+  const merits = Array.isArray(sheet?.advantages?.merits) ? sheet.advantages.merits : [];
+  return merits.find((b) =>
+    String(b?.id || '').toLowerCase().includes('herd__herd') ||
+    String(b?.name || '').toLowerCase().replace(/\(.*?\)/g, '').trim() === 'herd'
+  ) || null;
+}
+
+module.exports = { runSafetyRecovery, runHerdRegen, herdEntry };

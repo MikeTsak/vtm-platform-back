@@ -16,9 +16,16 @@
 //
 // Both helpers take a connection inside the caller's transaction.
 
+const { parseSheet } = require('../utils/sheet');
+
 // Character status flags that end a character's story: its player may make a
 // new one themselves (POST /api/characters). Missing may come back; hunted lives.
 const isOutOfPlay = (c) => !!(c && (c.is_deceased || c.is_left || c.is_exiled));
+// ...or a Storyteller allowed it for any other reason (a missing character,
+// a player change): sheet.allow_new_character, set in Admin > Characters and
+// consumed when the character is retired. Players can't set it (see
+// stripStorytellerGrants in routes/characters.js, utils/playerSheetEdit.js).
+const canStartNew = (c) => isOutOfPlay(c) || parseSheet(c?.sheet).allow_new_character === true;
 
 // Every account-keyed comms column. `UPDATE IGNORE`: a row that would collide
 // with one the target already has (a reaction, a conversation setting) stays put.
@@ -103,9 +110,12 @@ async function retireCharacter(conn, charId) {
       WHERE c.id = ?`, [ch.user_id, charId]
   );
   await conn.query('UPDATE users SET avatar_url = NULL, avatar_url_thumb = NULL WHERE id = ?', [ch.user_id]);
-  // Left to right: retired_user_id takes user_id before it is cleared.
+  // Left to right: retired_user_id takes user_id before it is cleared. The
+  // "may start a new character" grant is used up: a restore must not bring it back.
   await conn.query(
-    'UPDATE characters SET retired_user_id = user_id, user_id = NULL, retired_at = NOW() WHERE id = ?', [charId]
+    `UPDATE characters SET retired_user_id = user_id, user_id = NULL, retired_at = NOW(),
+            sheet = IF(JSON_VALID(sheet), JSON_REMOVE(sheet, '$.allow_new_character'), sheet)
+      WHERE id = ?`, [charId]
   );
   await conn.query(
     'DELETE FROM coterie_members WHERE character_id = ? OR (user_id = ? AND character_id IS NULL)', [charId, ch.user_id]
@@ -182,4 +192,4 @@ function characterAtSql(userCol, timeCol) {
      LIMIT 1)`;
 }
 
-module.exports = { retireCharacter, restoreCharacter, characterAtSql, isOutOfPlay };
+module.exports = { retireCharacter, restoreCharacter, characterAtSql, isOutOfPlay, canStartNew };

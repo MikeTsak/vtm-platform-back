@@ -218,3 +218,83 @@ describe('Safety before a hunt', () => {
     expect(claim.safety_rating).toBe(Math.max(0, Math.min(10, 6 + f.safety_delta)));
   });
 });
+
+// 2026-11-03: a Roadside Killer's Herd is saved as "Herd (migrating)" (no id)
+// and the exact-name match said "You do not have the Herd background"; and a
+// deactivated (not yet activated) character got that same misleading answer.
+// A fresh player with one character, for the blocks below.
+const asNew = async (name, sheet, columns = {}) => {
+  const u = await registerUser(app, { displayName: name });
+  await pool.query('INSERT INTO characters SET ?', [{ user_id: u.user.id, name, clan: 'Brujah', xp: 0, sheet: JSON.stringify(sheet), ...columns }]);
+  const call = (method, url, payload) => app.inject({ method, url, headers: { cookie: u.cookie }, payload });
+  return { ...u, call, status: async () => JSON.parse((await call('GET', '/api/feeding/status')).body) };
+};
+
+describe('Herd names and deactivated characters', () => {
+  const herd = (name) => ({ hunger: 4, predator_type: 'Roadside Killer', advantages: { merits: [{ name, dots: 2 }] } });
+
+  it('a predator-type Herd with a note in its name is still Herd', async () => {
+    const p = await asNew('Trucker', herd('Herd (migrating)'));
+    expect((await p.status()).herdDots).toBe(2);
+    expect((await p.call('POST', '/api/feeding/herd-feed', { division: 39 })).statusCode).toBe(200);
+  });
+
+  it('a deactivated character is told so, and nothing is spent', async () => {
+    const p = await asNew('Newcomer', { ...herd('Herd'), is_active: false });
+    expect((await p.status()).deactivated).toBe(true);
+    const res = await p.call('POST', '/api/feeding/herd-feed', { division: 39 });
+    expect(res.statusCode).toBe(403);
+    expect(JSON.parse(res.body)).toMatchObject({ code: 'deactivated', error: expect.stringMatching(/deactivated/) });
+    expect((await p.call('POST', '/api/feeding/roll', { division: 39 })).statusCode).toBe(403);
+    expect((await p.status()).herdCurrent).toBe(2);
+  });
+});
+
+// Scarce blood: Baggers and Graverobbers hunt at the division's difficulty plus
+// the Storytellers' extra (Admin > Feeding, 0 to 10, admin only, uncapped total).
+describe('Scarce blood (Baggers and Graverobbers)', () => {
+  const { huntingDifficulty } = require('../data/huntingDifficulty');
+  const hunter = (type) => ({ hunger: 2, predator_type: type, is_active: true, attributes: { Intelligence: 2, Resolve: 2, Charisma: 2 }, skills: { Streetwise: 2, Medicine: 2, Persuasion: 2 } });
+  let admin;
+  const setExtra = (who, extra) => who.call('POST', '/api/admin/feeding/scarce-blood', { extra });
+  const card = async () => JSON.parse((await admin.call('GET', '/api/admin/feeding/stats')).body).scarceBlood;
+
+  beforeAll(async () => {
+    admin = await asNew('Scarce ST', {});
+    await pool.query("UPDATE users SET role='admin' WHERE id=?", [admin.user.id]);
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: admin.email, password: admin.password } });
+    const cookie = extractSessionCookie(login);
+    admin.call = (method, url, payload) => app.inject({ method, url, headers: { cookie }, payload });
+  });
+  afterAll(async () => { await setSetting('feeding_scarce_blood_extra', '0'); });
+
+  it('only a Storyteller sets it, as a whole number from 0 to 10', async () => {
+    const player = await asNew('Nosy', hunter('Bagger'));
+    expect((await setExtra(player, 2)).statusCode).toBe(403);
+    for (const bad of [11, -1, '2', 1.5, null]) expect((await setExtra(admin, bad)).statusCode).toBe(400);
+    const ok = await setExtra(admin, 3);
+    expect([ok.statusCode, JSON.parse(ok.body)]).toEqual([200, { extra: 3 }]);
+  });
+
+  it('a Bagger rolls at the division difficulty + the extra; other predators at the division', async () => {
+    const base = huntingDifficulty(39);
+    const bagger = await asNew('Blood Bank', hunter('Bagger'));
+    const siren = await asNew('Singer', hunter('Siren'));
+    expect((await bagger.status()).scarceBloodExtra).toBe(3);
+    expect((await siren.status()).scarceBloodExtra).toBe(0);
+    const roll = async (p) => JSON.parse((await p.call('POST', '/api/feeding/roll', { division: 39 })).body).feeding.difficulty;
+    expect(await roll(bagger)).toBe(base + 3);
+    expect(await roll(siren)).toBe(base);
+  });
+
+  it('counts Baggers and Graverobbers who can hunt, and suggests +1 for each beyond 2', async () => {
+    const before = (await card()).count;
+    await asNew('Digger 1', hunter('Graverobber'));
+    await asNew('Digger 2', hunter('Graverobber'));
+    await asNew('Not Yet', { ...hunter('Bagger'), is_active: false }); // deactivated: can't hunt
+    await asNew('Gone', hunter('Bagger'), { is_deceased: 1 }); // dead
+    const c = await card();
+    expect(c).toMatchObject({ count: before + 2, extra: 3, max: 10, types: ['Bagger', 'Graverobber'] });
+    expect(c.suggested).toBe(Math.min(10, Math.max(0, c.count - 2)));
+  });
+});

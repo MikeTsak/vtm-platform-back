@@ -7,7 +7,14 @@ const { DEFAULT_DISABLED_CLANS } = require('../utils/clans');
 const { isAdmin, userOwnsCharacter } = require('../services/guards');
 const { parseSheet } = require('../utils/sheet');
 const { mergePlayerSheetEdit } = require('../utils/playerSheetEdit');
-const { retireCharacter, isOutOfPlay } = require('../services/characterRetirement');
+const { retireCharacter, canStartNew } = require('../services/characterRetirement');
+
+// Grants only a Storyteller sets (Admin > Characters): never taken from a sheet
+// the player sends when creating or rebuilding a character.
+const stripStorytellerGrants = (sheet) => {
+  delete sheet.allow_reset; // rebuild this character
+  delete sheet.allow_new_character; // start a new one (services/characterRetirement.js)
+};
 
 async function isClanDisabled(clan) {
   const raw = await getSetting('disabled_clans', JSON.stringify(DEFAULT_DISABLED_CLANS));
@@ -165,10 +172,11 @@ module.exports = async function (fastify, opts) {
     try {
       await conn.beginTransaction();
       // A character out of play (Storyteller-set Final Death, left the city,
-      // exiled) is retired here, so the player can start their next one. Any
-      // other current character blocks creation.
-      const [[current]] = await conn.query('SELECT id, is_deceased, is_left, is_exiled FROM characters WHERE user_id=? FOR UPDATE', [req.user.id]);
-      if (current && !isOutOfPlay(current)) {
+      // exiled) or one a Storyteller allowed a new character for is retired
+      // here, so the player can start their next one. Any other current
+      // character blocks creation.
+      const [[current]] = await conn.query('SELECT id, is_deceased, is_left, is_exiled, sheet FROM characters WHERE user_id=? FOR UPDATE', [req.user.id]);
+      if (current && !canStartNew(current)) {
         await conn.rollback();
         log.warn('Create character already exists', { user_id: req.user.id });
         return reply.status(409).send({ error: 'Character already exists' });
@@ -178,7 +186,7 @@ module.exports = async function (fastify, opts) {
       // Birth and Embrace dates chosen in the creator are set once (utils/sheetDates.js).
       const sheetObj = withSetOnceDates({}, parseSheet(sheet), CHARACTER_DATES);
       sheetObj.is_active = false;
-      delete sheetObj.allow_reset; // only a Storyteller grants re-rolls
+      stripStorytellerGrants(sheetObj);
 
       const [r] = await conn.query(
         'INSERT INTO characters (user_id, name, clan, sheet, xp) VALUES (?,?,?,?,?)',
@@ -646,7 +654,7 @@ module.exports = async function (fastify, opts) {
       // A re-roll starts over, life dates included: set once from here.
       const sheetObj = withSetOnceDates({}, parseSheet(sheet), CHARACTER_DATES);
       sheetObj.is_active = false;
-      delete sheetObj.allow_reset; // one re-roll per grant
+      stripStorytellerGrants(sheetObj); // one re-roll per grant
 
       // Overwrite the character data and reset XP to 50
       const rebuildSheetJson = JSON.stringify(sheetObj);

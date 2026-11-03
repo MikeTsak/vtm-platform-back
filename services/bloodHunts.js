@@ -37,7 +37,7 @@ async function expireBloodHunts() {
 
 // Fire-and-forget: a failed push must never fail the court action.
 function pushEveryone(title, body, url) {
-  pool.query('SELECT id FROM users')
+  pool.query('SELECT id FROM users WHERE archived_character_id IS NULL')
     .then(([users]) => Promise.all(users.map(u => sendPushNotification(u.id, title, body, { url }, 'court'))))
     .catch(e => log.err('Court push failed', { message: e.message }));
 }

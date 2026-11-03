@@ -17,13 +17,13 @@
 const { getSetting, setSetting } = require('../utils/settings');
 const { getCycleInfo, cycleIndexOf, resolveCurrentFeedingCycle } = require('../utils/feedingCycle');
 const { huntingDifficulty } = require('../data/huntingDifficulty');
-const { isOwnerOrAdmin } = require('../services/guards');
+const { isOwnerOrAdmin, isAdmin } = require('../services/guards');
 const { chasseBonus } = require('../data/chasseMerits');
 const { PREDATOR_HUNTING_POOLS, PREDATOR_SPECIALTIES } = require('../data/predatorHuntingPools');
 const { rollDice, computeFeedingOutcome, OUTCOME_DELTAS } = require('../services/feedingDice');
 const { mendAmount } = require('../services/dice');
 const { pickFlavor } = require('../data/predatorFlavor');
-const { runHerdRegen, runSafetyRecovery } = require('../services/feedingCycleEnd');
+const { runHerdRegen, runSafetyRecovery, herdEntry } = require('../services/feedingCycleEnd');
 const { parseSheet } = require('../utils/sheet');
 const { withSheetLock } = require('../utils/sheetLock');
 const { feedGhoul, ghoulStates, ghoulsFor, runGhoulUpkeep, dueUpkeepCycle, nextUpkeepAt } = require('../services/ghoulFeeding');
@@ -44,6 +44,16 @@ const SAFE_FEED_HUNGER = -2;
 function getPredatorType(sheet) {
   return sheet?.predator_type || sheet?.predatorType || null;
 }
+
+// Scarce blood (2026-11-03): Baggers and Graverobbers feed from one limited
+// supply (blood banks, morgues). When too many of them are in play a
+// Storyteller raises their hunting difficulty by 0..10 (Admin > Feeding); the
+// roll adds it to the division's difficulty, uncapped. The admin card suggests
+// +1 for each active one beyond the 2 the city supports.
+const SCARCE_BLOOD_TYPES = ['Bagger', 'Graverobber'];
+const SCARCE_EXTRA_KEY = 'feeding_scarce_blood_extra';
+const SCARCE_EXTRA_MAX = 10;
+const SCARCE_FREE = 2;
 
 function getTraitValue(sheet, traitName) {
   if (!traitName) return 0;
@@ -110,15 +120,10 @@ function applyHungerDelta(current, delta) {
 // Outcomes that leave a trail; each gets a stored predatorFlavor line.
 const FAILURE_OUTCOMES = ['bestial_failure', 'failure', 'messy_critical'];
 
-// Herd background: stored in sheet.advantages.merits[] (not sheet.backgrounds[]).
-// Some entries only have a name field (no id), so fall back to name match.
+// Herd background dots (services/feedingCycleEnd.js herdEntry finds it).
 function getHerdDots(sheet) {
-  const merits = Array.isArray(sheet?.advantages?.merits) ? sheet.advantages.merits : [];
-  const herdEntry = merits.find(b =>
-    String(b.id || '').toLowerCase().includes('herd__herd') ||
-    String(b.name || '').toLowerCase() === 'herd'
-  );
-  return herdEntry ? clamp(Number(herdEntry.dots) || 0, 0, 5) : 0;
+  const herd = herdEntry(sheet);
+  return herd ? clamp(Number(herd.dots) || 0, 0, 5) : 0;
 }
 
 function parseJsonArray(v) {
@@ -133,6 +138,37 @@ module.exports = async function (fastify, opts) {
     const [rows] = await pool.query('SELECT id, clan, sheet FROM characters WHERE user_id=?', [userId]);
     if (!rows.length) return null;
     return { id: rows[0].id, clan: rows[0].clan, sheet: parseSheet(rows[0].sheet) };
+  }
+
+  // The Storyteller's scarce-blood extra for this predator type (0 for others).
+  async function scarceBloodExtra(predatorType) {
+    if (!SCARCE_BLOOD_TYPES.includes(predatorType)) return 0;
+    return clamp(Number(await getSetting(SCARCE_EXTRA_KEY, '0')) || 0, 0, SCARCE_EXTRA_MAX);
+  }
+  // Baggers/Graverobbers who can hunt now: current, not deactivated, and not
+  // dead, gone, exiled or missing.
+  async function scarceBloodCount() {
+    const [rows] = await pool.query(
+      `SELECT sheet FROM characters
+        WHERE user_id IS NOT NULL AND COALESCE(is_deceased,0)=0 AND COALESCE(is_left,0)=0
+          AND COALESCE(is_exiled,0)=0 AND COALESCE(is_missing,0)=0`
+    );
+    return rows.map((r) => parseSheet(r.sheet))
+      .filter((s) => s.is_active !== false && SCARCE_BLOOD_TYPES.includes(getPredatorType(s))).length;
+  }
+
+  // A new character starts deactivated until a Storyteller activates it
+  // (routes/characters.js), and can't feed. Say so plainly, instead of failing
+  // on whatever check comes next ("You do not have the Herd background").
+  // Deactivated = is_active false, as in camarilla.js; Storytellers are exempt.
+  const isDeactivated = (user, char) => !isAdmin(user) && char?.sheet?.is_active === false;
+  async function requireActiveCharacter(req, reply) {
+    if (isDeactivated(req.user, await getMyCharacter(req.user.id))) {
+      return reply.status(403).send({
+        error: 'Your character is deactivated. A Storyteller has to activate it before you can feed.',
+        code: 'deactivated',
+      });
+    }
   }
 
   async function getCurrentCycle() {
@@ -227,7 +263,7 @@ module.exports = async function (fastify, opts) {
       const enabled = await isFeedingEnabled();
       if (!enabled) {
         const char = await getMyCharacter(req.user.id);
-        return reply.send({ enabled: false, ...(char ? vitalsOf(char) : { noCharacter: true }) });
+        return reply.send({ enabled: false, ...(char ? { ...vitalsOf(char), deactivated: isDeactivated(req.user, char) } : { noCharacter: true }) });
       }
 
       const cycle = await getCurrentCycle();
@@ -288,6 +324,8 @@ module.exports = async function (fastify, opts) {
           }),
         myDivision,
         ...vitalsOf(char),
+        deactivated: isDeactivated(req.user, char),
+        scarceBloodExtra: await scarceBloodExtra(getPredatorType(char.sheet)),
         safeFeedBlock: (await checkSubmission({ characterId: char.id, requireFed: false })).error,
         pending: pendingRows[0] || null,
         resolvedThisCycle: cycleRows.rows.find((r) => r.status === 'resolved') || null,
@@ -305,7 +343,7 @@ module.exports = async function (fastify, opts) {
   });
 
   /* -------------------- Roll -------------------- */
-  fastify.post('/api/feeding/roll', { preHandler: [authRequired] }, async (req, reply) => {
+  fastify.post('/api/feeding/roll', { preHandler: [authRequired, requireActiveCharacter] }, async (req, reply) => {
     try {
       if (!(await isFeedingEnabled())) return reply.status(400).send({ error: 'The Feeding system is currently disabled.' });
 
@@ -324,8 +362,10 @@ module.exports = async function (fastify, opts) {
       if (!Number.isInteger(poolIndex) || poolIndex < 0 || poolIndex >= pools.length) {
         return reply.status(400).send({ error: 'Invalid hunting method selected.' });
       }
-      const difficulty = huntingDifficulty(division);
-      if (difficulty === null) return reply.status(400).send({ error: 'Invalid domain.' });
+      const divisionDifficulty = huntingDifficulty(division);
+      if (divisionDifficulty === null) return reply.status(400).send({ error: 'Invalid domain.' });
+      // Stored on the feeding as the total, so a Willpower reroll keeps it.
+      const difficulty = divisionDifficulty + await scarceBloodExtra(predatorType);
 
       const cycle = await getCurrentCycle();
       const { cycleIndex } = cycle;
@@ -382,7 +422,7 @@ module.exports = async function (fastify, opts) {
   // released downtime of this cycle in the same transaction, under the same phase/deadline and
   // 3-per-cycle checks as a normal submission. It is itself a feeding, so it skips the "fed first"
   // check, unlocks the rest of the actions, and is not one of the three hunts.
-  fastify.post('/api/feeding/downtime-feed', { preHandler: [authRequired] }, async (req, reply) => {
+  fastify.post('/api/feeding/downtime-feed', { preHandler: [authRequired, requireActiveCharacter] }, async (req, reply) => {
     try {
       if (!(await isFeedingEnabled())) return reply.status(400).send({ error: 'The Feeding system is currently disabled.' });
       const char = await getMyCharacter(req.user.id);
@@ -431,7 +471,7 @@ module.exports = async function (fastify, opts) {
   // Rule: 1 dot of Herd pool = -1 hunger, 1:1. Pool tracked in sheet.herd_current.
   // Pool starts = herd dots, depletes on use, regens +1 per cycle (3 weeks) up to max.
   // Hunger never drops below 1.
-  fastify.post('/api/feeding/herd-feed', { preHandler: [authRequired] }, async (req, reply) => {
+  fastify.post('/api/feeding/herd-feed', { preHandler: [authRequired, requireActiveCharacter] }, async (req, reply) => {
     try {
       if (!(await isFeedingEnabled())) return reply.status(400).send({ error: 'The Feeding system is currently disabled.' });
 
@@ -843,13 +883,7 @@ module.exports = async function (fastify, opts) {
       const roster = [];
       for (const row of chars) {
         const sheet = parseSheet(row.sheet);
-        const merits = Array.isArray(sheet?.advantages?.merits) ? sheet.advantages.merits : [];
-        const herdEntry = merits.find(b =>
-          String(b.id || '').toLowerCase().includes('herd__herd') ||
-          String(b.name || '').toLowerCase() === 'herd'
-        );
-        if (!herdEntry) continue;
-        const herdDots = clamp(Number(herdEntry.dots) || 0, 0, 5);
+        const herdDots = getHerdDots(sheet);
         if (herdDots < 1) continue;
         const herdCurrent = sheet.herd_current !== undefined
           ? clamp(Number(sheet.herd_current), 0, herdDots)
@@ -874,14 +908,10 @@ module.exports = async function (fastify, opts) {
       if (isNaN(d) || d === 0) return reply.status(400).send({ error: 'delta must be a non-zero integer' });
 
       const r = await withSheetLock(pool, character_id, (sheet, row) => {
-        const merits = Array.isArray(sheet?.advantages?.merits) ? sheet.advantages.merits : [];
-        const herdEntry = merits.find(b =>
-          String(b.id || '').toLowerCase().includes('herd__herd') ||
-          String(b.name || '').toLowerCase() === 'herd'
-        );
-        if (!herdEntry) return { error: 'Character does not have the Herd background' };
+        const herd = herdEntry(sheet);
+        if (!herd) return { error: 'Character does not have the Herd background' };
 
-        const herdDots = clamp(Number(herdEntry.dots) || 0, 0, 5);
+        const herdDots = clamp(Number(herd.dots) || 0, 0, 5);
         const rawCurrent = sheet.herd_current !== undefined ? Number(sheet.herd_current) : herdDots;
         const before = clamp(rawCurrent, 0, herdDots);
         const after = clamp(before + d, 0, herdDots);
@@ -935,6 +965,22 @@ module.exports = async function (fastify, opts) {
     }
   });
 
+  /* ---- Admin: scarce-blood extra difficulty (Baggers, Graverobbers) ---- */
+  fastify.post('/api/admin/feeding/scarce-blood', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    const extra = req.body?.extra;
+    if (!Number.isInteger(extra) || extra < 0 || extra > SCARCE_EXTRA_MAX) {
+      return reply.status(400).send({ error: `The extra difficulty must be a whole number from 0 to ${SCARCE_EXTRA_MAX}.` });
+    }
+    try {
+      await setSetting(SCARCE_EXTRA_KEY, String(extra));
+      log.adm('Scarce-blood extra difficulty set', { extra, by_user_id: req.user.id });
+      reply.send({ extra });
+    } catch (err) {
+      log.err('POST /api/admin/feeding/scarce-blood failed', { error: err.message });
+      reply.status(500).send({ error: 'Could not save the extra difficulty.' });
+    }
+  });
+
   /* ---- Admin: Feeding stats for current cycle ---- */
   fastify.get('/api/admin/feeding/stats', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
@@ -982,7 +1028,13 @@ module.exports = async function (fastify, opts) {
 
       // Rolled hunts only: Herd, safe and Storyteller feedings can't fail.
       const pct = counts.hunts > 0 ? Math.round((counts.huntSuccess / counts.hunts) * 100) : null;
+      const scarceCount = await scarceBloodCount();
       reply.send({
+        scarceBlood: {
+          types: SCARCE_BLOOD_TYPES, count: scarceCount, max: SCARCE_EXTRA_MAX,
+          extra: await scarceBloodExtra(SCARCE_BLOOD_TYPES[0]),
+          suggested: clamp(scarceCount - SCARCE_FREE, 0, SCARCE_EXTRA_MAX),
+        },
         cycleIndex, isCurrent, counts, successPct: pct,
         players: { active: Number(players.active) || 0, fed: Number(players.fed) || 0 },
         huntsPerCycle: HUNTS_PER_CYCLE,
@@ -1032,7 +1084,7 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  fastify.post('/api/feeding/ghouls/:rid/feed', { preHandler: [authRequired] }, async (req, reply) => {
+  fastify.post('/api/feeding/ghouls/:rid/feed', { preHandler: [authRequired, requireActiveCharacter] }, async (req, reply) => {
     const conn = await pool.getConnection();
     try {
       if (!(await isFeedingEnabled())) return reply.status(400).send({ error: 'The Feeding system is currently disabled.' });
@@ -1061,7 +1113,7 @@ module.exports = async function (fastify, opts) {
 
   // Feeds every ghoul the character can still feed this cycle (not the ones let
   // go), one Rouse Check each, stopping when their Hunger reaches 5.
-  fastify.post('/api/feeding/ghouls/feed-all', { preHandler: [authRequired] }, async (req, reply) => {
+  fastify.post('/api/feeding/ghouls/feed-all', { preHandler: [authRequired, requireActiveCharacter] }, async (req, reply) => {
     try {
       if (!(await isFeedingEnabled())) return reply.status(400).send({ error: 'The Feeding system is currently disabled.' });
       const char = await getMyCharacter(req.user.id);

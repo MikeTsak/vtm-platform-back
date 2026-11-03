@@ -120,7 +120,7 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/admin/broadcast', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const { title, body } = req.body;
-      const [users] = await pool.query('SELECT id FROM users');
+      const [users] = await pool.query('SELECT id FROM users WHERE archived_character_id IS NULL');
       let sent = 0;
       for (const u of users) {
         await sendPushNotification(u.id, title, body, {}, 'system');

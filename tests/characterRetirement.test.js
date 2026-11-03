@@ -204,3 +204,42 @@ it('lets a Storyteller retire a living character', async () => {
   expect((await req(player, 'GET', '/api/characters/me')).json().character).toBeNull();
   expect((await req(admin, 'POST', `/api/admin/characters/${firstId}/retire`)).statusCode).toBe(404);
 });
+
+// A Storyteller may let a player start a new character for any reason, not
+// only Final Death (sheet.allow_new_character, Admin > Characters).
+describe('Storyteller-allowed new character', () => {
+  let p, missingId;
+  const create = (sheet) => req(p, 'POST', '/api/characters', { name: 'Next One', clan: 'Brujah', sheet });
+  const sheetOf = async (id) => require('../utils/sheet').parseSheet((await pool.query('SELECT sheet FROM characters WHERE id=?', [id]))[0][0].sheet);
+
+  beforeAll(async () => {
+    p = await registerUser(app);
+    const [r] = await pool.query(
+      "INSERT INTO characters (user_id, name, clan, xp, is_missing, sheet) VALUES (?, 'Lost One', 'Toreador', 50, 1, '{\"notes\":\"kept\"}')",
+      [p.user.id]
+    );
+    missingId = r.insertId;
+  });
+
+  it('a missing character alone does not allow a new one', async () => {
+    expect((await create({})).statusCode).toBe(409);
+  });
+
+  it('the player cannot grant it to themselves through a sheet save', async () => {
+    await req(p, 'PUT', '/api/characters/me', { sheet: { allow_new_character: true } });
+    expect((await sheetOf(missingId)).allow_new_character).toBeUndefined();
+    expect((await create({})).statusCode).toBe(409);
+  });
+
+  it('with the grant: the new character is made, the old one archived, the grant used up', async () => {
+    await pool.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify({ notes: 'kept', allow_new_character: true }), missingId]);
+    // A creation sheet can't carry Storyteller grants either.
+    const res = await create({ allow_new_character: true, allow_reset: true });
+    expect(res.statusCode).toBe(200);
+    const [[old]] = await pool.query('SELECT user_id, retired_user_id FROM characters WHERE id=?', [missingId]);
+    expect(old).toEqual({ user_id: null, retired_user_id: p.user.id });
+    expect(await sheetOf(missingId)).toEqual({ notes: 'kept' });
+    const fresh = await sheetOf(JSON.parse(res.body).character.id);
+    expect([fresh.allow_new_character, fresh.allow_reset]).toEqual([undefined, undefined]);
+  });
+});
