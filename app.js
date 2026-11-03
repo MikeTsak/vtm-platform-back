@@ -65,6 +65,7 @@ function buildApp(overrides = {}) {
     ...overrides,
   };
 
+  require('./utils/idempotency').installIdempotency(fastify);
   registerRoutes(fastify, deps);
 
   return fastify;

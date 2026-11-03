@@ -168,3 +168,47 @@ describe('POST /api/characters/xp/spend — idempotency', () => {
     expect(parsed.character.id).toBe(999);
   });
 });
+
+// Every POST route honours a key now (utils/idempotency.js installIdempotency).
+// Under lag a request timed out in the browser, the player clicked again, and
+// the server later ran every copy: a downtime filed 3 times, items twice.
+describe('lag double-submits', () => {
+  const post = (cookie, url, payload, key) =>
+    app.inject({ method: 'POST', url, headers: { cookie, 'idempotency-key': key }, payload });
+
+  it('files a downtime once when the same submission arrives three times at once', async () => {
+    const { cookie, user } = await registerUser(app);
+    const [c] = await getTestPool().query(
+      'INSERT INTO characters (user_id, name, clan, xp, sheet) VALUES (?, ?, ?, ?, ?)',
+      [user.id, 'Lag Victim', 'Brujah', 0, JSON.stringify({ is_active: true })]
+    );
+    const payload = { title: 'Hunt the Sheriff', body: 'Same text, three clicks' };
+    const { setSetting } = require('../utils/settings');
+    await setSetting('feeding_enabled', 'false'); // no feeding step before downtimes here
+    let res;
+    try {
+      res = await Promise.all([1, 2, 3].map(() => post(cookie, '/api/downtimes', payload, 'dt-attempt-1')));
+    } finally {
+      await setSetting('feeding_enabled', 'true');
+    }
+    expect(res.map((r) => r.statusCode)).toEqual([200, 200, 200]);
+    const [rows] = await getTestPool().query('SELECT id FROM downtimes WHERE character_id=?', [c.insertId]);
+    expect(rows).toHaveLength(1);
+  });
+
+  it('creates an item once per attempt, and again on a new attempt', async () => {
+    const admin = await registerUser(app);
+    await getTestPool().query("UPDATE users SET role='admin' WHERE id=?", [admin.user.id]);
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: admin.email, password: admin.password } });
+    admin.cookie = login.cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+    const item = { name: 'Lag Test Relic' };
+    const first = await post(admin.cookie, '/api/admin/inventory', item, 'item-attempt-1');
+    const retry = await post(admin.cookie, '/api/admin/inventory', item, 'item-attempt-1');
+    expect([first.statusCode, retry.statusCode]).toEqual([201, 201]);
+    expect(retry.headers['x-idempotent-replay']).toBe('true');
+    expect(JSON.parse(retry.body).item.id).toBe(JSON.parse(first.body).item.id);
+    await post(admin.cookie, '/api/admin/inventory', item, 'item-attempt-2'); // a deliberate second copy
+    const [rows] = await getTestPool().query('SELECT id FROM inventory_items WHERE name=?', [item.name]);
+    expect(rows).toHaveLength(2);
+  });
+});

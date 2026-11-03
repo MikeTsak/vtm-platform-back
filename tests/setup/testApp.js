@@ -81,6 +81,8 @@ function buildTestApp(pool) {
   // routes/auth.js calls fastify.db.query(...) rather than the pool passed in
   // opts (matches how it's decorated in the real server.fastify.js).
   app.decorate('db', pool);
+  // As app.js: every POST route honours an Idempotency-Key.
+  require('../../utils/idempotency').installIdempotency(app);
 
   app.register(require('../../routes/auth'), {
     prefix: '/api/auth',

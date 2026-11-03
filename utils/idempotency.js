@@ -1,14 +1,12 @@
 // utils/idempotency.js
 //
-// Real idempotency-key protection, scoped to a short list of sensitive
-// mutations where a duplicate would cause actual harm (XP is a limited,
-// spendable resource — see routes/characterXp.js and the admin XP-spend
-// routes in server.fastify.js). Everywhere else, double-submit protection
-// is just disabling the button while its mutation is in flight — the
-// standard, sufficient pattern, and not worth an unbounded DB table for
-// every mutating endpoint in the app.
+// Real idempotency-key protection for every POST route (installIdempotency
+// below, minus NOT_IDEMPOTENT). Disabling the button is not enough: under lag
+// a request times out in the browser, the player clicks again, and the server
+// later runs both. Rows are purged after RETENTION_HOURS (nightly job).
 //
-// Wire both into a route's options directly (NOT as a global hook):
+// installIdempotency appends both hooks to each POST route's own options,
+// after its auth; a route may also wire them by hand:
 //   fastify.post('/path', {
 //     preHandler: [authRequired, idempotencyCheck],
 //     onSend: [idempotencySave],
@@ -43,6 +41,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function idempotencyCheck(req, reply) {
   const key = req.headers['idempotency-key'];
   if (!key) return; // this route wasn't called with a key — behave normally
+  if (!req.user) return; // public route (login, register...): nothing to scope the key to
 
   // req.url (NOT req.routeOptions.url) deliberately — the latter is the
   // route *pattern* ("/api/admin/characters/:id/xp/spend"), which would
@@ -91,6 +90,8 @@ async function idempotencyCheck(req, reply) {
         continue;
       }
       if (Date.now() >= deadline) {
+        // Tells the client to keep this key for its next try (core/api.js).
+        reply.header('X-Idempotent-Pending', 'true');
         return reply.status(409).send({ error: 'This request is still being processed. Try again in a moment.' });
       }
       await sleep(250);
@@ -106,6 +107,12 @@ async function idempotencySave(req, reply, payload) {
   if (!req.idempotencyClaimed) return payload;
 
   const scope = [req.headers['idempotency-key'], req.user.id, req.url];
+  // A stream (file download) can't be stored for replay: release the claim.
+  if (payload && typeof payload.pipe === 'function') {
+    pool.query(`DELETE FROM idempotency_keys WHERE ${SCOPE}`, scope)
+      .catch((e) => log.err('Failed to release idempotency claim', { error: e.message }));
+    return payload;
+  }
   // Not awaited. A retry that lands before this write finds the claim still
   // open and waits for it. Awaiting here would also hold the hook past the
   // handler's return, and Fastify then sends a second, empty reply for
@@ -152,4 +159,24 @@ async function purgeOldIdempotencyKeys() {
   return result.affectedRows;
 }
 
-module.exports = { idempotencyCheck, idempotencySave, purgeOldIdempotencyKeys, RETENTION_HOURS };
+// POSTs that are harmless to repeat and frequent enough that a row per call
+// isn't worth it: read marks, heartbeats, reads sent as POST, the session login.
+const NOT_IDEMPOTENT = /\/(read|delivered|heartbeat|preview|reactions\/batch)$|^\/api\/auth\//;
+
+// Every POST route honours an Idempotency-Key (the front sends one with every
+// POST, core/api.js), checked after the route's own auth. Under lag a player's
+// second click, after the first timed out, used to run again once the server
+// caught up: a downtime filed 3 times, an item created twice (2026-11-03).
+// Call before the routes are registered: onRoute only sees routes added later.
+function installIdempotency(fastify) {
+  fastify.addHook('onRoute', (route) => {
+    const methods = [].concat(route.method);
+    if (!methods.includes('POST') || NOT_IDEMPOTENT.test(route.url)) return;
+    const pre = [].concat(route.preHandler ?? []);
+    if (pre.includes(idempotencyCheck)) return; // wired by hand already
+    route.preHandler = [...pre, idempotencyCheck];
+    route.onSend = [...[].concat(route.onSend ?? []), idempotencySave];
+  });
+}
+
+module.exports = { idempotencyCheck, idempotencySave, installIdempotency, purgeOldIdempotencyKeys, RETENTION_HOURS };

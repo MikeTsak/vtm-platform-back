@@ -50,6 +50,8 @@ module.exports = fp(async function security(fastify) {
     credentials: true,
     methods: ['GET', 'PUT', 'POST', 'DELETE', 'OPTIONS', 'PATCH'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'Pragma', 'Expires', 'Idempotency-Key', 'X-Requested-With', 'Accept'],
+    // Read by the front's retry handling (core/api.js), cross-origin.
+    exposedHeaders: ['X-Idempotent-Pending'],
   });
   fastify.after(() => pluginLoaded('cors'));
 
