@@ -245,8 +245,10 @@ module.exports = async function (fastify, opts) {
         await conn.commit();
       }
 
-      // --- NEW: SEND PUSH TO ADMINS ---
-      try {
+      // Push to admins in the background: not awaited, so this request neither
+      // waits on the push services nor sits on its DB connection meanwhile
+      // (holding it while asking the pool for more can stall the whole pool).
+      (async () => {
         const [[idRow]] = await pool.query('SELECT display_name FROM email_identities WHERE id=?', [identityId]);
         const [[player]] = await pool.query('SELECT u.display_name, c.name as char_name FROM users u LEFT JOIN characters c ON c.user_id = u.id WHERE u.id=?', [req.user.id]);
         const [admins] = await pool.query("SELECT id FROM users WHERE role = 'admin'");
@@ -258,7 +260,7 @@ module.exports = async function (fastify, opts) {
         for (const admin of admins) {
           if (admin.id !== req.user.id) await sendPushNotification(admin.id, pushTitle, pushBody, { url: '/surfaceweb', icon: `/api/users/${req.user.id}/avatar` }, 'mail').catch(() => { });
         }
-      } catch (e) { log.err('Email push to admin failed', { error: e.message }); }
+      })().catch((e) => log.err('Email push to admin failed', { error: e.message }));
       // --------------------------------
 
       if (fastify.io) fastify.io.to('admin_chat').emit('emails:refresh', { type: 'new' });
@@ -332,7 +334,8 @@ module.exports = async function (fastify, opts) {
         try {
           const pushTitle = `Erebus Portal - 📧 New message from ${display_name}`;
           const pushBody = `Re: ${subject}`;
-          await sendPushNotification(user_id, pushTitle, pushBody, { url: '/surfaceweb', icon: `/api/identities/${identity.id}/avatar` }, 'mail').catch(() => {});
+          // Not awaited: see the player send above.
+          sendPushNotification(user_id, pushTitle, pushBody, { url: '/surfaceweb', icon: `/api/identities/${identity.id}/avatar` }, 'mail').catch(() => {});
         } catch (e) { log.err('Admin DM push failed', { error: e.message }); }
       }
 

@@ -191,7 +191,7 @@ async function runGhoulUpkeep(pool, log, { now = new Date(), cycleIndex: forced,
         result.starved += 1;
         result.report.push(`${ghoul.name}: STARVED (${ghoul.let_starve ? 'let go' : 'no feeder below Hunger 5'})`);
         const [owners] = ghoul.coterie_id
-          ? await pool.query('SELECT DISTINCT user_id FROM coterie_members WHERE coterie_id=?', [ghoul.coterie_id])
+          ? await conn.query('SELECT DISTINCT user_id FROM coterie_members WHERE coterie_id=?', [ghoul.coterie_id])
           : [[{ user_id: ghoul.owner_user_id }]];
         for (const o of owners) {
           messages.push({ userId: o.user_id, title: 'Ghoul starved', body: `${ghoul.name} went unfed and lost their powers until fed again.` });

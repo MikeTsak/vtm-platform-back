@@ -59,9 +59,9 @@ module.exports = async function (fastify, opts) {
 
   // The ids that are real accounts: a retired character's archive account
   // (migration 0075) is never seated in a group.
-  async function liveUserIds(ids) {
+  async function liveUserIds(ids, db = pool) {
     if (!ids.length) return [];
-    const [rows] = await pool.query('SELECT id FROM users WHERE id IN (?) AND archived_character_id IS NULL', [ids]);
+    const [rows] = await db.query('SELECT id FROM users WHERE id IN (?) AND archived_character_id IS NULL', [ids]);
     const live = new Set(rows.map(r => r.id));
     return ids.filter(id => live.has(id));
   }
@@ -373,7 +373,7 @@ module.exports = async function (fastify, opts) {
       const groupId = g.insertId;
 
       // 2. Add Creator to Members
-      const allMembers = await liveUserIds([req.user.id, ...members.map(Number)].filter((v, i, a) => a.indexOf(v) === i && !isNaN(v)));
+      const allMembers = await liveUserIds([req.user.id, ...members.map(Number)].filter((v, i, a) => a.indexOf(v) === i && !isNaN(v)), conn);
       const values = allMembers.map(uid => [groupId, uid]);
 
       await conn.query('INSERT INTO chat_group_members (group_id, user_id) VALUES ?', [values]);
@@ -381,7 +381,7 @@ module.exports = async function (fastify, opts) {
       await conn.commit();
 
       // Fetch and return the new group object
-      const [rows] = await pool.query('SELECT * FROM chat_groups WHERE id=?', [groupId]);
+      const [rows] = await conn.query('SELECT * FROM chat_groups WHERE id=?', [groupId]);
       log.ok('Group created', { user_id: req.user.id, group_id: groupId, name });
       reply.status(201).send({ group: rows[0] });
 

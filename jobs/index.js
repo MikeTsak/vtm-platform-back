@@ -48,9 +48,10 @@ const DAY_MIN = 24 * 60;
 // one process at a time; the others skip that tick (and record nothing). The
 // settings cache is cleared first because it is per process (30 s TTL): a latch
 // written by the process that ran a moment ago must be read fresh.
+// The lock connection comes from pool.lockPool, never from `pool`: see db.js.
 async function exclusive(name, fn) {
   const lock = `erebus_job:${name}`;
-  const conn = await pool.getConnection();
+  const conn = await pool.lockPool.getConnection();
   try {
     const [[{ got }]] = await conn.query('SELECT GET_LOCK(?, 0) AS got', [lock]);
     if (got !== 1) return { ran: false };
@@ -83,7 +84,21 @@ async function record(name, { ok, ms, note, error }) {
 
 // Run one job now: under the cross-process lock, timed, failures logged and
 // recorded. Never throws. Returns { ran, ok, note, error } for the run-now button.
+// A tick that finds the job still running (or waiting for a lock connection)
+// in this process skips, like a tick that loses GET_LOCK to another process,
+// instead of queueing another copy behind it.
+const inFlight = new Set();
 async function runJob(job, ctx = {}) {
+  if (inFlight.has(job.name)) return { ran: false };
+  inFlight.add(job.name);
+  try {
+    return await runJobOnce(job, ctx);
+  } finally {
+    inFlight.delete(job.name);
+  }
+}
+
+async function runJobOnce(job, ctx) {
   const started = Date.now();
   let outcome;
   try {

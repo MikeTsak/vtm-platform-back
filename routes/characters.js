@@ -44,7 +44,7 @@ module.exports = async function (fastify, opts) {
       await conn.commit();
       if (!isAdmin(req.user)) notifyNewDates(opts, req.user.id, parseSheet(row.sheet), next, CHARACTER_DATES);
 
-      const [[ch]] = await pool.query('SELECT * FROM characters WHERE id=?', [row.id]);
+      const [[ch]] = await conn.query('SELECT * FROM characters WHERE id=?', [row.id]);
       if (ch) ch.sheet = parseSheet(ch.sheet);
       log.char('Character updated', { id: row.id, user_id: req.user.id });
       return reply.send({ character: ch });
@@ -192,7 +192,7 @@ module.exports = async function (fastify, opts) {
       }
       await conn.commit();
 
-      const [rows] = await pool.query('SELECT * FROM characters WHERE id=?', [r.insertId]);
+      const [rows] = await conn.query('SELECT * FROM characters WHERE id=?', [r.insertId]);
       const ch = rows[0];
       if (ch) ch.sheet = parseSheet(ch.sheet);
       if (current) log.char('Out-of-play character retired', { id: current.id, user_id: req.user.id });

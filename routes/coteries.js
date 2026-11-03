@@ -366,8 +366,8 @@ module.exports = async function (fastify, opts) {
 
       await conn.commit();
 
-      const [[row]] = await pool.query('SELECT * FROM coteries WHERE id=?', [coterieId]);
-      const memberList = await loadMembers(null, coterieId);
+      const [[row]] = await conn.query('SELECT * FROM coteries WHERE id=?', [coterieId]);
+      const memberList = await loadMembers(conn, coterieId);
       log.ok('Coterie created', { id: coterieId, by_user_id: req.user.id });
       if (typeof broadcastNtfyAlert === 'function') {
         broadcastNtfyAlert(`A new Coterie **"${row.name}"** was just formed!`, {
@@ -697,7 +697,7 @@ module.exports = async function (fastify, opts) {
 
       await conn.commit();
 
-      const [[row]] = await pool.query('SELECT * FROM coteries WHERE id=?', [id]);
+      const [[row]] = await conn.query('SELECT * FROM coteries WHERE id=?', [id]);
       reply.send({
         coterie: presentCoterie(row, members),
         members,
@@ -1104,7 +1104,7 @@ module.exports = async function (fastify, opts) {
 
       await conn.commit();
 
-      const [[updated]] = await pool.query('SELECT * FROM coteries WHERE id=?', [id]);
+      const [[updated]] = await conn.query('SELECT * FROM coteries WHERE id=?', [id]);
       log.xp('Coterie purchase', {
         coterie_id: id, by_user_id: req.user.id, kind, key,
         from: fromDots, to: toDots, cost, from_bank: fromBank, from_personal: fromPersonal,
@@ -1293,7 +1293,7 @@ module.exports = async function (fastify, opts) {
 
       await conn.commit();
 
-      const [[updated]] = await pool.query('SELECT * FROM coteries WHERE id=?', [id]);
+      const [[updated]] = await conn.query('SELECT * FROM coteries WHERE id=?', [id]);
       log.adm('Coterie background contributed', {
         coterie_id: id, by_user_id: req.user.id, character_id: ch.id,
         key, given: givenDots, from: fromDots, to: toDots,
@@ -1459,7 +1459,7 @@ module.exports = async function (fastify, opts) {
       await conn.commit();
       log.adm('Coterie retainer created', { coterie_id: id, retainer_id: r.insertId, tier: input.tier, by_user_id: req.user.id });
       if (!acc.admin) notifyNewDates(opts, req.user.id, {}, input.sheet, RETAINER_DATES, { retainerName: input.name });
-      const [[row]] = await pool.query('SELECT * FROM retainers WHERE id=?', [r.insertId]);
+      const [[row]] = await conn.query('SELECT * FROM retainers WHERE id=?', [r.insertId]);
       row.sheet = parseSheet(row.sheet);
       reply.send(row);
     } catch (e) {
@@ -1503,7 +1503,7 @@ module.exports = async function (fastify, opts) {
       await conn.commit();
       log.adm('Coterie retainer updated', { coterie_id: id, retainer_id: rid, from_tier: old.tier, to_tier: input.tier, by_user_id: req.user.id });
       if (!acc.admin) notifyNewDates(opts, req.user.id, parseSheet(old.sheet), input.sheet, RETAINER_DATES, { retainerName: input.name, createdAt: old.created_at });
-      const [[row]] = await pool.query('SELECT * FROM retainers WHERE id=?', [rid]);
+      const [[row]] = await conn.query('SELECT * FROM retainers WHERE id=?', [rid]);
       row.sheet = parseSheet(row.sheet);
       reply.send(row);
     } catch (e) {
@@ -1577,7 +1577,7 @@ module.exports = async function (fastify, opts) {
       await conn.query('UPDATE retainers SET sheet=? WHERE id=?', [JSON.stringify(next), rid]);
       await conn.commit();
       log.adm('Coterie ghoul given blood', { coterie_id: id, retainer_id: rid, discipline, by_character_id: myId, by_user_id: req.user.id });
-      const [[row]] = await pool.query('SELECT * FROM retainers WHERE id=?', [rid]);
+      const [[row]] = await conn.query('SELECT * FROM retainers WHERE id=?', [rid]);
       row.sheet = parseSheet(row.sheet);
       reply.send(row);
     } catch (e) {
@@ -1620,7 +1620,7 @@ module.exports = async function (fastify, opts) {
       await conn.query('UPDATE retainers SET sheet=? WHERE id=?', [JSON.stringify(next), rid]);
       await conn.commit();
       log.adm('Coterie ghoul blood withdrawn', { coterie_id: id, retainer_id: rid, discipline, source_character_id: gift.source, by_user_id: req.user.id });
-      const [[row]] = await pool.query('SELECT * FROM retainers WHERE id=?', [rid]);
+      const [[row]] = await conn.query('SELECT * FROM retainers WHERE id=?', [rid]);
       row.sheet = parseSheet(row.sheet);
       reply.send(row);
     } catch (e) {

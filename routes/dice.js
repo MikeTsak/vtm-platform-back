@@ -337,7 +337,7 @@ module.exports = async function (fastify, opts) {
         });
         await conn.commit();
         if (orig.session_id) {
-          const [[s]] = await pool.query('SELECT id, session_code FROM live_sessions WHERE id=?', [orig.session_id]);
+          const [[s]] = await conn.query('SELECT id, session_code FROM live_sessions WHERE id=?', [orig.session_id]);
           await afterSessionRoll(s, row);
         }
         return reply.send({ roll: row, ghoulSheet: gSheet });
@@ -372,7 +372,7 @@ module.exports = async function (fastify, opts) {
       });
       await conn.commit();
       if (orig.session_id) {
-        const [[s]] = await pool.query('SELECT id, session_code FROM live_sessions WHERE id=?', [orig.session_id]);
+        const [[s]] = await conn.query('SELECT id, session_code FROM live_sessions WHERE id=?', [orig.session_id]);
         await afterSessionRoll(s, row);
       }
       return reply.send({ roll: row, sheet });

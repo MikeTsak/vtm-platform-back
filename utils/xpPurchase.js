@@ -441,7 +441,7 @@ async function runPurchase({ pool, table, id, body, isAdmin, unlockedTo, logXp =
     }
     await conn.commit();
 
-    const [[out]] = await pool.query(`SELECT * FROM ${table} WHERE id=?`, [id]);
+    const [[out]] = await conn.query(`SELECT * FROM ${table} WHERE id=?`, [id]);
     if (out) out.sheet = parseSheet(out.sheet);
     return { row: out, cost: result.cost };
   } catch (e) {

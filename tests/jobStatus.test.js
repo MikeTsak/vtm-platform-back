@@ -64,6 +64,17 @@ describe('runJob', () => {
     await first;
     expect((await row('t-slow')).runs).toBe(1);
   });
+
+  // Prod hung at every :x0 minute (2026-11-02/03): 5-6 jobs on one tick each held
+  // a pool connection for its lock and waited for another for its work.
+  it('finishes a tick with more jobs than the pool has connections', async () => {
+    const n = pool.pool.config.connectionLimit + 2;
+    const jobs = Array.from({ length: n }, (_, i) => ({ name: `t-tick-${i}`, label: 'tick', run: async () => { await pool.query('SELECT 1'); return 'ok'; } }));
+    const all = Promise.all(jobs.map((j) => runJob(j)));
+    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('deadlocked')), 5000));
+    const results = await Promise.race([all, timeout]);
+    expect(results.every((r) => r.ran && r.ok)).toBe(true);
+  });
 });
 
 describe('GET /api/admin/jobs', () => {

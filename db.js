@@ -3,7 +3,7 @@ const mysql = require('mysql2/promise');
 require('dotenv').config();
 const { log } = require('./logger');
 
-const pool = mysql.createPool({
+const options = {
   host: process.env.DB_HOST,
   port: process.env.DB_PORT,
   user: process.env.DB_USER,
@@ -23,8 +23,18 @@ const pool = mysql.createPool({
   idleTimeout: 60000,
   enableKeepAlive: true,
   queueLimit: 0,
-});
-require('./utils/unrefIdleSweeper')(pool);
+};
+const pool = mysql.createPool(options);
+
+// A background job holds its GET_LOCK connection for the whole run while its
+// work queries `pool` (jobs/index.js). With the lock taken from `pool` too,
+// enough jobs on one cron tick (5-6 at every :x0 minute) held every connection
+// and waited forever for one more: every request then hung until the process
+// was restarted (prod, 2026-11-02/03, once the pool went from 10 to 4-5). Locks
+// get their own pool so a lock holder never sits on what its work waits for.
+const lockPool = mysql.createPool({ ...options, connectionLimit: 2 });
+
+for (const p of [pool, lockPool]) require('./utils/unrefIdleSweeper')(p);
 
 // When MySQL refuses a NEW connection (the user's max_user_connections, or the
 // server's max_connections), wait and try again instead of failing the request.
@@ -33,9 +43,9 @@ require('./utils/unrefIdleSweeper')(pool);
 // never runs a statement twice. ~4 s worst case, then the error goes through.
 const REFUSED = new Set(['ER_TOO_MANY_USER_CONNECTIONS', 'ER_CON_COUNT_ERROR']);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-for (const method of ['query', 'execute', 'getConnection']) {
-  const original = pool[method].bind(pool);
-  pool[method] = async (...args) => {
+for (const [p, method] of [pool, lockPool].flatMap((p) => ['query', 'execute', 'getConnection'].map((m) => [p, m]))) {
+  const original = p[method].bind(p);
+  p[method] = async (...args) => {
     for (let attempt = 0; ; attempt += 1) {
       try {
         return await original(...args);
@@ -81,3 +91,4 @@ pool.on('release', (connection) => {
 });
 
 module.exports = pool;
+module.exports.lockPool = lockPool;
