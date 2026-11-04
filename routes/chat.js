@@ -997,7 +997,7 @@ module.exports = async function (fastify, opts) {
         message.attachment_id ? '📷 Image Attachment' : message.body,
         { url: '/schrecknet', icon: `/api/users/${req.user.id}/avatar` },
         'chat'
-      ).catch(() => {});
+      ).catch(() => { });
 
       if (fastify.io) {
         fastify.io.to(`user_${recipient_id}`).emit('chat:refresh', { type: 'user', partnerId: req.user.id });
