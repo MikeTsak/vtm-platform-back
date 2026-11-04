@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Erebus Portal API",
-    "version": "1.0.284",
+    "version": "1.0.286",
     "description": "API documentation for the Vampire: The Masquerade RPG portal."
   },
   "servers": [
@@ -3257,10 +3257,13 @@
                   "npc_id": {
                     "example": "any"
                   },
-                  "body": {
+                  "forward_of": {
                     "example": "any"
                   },
                   "attachment_id": {
+                    "example": "any"
+                  },
+                  "req": {
                     "example": "any"
                   },
                   "reply_to_id": {
@@ -3344,13 +3347,16 @@
                   "user_id": {
                     "example": "any"
                   },
-                  "body": {
+                  "queue": {
+                    "example": "any"
+                  },
+                  "forward_of": {
                     "example": "any"
                   },
                   "attachment_id": {
                     "example": "any"
                   },
-                  "queue": {
+                  "req": {
                     "example": "any"
                   },
                   "reply_to_id": {
@@ -3942,10 +3948,13 @@
                   "emoji_size": {
                     "example": "any"
                   },
-                  "body": {
+                  "forward_of": {
                     "example": "any"
                   },
                   "attachment_id": {
+                    "example": "any"
+                  },
+                  "req": {
                     "example": "any"
                   },
                   "reply_to_id": {
@@ -4097,10 +4106,13 @@
                   "recipient_id": {
                     "example": "any"
                   },
-                  "body": {
+                  "forward_of": {
                     "example": "any"
                   },
                   "attachment_id": {
+                    "example": "any"
+                  },
+                  "req": {
                     "example": "any"
                   },
                   "reply_to_id": {

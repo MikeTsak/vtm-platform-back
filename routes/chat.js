@@ -6,33 +6,12 @@
 const { isAdmin: checkIsAdmin, isOwnerOrAdmin } = require('../services/guards');
 const { idempotencyCheck, idempotencySave } = require('../utils/idempotency');
 const { convKey, loadConvSettings, historyWindow, courtStanding, emojiSize } = require('../utils/chatConversation');
+const { uploadChatImage, storedUrl, canAccessChatMedia } = require('../services/chatMedia');
+const { messageInput } = require('../services/chatForward');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, moderateLimiter, uploadLimiter, sendPushNotification, sharp } = opts;
 
-  // A chat_media row is visible to whoever uploaded it, or to a participant
-  // of whichever message (DM / group / NPC) actually references it as its
-  // attachment_id — not to any authenticated user who can guess its numeric
-  // id. Admins can always see everything (moderation).
-  async function canAccessChatMedia(mediaId, user) {
-    if (!mediaId || !user) return false;
-    if (checkIsAdmin(user)) return true;
-
-    const [rows] = await pool.query(
-      `SELECT 1 FROM chat_media WHERE id = ? AND uploader_id = ?
-       UNION
-       SELECT 1 FROM chat_messages WHERE attachment_id = ? AND (sender_id = ? OR recipient_id = ?)
-       UNION
-       SELECT 1 FROM npc_messages WHERE attachment_id = ? AND user_id = ?
-       UNION
-       SELECT 1 FROM chat_group_messages gm
-         JOIN chat_group_members mem ON mem.group_id = gm.group_id AND mem.user_id = ?
-       WHERE gm.attachment_id = ?
-       LIMIT 1`,
-      [mediaId, user.id, mediaId, user.id, user.id, mediaId, user.id, user.id, mediaId]
-    );
-    return rows.length > 0;
-  }
 
   // A member's display name for system-message text: character name if they
   // have one, else their account display name — same fallback the group
@@ -227,10 +206,20 @@ module.exports = async function (fastify, opts) {
         finalFilename = finalFilename.replace(/\.[^/.]+$/, "") + ".webp";
       }
 
-      // Insert into DB
+      // Images go to the image host (services/chatMedia.js); voice messages
+      // stay in the row. If the host fails, the image is kept in the row
+      // rather than lost, and the chat-media-offload job moves it later.
+      let dataUrl = null;
+      if (finalMime.startsWith('image/')) {
+        try {
+          dataUrl = await uploadChatImage(finalBuffer, finalFilename);
+        } catch (e) {
+          log.warn('Chat image kept in the database: image host upload failed', { error: e.message });
+        }
+      }
       const [ins] = await pool.query(
-        'INSERT INTO chat_media (uploader_id, filename, mime, size, data) VALUES (?,?,?,?,?)',
-        [req.user.id, finalFilename, finalMime, finalSize, finalBuffer]
+        'INSERT INTO chat_media (uploader_id, filename, mime, size, data, data_url) VALUES (?,?,?,?,?,?)',
+        [req.user.id, finalFilename, finalMime, finalSize, dataUrl ? null : finalBuffer, dataUrl]
       );
 
       log.ok('Chat media uploaded', { user_id: req.user.id, media_id: ins.insertId });
@@ -254,8 +243,12 @@ module.exports = async function (fastify, opts) {
       const id = Number(req.params.id);
       if (!(await canAccessChatMedia(id, req.user))) return reply.status(404).send('Not found');
 
-      const [rows] = await pool.query('SELECT mime, size, data FROM chat_media WHERE id=?', [id]);
+      const [rows] = await pool.query('SELECT mime, size, data, data_url FROM chat_media WHERE id=?', [id]);
       if (!rows.length) return reply.status(404).send('Not found');
+
+      // On the image host: send the viewer there (after the access check above).
+      const url = storedUrl(rows[0]);
+      if (url) return reply.header('Cache-Control', 'private, max-age=86400').redirect(url);
 
       const { mime, size, data } = rows[0];
       reply.header('Content-Type', mime);
@@ -409,7 +402,7 @@ module.exports = async function (fastify, opts) {
       const [messages] = await pool.query(`
       SELECT * FROM (
       SELECT m.id, m.sender_id, m.body, m.created_at, m.type, m.edited, m.emoji_size,
-            m.attachment_id, m.reply_to_id,
+            m.attachment_id, m.reply_to_id, m.forwarded_from,
             u.display_name, c.name as char_name, c.clan,
             r.id AS reply_found, LEFT(r.body, 300) AS reply_body, r.sender_id AS reply_sender_id,
             r.attachment_id AS reply_attachment_id, COALESCE(rc.name, ru.display_name) AS reply_sender_name
@@ -603,7 +596,10 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/chat/groups/:id/messages', { preHandler: [authRequired, idempotencyCheck], onSend: [idempotencySave] }, async (req, reply) => {
     try {
       const groupId = Number(req.params.id);
-      const { body, attachment_id, reply_to_id } = req.body;
+      // The typed message or a forwarded copy; attachment checked (services/chatForward.js).
+      const input = await messageInput(req);
+      if (input.error) return reply.status(input.status).send({ error: input.error });
+      const { body, attachment_id, reply_to_id, forwarded_from } = input;
 
       // Verify membership ... (keep existing check)
       const [m] = await pool.query('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?', [groupId, req.user.id]);
@@ -614,11 +610,11 @@ module.exports = async function (fastify, opts) {
       const replyTo = await validReplyTo(reply_to_id,
         "SELECT id FROM chat_group_messages WHERE id=? AND group_id=? AND type != 'system'", [groupId]);
 
-      const [r] = await pool.query('INSERT INTO chat_group_messages (group_id, sender_id, body, attachment_id, reply_to_id, emoji_size) VALUES (?,?,?,?,?,?)',
-        [groupId, req.user.id, body ? body.trim() : '', attachment_id || null, replyTo, attachment_id ? null : emojiSize(body, req.body.emoji_size)]);
+      const [r] = await pool.query('INSERT INTO chat_group_messages (group_id, sender_id, body, attachment_id, reply_to_id, emoji_size, forwarded_from) VALUES (?,?,?,?,?,?,?)',
+        [groupId, req.user.id, body ? body.trim() : '', attachment_id || null, replyTo, attachment_id ? null : emojiSize(body, req.body.emoji_size), forwarded_from]);
 
       const [[message]] = await pool.query(`
-      SELECT m.id, m.sender_id, m.body, m.created_at, m.attachment_id, m.type, m.reply_to_id, m.emoji_size,
+      SELECT m.id, m.sender_id, m.body, m.created_at, m.attachment_id, m.type, m.reply_to_id, m.emoji_size, m.forwarded_from,
              u.display_name, c.name as char_name, c.clan
       FROM chat_group_messages m
       LEFT JOIN users u ON m.sender_id = u.id
@@ -913,7 +909,7 @@ module.exports = async function (fastify, opts) {
         `SELECT * FROM (
          SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at,
                 cm.read_at, cm.delivered_at, cm.edited, cm.emoji_size, cm.type,
-                cm.attachment_id, cm.reply_to_id,
+                cm.attachment_id, cm.reply_to_id, cm.forwarded_from,
                 u_sender.display_name as sender_name,
                 r.id AS reply_found, LEFT(r.body, 300) AS reply_body,
                 r.sender_id AS reply_sender_id, r.attachment_id AS reply_attachment_id
@@ -939,8 +935,11 @@ module.exports = async function (fastify, opts) {
   // Send a message
   fastify.post('/api/chat/messages', { preHandler: [authRequired, idempotencyCheck], onSend: [idempotencySave] }, async (req, reply) => {
     try {
-      // Added attachment_id to destructuring
-      const { recipient_id, body, attachment_id, reply_to_id } = req.body;
+      const { recipient_id } = req.body;
+      // The typed message or a forwarded copy; attachment checked (services/chatForward.js).
+      const input = await messageInput(req);
+      if (input.error) return reply.status(input.status).send({ error: input.error });
+      const { body, attachment_id, reply_to_id, forwarded_from } = input;
 
       // Allow empty body ONLY if there is an attachment
       if (!recipient_id || (!attachment_id && (!body || !body.trim()))) {
@@ -956,13 +955,13 @@ module.exports = async function (fastify, opts) {
         [req.user.id, recipient_id, recipient_id, req.user.id]);
 
       const [r] = await pool.query(
-        'INSERT INTO chat_messages (sender_id, recipient_id, body, attachment_id, reply_to_id, emoji_size) VALUES (?, ?, ?, ?, ?, ?)',
-        [req.user.id, recipient_id, body ? body.trim() : '', attachment_id || null, replyTo, attachment_id ? null : emojiSize(body, req.body.emoji_size)]
+        'INSERT INTO chat_messages (sender_id, recipient_id, body, attachment_id, reply_to_id, emoji_size, forwarded_from) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [req.user.id, recipient_id, body ? body.trim() : '', attachment_id || null, replyTo, attachment_id ? null : emojiSize(body, req.body.emoji_size), forwarded_from]
       );
 
       // Fetch back with attachment info
       const [[message]] = await pool.query(
-        `SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at, cm.attachment_id, cm.reply_to_id, cm.emoji_size,
+        `SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at, cm.attachment_id, cm.reply_to_id, cm.emoji_size, cm.forwarded_from,
               u_sender.display_name as sender_name,
               c.name as char_name
        FROM chat_messages cm
@@ -1238,12 +1237,7 @@ module.exports = async function (fastify, opts) {
       const [rows] = await pool.query('SELECT data_url, data, mime FROM chat_media WHERE id=?', [id]);
       if (!rows.length) return reply.status(404).send('Not found');
 
-      let url = rows[0].data_url;
-      if (!url && typeof rows[0].data === 'string' && rows[0].data.startsWith('http')) {
-        url = rows[0].data;
-      }
-
-      reply.send({ url: url || null, mime: rows[0].mime });
+      reply.send({ url: storedUrl(rows[0]), mime: rows[0].mime });
     } catch (e) {
       reply.status(500).send({ error: 'Error fetching media info' });
     }
@@ -1346,6 +1340,8 @@ module.exports = async function (fastify, opts) {
 
       const { msg, isAdmin, status, error } = await loadOwnMessage(req, table, 'edit');
       if (error) return reply.status(status).send({ error });
+      // Its label names the original author: changing the text would put words in their mouth.
+      if (msg.forwarded_from) return reply.status(403).send({ error: 'A forwarded message can\'t be edited.' });
       if (!isAdmin && await hasBeenAnsweredSince(table, msg)) {
         return reply.status(403).send({ error: 'This message has already been answered and can no longer be edited.' });
       }

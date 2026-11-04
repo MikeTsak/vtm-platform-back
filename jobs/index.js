@@ -28,6 +28,7 @@ const { checkAndAutoSendElysiumInvitations } = require('../services/elysiumDisco
 const { closeStaleSessions } = require('../services/liveSession');
 const { expireBloodHunts } = require('../services/bloodHunts');
 const { runWillpowerReset } = require('../services/willpowerReset');
+const { offloadChatImages } = require('../services/chatMedia');
 
 // Daily crons fire on Athens wall-clock time, not the host's (node-cron
 // otherwise uses the server's local zone, which on a shared host may be UTC).
@@ -311,6 +312,18 @@ const JOBS = [
       const [pr] = await pool.query('DELETE FROM password_resets WHERE expires_at < NOW() - INTERVAL 7 DAY');
       const [dl] = await pool.query('DELETE FROM debug_login_codes WHERE expires_at < NOW() - INTERVAL 7 DAY');
       return `${keys || 0} idempotency key(s), ${pr.affectedRows} reset token(s), ${dl.affectedRows} debug code(s)`;
+    },
+  },
+  {
+    // Chat images still stored in the database (sent before 2026-11-04, or while
+    // the image host was down) move to the image host, 25 a run, so a backlog
+    // never loads the server at once (services/chatMedia.js). Repeating is harmless.
+    name: 'chat-media-offload', label: 'Chat images to the image host', cron: '*/10 * * * *', maxGapMin: 30,
+    async run() {
+      const r = await offloadChatImages();
+      if (r.failed && !r.moved) throw new Error(`${r.failed} upload(s) failed, ${r.left} left. ${r.error}`);
+      if (!r.moved && !r.left) return 'all chat images are on the image host';
+      return `moved ${r.moved}, ${r.left} left${r.failed ? `; ${r.failed} failed (${r.error})` : ''}`;
     },
   },
   {

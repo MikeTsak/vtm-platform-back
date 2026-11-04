@@ -16,3 +16,11 @@ require('dotenv').config();
 const REAL_DB_NAME = process.env.DB_NAME || 'vtm';
 process.env.TEST_DB_NAME = process.env.TEST_DB_NAME || `${REAL_DB_NAME}_test`;
 process.env.DB_NAME = process.env.TEST_DB_NAME;
+
+// services/media.js holds the PRODUCTION image host client (img.miketsak.gr,
+// with the real key from .env), used directly by services/chatMedia.js. Tests
+// must never upload there: every upload fails here, and a test that needs one
+// swaps in its own fake. (Loading media.js opens no connection.)
+require('../../services/media').imageClient.uploadImage = async () => {
+  throw new Error('Tests never upload to the real image host (tests/setup/env.js)');
+};

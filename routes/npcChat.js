@@ -3,6 +3,7 @@
 // Player <-> NPC direct messages, and the Storyteller side that answers them.
 const { idempotencyCheck, idempotencySave } = require('../utils/idempotency');
 const { convKey, loadConvSettings, historyWindow, emojiSize } = require('../utils/chatConversation');
+const { messageInput } = require('../services/chatForward');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, requireCourt, sendPushNotification } = opts;
@@ -60,7 +61,7 @@ module.exports = async function (fastify, opts) {
       const w = await historyWindow(pool, 'npc_messages', 'm', req.query);
       const [messages] = await pool.query(
         `SELECT * FROM (
-        SELECT m.id, m.body, m.from_side, m.created_at, m.attachment_id, m.status, m.edited, m.read_at, m.reply_to_id, m.emoji_size, m.type,
+        SELECT m.id, m.body, m.from_side, m.created_at, m.attachment_id, m.status, m.edited, m.read_at, m.reply_to_id, m.emoji_size, m.type, m.forwarded_from,
                 r.id AS reply_found, LEFT(r.body, 300) AS reply_body, r.from_side AS reply_from_side,
                 r.attachment_id AS reply_attachment_id
         FROM npc_messages m
@@ -188,7 +189,7 @@ module.exports = async function (fastify, opts) {
       const w = await historyWindow(pool, 'npc_messages', 'm', req.query);
       const [rows] = await pool.query(
         `SELECT * FROM (
-        SELECT m.id, m.npc_id, m.user_id, m.from_side, m.body, m.created_at, m.attachment_id, m.reply_to_id, m.edited, m.emoji_size, m.type,
+        SELECT m.id, m.npc_id, m.user_id, m.from_side, m.body, m.created_at, m.attachment_id, m.reply_to_id, m.edited, m.emoji_size, m.type, m.forwarded_from,
                 r.id AS reply_found, LEFT(r.body, 300) AS reply_body, r.from_side AS reply_from_side,
                 r.attachment_id AS reply_attachment_id
         FROM npc_messages m
@@ -212,7 +213,11 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/chat/npc/messages', { preHandler: [authRequired, idempotencyCheck], onSend: [idempotencySave] }, async (req, reply) => {
     try {
       const userId = req.user.id;
-      const { npc_id, body, attachment_id, reply_to_id } = req.body || {};
+      const { npc_id } = req.body || {};
+      // The typed message or a forwarded copy; attachment checked (services/chatForward.js).
+      const input = await messageInput(req);
+      if (input.error) return reply.status(input.status).send({ error: input.error });
+      const { body, attachment_id, reply_to_id, forwarded_from } = input;
 
       if (!npc_id || (!attachment_id && (!body || !body.trim()))) {
         return reply.status(400).send({ error: 'NPC and content required' });
@@ -227,8 +232,8 @@ module.exports = async function (fastify, opts) {
 
       const size = attachment_id ? null : emojiSize(body, req.body.emoji_size);
       const [r] = await pool.query(
-        'INSERT INTO npc_messages (npc_id, user_id, from_side, body, attachment_id, reply_to_id, emoji_size) VALUES (?,?,?,?,?,?,?)',
-        [Number(npc_id), userId, 'user', body ? body.trim() : '', attachment_id || null, replyTo, size]
+        'INSERT INTO npc_messages (npc_id, user_id, from_side, body, attachment_id, reply_to_id, emoji_size, forwarded_from) VALUES (?,?,?,?,?,?,?,?)',
+        [Number(npc_id), userId, 'user', body ? body.trim() : '', attachment_id || null, replyTo, size, forwarded_from]
       );
 
       // FIX: Define the message object so notifications and the response don't crash
@@ -241,6 +246,7 @@ module.exports = async function (fastify, opts) {
         attachment_id: attachment_id || null,
         emoji_size: size,
         reply_to_id: replyTo,
+        forwarded_from,
         created_at: new Date()
       };
 
@@ -316,7 +322,11 @@ module.exports = async function (fastify, opts) {
 
   fastify.post('/api/admin/chat/npc/messages', { preHandler: [authRequired, requireAdmin, idempotencyCheck], onSend: [idempotencySave] }, async (req, reply) => {
     try {
-      const { npc_id, user_id, body, attachment_id, queue, reply_to_id } = req.body || {};
+      const { npc_id, user_id, queue } = req.body || {};
+      // The typed message or a forwarded copy; attachment checked (services/chatForward.js).
+      const input = await messageInput(req);
+      if (input.error) return reply.status(input.status).send({ error: input.error });
+      const { body, attachment_id, reply_to_id, forwarded_from } = input;
       if (!npc_id || !user_id || (!attachment_id && (!body || !body.trim()))) {
         return reply.status(400).send({ error: 'Missing fields' });
       }
@@ -326,8 +336,8 @@ module.exports = async function (fastify, opts) {
 
       const size = attachment_id ? null : emojiSize(body, req.body.emoji_size);
       const [r] = await pool.query(
-        'INSERT INTO npc_messages (npc_id, user_id, from_side, body, attachment_id, status, reply_to_id, emoji_size) VALUES (?,?,?,?,?,?,?,?)',
-        [Number(npc_id), Number(user_id), 'npc', body ? body.trim() : '', attachment_id || null, status, replyTo, size]
+        'INSERT INTO npc_messages (npc_id, user_id, from_side, body, attachment_id, status, reply_to_id, emoji_size, forwarded_from) VALUES (?,?,?,?,?,?,?,?,?)',
+        [Number(npc_id), Number(user_id), 'npc', body ? body.trim() : '', attachment_id || null, status, replyTo, size, forwarded_from]
       );
 
       // FIX: Define the message object so notifications and the response don't crash
@@ -340,6 +350,7 @@ module.exports = async function (fastify, opts) {
         attachment_id: attachment_id || null,
         emoji_size: size,
         reply_to_id: replyTo,
+        forwarded_from,
         created_at: new Date(),
         status
       };
