@@ -772,6 +772,9 @@ module.exports = async function (fastify, opts) {
         MAX(c.name) AS char_name,
         MAX(c.clan) AS clan,
         MAX(c.image_url) AS image_url,
+        MAX(u.avatar_url) AS avatar_url,
+        MAX(u.avatar_url_thumb) AS avatar_url_thumb,
+        MAX(CASE WHEN u.avatar_url IS NOT NULL OR u.avatar IS NOT NULL THEN 1 ELSE 0 END) AS has_avatar,
         MAX(c.is_deceased) AS is_deceased,
         MAX(c.is_left) AS is_left,
         MAX(c.is_missing) AS is_missing,
@@ -867,7 +870,8 @@ module.exports = async function (fastify, opts) {
 
       if (isAdmin) {
         // Admins see if ANY player has sent an unread message to the NPC
-        query = `SELECT n.id, n.name, n.clan, n.image_url,
+        query = `SELECT n.id, n.name, n.clan, n.image_url, n.avatar_url, n.avatar_url_thumb,
+             CASE WHEN n.avatar_url IS NOT NULL OR n.avatar IS NOT NULL THEN 1 ELSE 0 END AS has_avatar,
              n.camarilla_titles AS titles, n.status AS court_status, n.is_hidden,
              m.last_message_at,
              COALESCE(m.unread_count, 0) as unread_count
@@ -884,7 +888,8 @@ module.exports = async function (fastify, opts) {
         params = [];
       } else {
         // Players see if the NPC has sent them an unread message
-        query = `SELECT n.id, n.name, n.clan, n.image_url,
+        query = `SELECT n.id, n.name, n.clan, n.image_url, n.avatar_url, n.avatar_url_thumb,
+             CASE WHEN n.avatar_url IS NOT NULL OR n.avatar IS NOT NULL THEN 1 ELSE 0 END AS has_avatar,
              n.camarilla_titles AS titles, n.status AS court_status, n.is_hidden,
              m.last_message_at,
              COALESCE(m.unread_count, 0) as unread_count

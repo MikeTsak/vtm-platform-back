@@ -60,6 +60,34 @@ function sendAvatarBlob(reply, getMimeType, blob) {
   return reply.send(blob);
 }
 
+function sendAvatarNotFound(reply) {
+  reply.header('Cache-Control', 'public, max-age=120');
+  return reply.status(404).send('Avatar not found');
+}
+
+// In-memory negative cache for missing avatars to prevent repetitive DB queries during rapid request bursts.
+const missingAvatarCache = new Map();
+const MISSING_CACHE_TTL_MS = 60000;
+
+function isAvatarMissingCached(key) {
+  const expiresAt = missingAvatarCache.get(key);
+  if (!expiresAt) return false;
+  if (Date.now() > expiresAt) {
+    missingAvatarCache.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function setAvatarMissingCached(key) {
+  if (missingAvatarCache.size > 2000) missingAvatarCache.clear();
+  missingAvatarCache.set(key, Date.now() + MISSING_CACHE_TTL_MS);
+}
+
+function clearAvatarMissingCached(key) {
+  missingAvatarCache.delete(key);
+}
+
 const wantsRaw = (req) => req.query.raw === '1' || req.query.raw === 'true';
 
 module.exports = async function (fastify, opts) {
@@ -67,8 +95,14 @@ module.exports = async function (fastify, opts) {
 
   fastify.get('/api/npcs/:id/avatar', async (req, reply) => {
     try {
+      const cacheKey = `npc:${req.params.id}`;
+      if (isAvatarMissingCached(cacheKey)) return sendAvatarNotFound(reply);
+
       const [rows] = await pool.query('SELECT avatar_url, avatar_url_thumb, avatar FROM npcs WHERE id = ?', [req.params.id]);
-      if (rows.length === 0) return reply.status(404).send('Avatar not found');
+      if (rows.length === 0) {
+        setAvatarMissingCached(cacheKey);
+        return sendAvatarNotFound(reply);
+      }
 
       const targetUrl = (req.query.size === 'thumb' && rows[0].avatar_url_thumb) ? rows[0].avatar_url_thumb
         : rows[0].avatar_url ? rows[0].avatar_url
@@ -76,7 +110,10 @@ module.exports = async function (fastify, opts) {
             : null;
 
       if (targetUrl) return sendAvatar(req, reply, log, targetUrl);
-      if (!rows[0].avatar) return reply.status(404).send('Avatar not found');
+      if (!rows[0].avatar) {
+        setAvatarMissingCached(cacheKey);
+        return sendAvatarNotFound(reply);
+      }
       return sendAvatarBlob(reply, getMimeType, rows[0].avatar);
     } catch (e) {
       log.err('NPC Avatar GET error', { message: e.message });
@@ -117,6 +154,7 @@ module.exports = async function (fastify, opts) {
       // CDN-only — no BLOB fallback (see migrate-avatars-to-cdn.js for the
       // one-off cleanup of any avatars still stored as bytes from before).
       await pool.query('UPDATE npcs SET avatar_url = ?, avatar_url_thumb = ?, avatar = NULL WHERE id = ?', [avatarUrl, avatarUrlThumb, req.params.id]);
+      clearAvatarMissingCached(`npc:${req.params.id}`);
       reply.send({ success: true, message: 'NPC Avatar updated successfully.', url: avatarUrl });
     } catch (e) {
       log.err('NPC Avatar PUT error', { message: e.message });
@@ -127,14 +165,23 @@ module.exports = async function (fastify, opts) {
   // GET retainer avatar
   fastify.get('/api/retainers/:id/avatar', async (req, reply) => {
     try {
+      const cacheKey = `retainer:${req.params.id}`;
+      if (isAvatarMissingCached(cacheKey)) return sendAvatarNotFound(reply);
+
       const [rows] = await pool.query('SELECT avatar_url, avatar_url_thumb, avatar FROM retainers WHERE id = ?', [req.params.id]);
-      if (rows.length === 0) return reply.status(404).send('No avatar found');
+      if (rows.length === 0) {
+        setAvatarMissingCached(cacheKey);
+        return sendAvatarNotFound(reply);
+      }
       const targetUrl = (req.query.size === 'thumb' && rows[0].avatar_url_thumb) ? rows[0].avatar_url_thumb
         : rows[0].avatar_url ? rows[0].avatar_url
           : (typeof rows[0].avatar === 'string' && rows[0].avatar.startsWith('http')) ? rows[0].avatar
             : null;
       if (targetUrl) return sendAvatar(req, reply, log, targetUrl);
-      if (!rows[0].avatar) return reply.status(404).send('No avatar found');
+      if (!rows[0].avatar) {
+        setAvatarMissingCached(cacheKey);
+        return sendAvatarNotFound(reply);
+      }
       return sendAvatarBlob(reply, getMimeType, rows[0].avatar);
     } catch (e) {
       log.err('Failed to get retainer avatar', { error: e.message });
@@ -185,6 +232,7 @@ module.exports = async function (fastify, opts) {
       // CDN-only — no BLOB fallback (see migrate-avatars-to-cdn.js for the
       // one-off cleanup of any avatars still stored as bytes from before).
       await pool.query('UPDATE retainers SET avatar_url = ?, avatar_url_thumb = ?, avatar = NULL WHERE id = ?', [avatarUrl, avatarUrlThumb, req.params.id]);
+      clearAvatarMissingCached(`retainer:${req.params.id}`);
       reply.send({ success: true, url: avatarUrl });
     } catch (e) {
       log.err('Failed to update retainer avatar', { error: e.message });
@@ -196,19 +244,26 @@ module.exports = async function (fastify, opts) {
 
   fastify.get('/api/identities/:id/avatar', async (req, reply) => {
     try {
+      const cacheKey = `identity:${req.params.id}`;
+      if (isAvatarMissingCached(cacheKey)) return sendAvatarNotFound(reply);
+
       // No `avatar` blob column here (see the PUT handler below): identity
       // avatars have only ever gone through the CDN, so there's no legacy
       // blob data to fall back to for this table the way there is for
       // users/npcs/retainers.
       const [rows] = await pool.query('SELECT avatar_url, avatar_url_thumb FROM email_identities WHERE id = ?', [req.params.id]);
-      if (rows.length === 0) return reply.status(404).send('Avatar not found');
+      if (rows.length === 0) {
+        setAvatarMissingCached(cacheKey);
+        return sendAvatarNotFound(reply);
+      }
 
       const targetUrl = (req.query.size === 'thumb' && rows[0].avatar_url_thumb) ? rows[0].avatar_url_thumb
         : rows[0].avatar_url ? rows[0].avatar_url
           : null;
 
       if (targetUrl) return sendAvatar(req, reply, log, targetUrl);
-      return reply.status(404).send('Avatar not found');
+      setAvatarMissingCached(cacheKey);
+      return sendAvatarNotFound(reply);
     } catch (err) {
       log.err('Identity avatar fetch error', err);
       reply.status(500).send('Error fetching avatar');
@@ -254,6 +309,7 @@ module.exports = async function (fastify, opts) {
       // to duplicate the image bytes into MySQL as well. email_identities
       // has no `avatar` blob column (see GET above) — nothing to clear.
       await pool.query('UPDATE email_identities SET avatar_url = ?, avatar_url_thumb = ? WHERE id = ?', [result.url, thumbUrl, req.params.id]);
+      clearAvatarMissingCached(`identity:${req.params.id}`);
       log.adm('Identity avatar updated', { identity_id: req.params.id, admin_id: req.user.id });
       reply.send({ ok: true, message: 'Identity avatar updated successfully', url: result.url });
     } catch (err) {
@@ -270,8 +326,14 @@ module.exports = async function (fastify, opts) {
 
   fastify.get('/api/users/:id/avatar', async (req, reply) => {
     try {
+      const cacheKey = `user:${req.params.id}`;
+      if (isAvatarMissingCached(cacheKey)) return sendAvatarNotFound(reply);
+
       const [rows] = await pool.query('SELECT avatar_url, avatar_url_thumb, avatar FROM users WHERE id = ?', [req.params.id]);
-      if (rows.length === 0) return reply.status(404).send('Avatar not found');
+      if (rows.length === 0) {
+        setAvatarMissingCached(cacheKey);
+        return sendAvatarNotFound(reply);
+      }
 
       const targetUrl = (req.query.size === 'thumb' && rows[0].avatar_url_thumb) ? rows[0].avatar_url_thumb
         : rows[0].avatar_url ? rows[0].avatar_url
@@ -279,7 +341,10 @@ module.exports = async function (fastify, opts) {
             : null;
 
       if (targetUrl) return sendAvatar(req, reply, log, targetUrl);
-      if (!rows[0].avatar) return reply.status(404).send('Avatar not found');
+      if (!rows[0].avatar) {
+        setAvatarMissingCached(cacheKey);
+        return sendAvatarNotFound(reply);
+      }
       return sendAvatarBlob(reply, getMimeType, rows[0].avatar);
     } catch (e) {
       log.err('Avatar GET error', { message: e.message });
@@ -328,6 +393,7 @@ module.exports = async function (fastify, opts) {
       // CDN-only — no BLOB fallback (see migrate-avatars-to-cdn.js for the
       // one-off cleanup of any avatars still stored as bytes from before).
       await pool.query('UPDATE users SET avatar_url = ?, avatar_url_thumb = ?, avatar = NULL WHERE id = ?', [avatarUrl, avatarUrlThumb, req.params.id]);
+      clearAvatarMissingCached(`user:${req.params.id}`);
       reply.send({ success: true, message: 'Avatar updated successfully.', url: avatarUrl });
     } catch (e) {
       log.err('Avatar PUT error', { message: e.message, stack: e.stack });
