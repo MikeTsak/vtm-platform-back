@@ -63,13 +63,17 @@ async function offloadChatImages(limit = 25) {
   const [rows] = await pool.query(`SELECT id, mime, data FROM chat_media WHERE ${pending} ORDER BY id LIMIT ?`, [limit]);
   let moved = 0, failed = 0, error = null;
   for (const row of rows) {
+    let fresh = null; // uploaded in this run, not yet recorded
     try {
-      const url = storedUrl(row) || await uploadChatImage(row.data, `chat_${row.id}.${extFor(row.mime)}`);
+      const url = storedUrl(row) || (fresh = await uploadChatImage(row.data, `chat_${row.id}.${extFor(row.mime)}`));
       await pool.query('UPDATE chat_media SET data_url = ?, data = NULL WHERE id = ? AND data_url IS NULL', [url, row.id]);
       moved += 1;
     } catch (e) {
       failed += 1;
       error = error || `#${row.id}: ${e.message}`;
+      // Recording it failed: take the copy back off the host, or every run
+      // would upload this image again (2026-11-04, before migration 0081).
+      if (fresh) await imageClient.deleteImage(fresh.split('/').pop()).catch(() => {});
     }
   }
   const [[{ n }]] = await pool.query(`SELECT COUNT(*) AS n FROM chat_media WHERE ${pending}`);

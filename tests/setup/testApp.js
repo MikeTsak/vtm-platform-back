@@ -208,7 +208,7 @@ function buildTestApp(pool) {
     moderateLimiter: noopLimiter,
     uploadLimiter: noopLimiter,
     sendPushNotification: capturePushNotification,
-    sharp: null,
+    sharp: require('sharp'), // tests/chatMedia.test.js uploads through it
   });
 
   app.register(require('../../routes/npcChat'), {

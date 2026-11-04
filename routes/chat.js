@@ -197,10 +197,21 @@ module.exports = async function (fastify, opts) {
       let finalFilename = fileData.filename || 'uploaded_chat_media';
 
       if (mimetype.startsWith('image/')) {
-        finalBuffer = await sharp(rawBuffer)
-          .resize(1000, 1000, { fit: 'inside', withoutEnlargement: true })
-          .webp({ quality: 80 })
-          .toBuffer();
+        // animated: every frame, so a GIF stays animated (as an animated WebP,
+        // which the image host keeps as it is). Stills are unaffected.
+        try {
+          finalBuffer = await sharp(rawBuffer, { animated: true })
+            .resize(1000, 1000, { fit: 'inside', withoutEnlargement: true })
+            .webp({ quality: 80 })
+            .toBuffer();
+        } catch (e) {
+          // sharp's pixel cap counts every frame: a long, big GIF can exceed it.
+          return reply.status(400).send({
+            error: /pixel limit/i.test(e.message)
+              ? 'This image is too large (a GIF counts every frame). Try a shorter or smaller one.'
+              : 'This file could not be read as an image.',
+          });
+        }
         finalMime = 'image/webp';
         finalSize = finalBuffer.length;
         finalFilename = finalFilename.replace(/\.[^/.]+$/, "") + ".webp";
