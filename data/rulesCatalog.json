@@ -877,6 +877,11 @@
           "name": "Necrotic Plague (Errata)",
           "dicePool": "Intelligence + Oblivion"
         },
+        "profane_the_sanctified": {
+          "level": 4,
+          "name": "Profane the Sanctified",
+          "dicePool": "Resolve + Oblivion"
+        },
         "stygian_shroud": {
           "level": 4,
           "name": "Stygian Shroud",

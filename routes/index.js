@@ -63,6 +63,7 @@ const ROUTE_MODULES = [
   { name: 'admin-users', path: './adminUsers' },
   { name: 'debug-login', path: './debugLogin' },
   { name: 'admin-logs', path: './adminLogs' },
+  { name: 'admin-stats', path: './adminStats' },
   { name: 'push', path: './push' },
   { name: 'premonitions', path: './premonitions' },
   { name: 'live-sessions', path: './liveSessions' },
