@@ -414,4 +414,4 @@ function startJobs(fastify) {
   log.start('Background jobs scheduled.');
 }
 
-module.exports = { startJobs, JOBS, findJob, runJob };
+module.exports = { startJobs, JOBS, findJob, runJob, runningJobs: () => [...inFlight] };

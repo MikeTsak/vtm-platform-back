@@ -23,9 +23,10 @@ module.exports = async function (fastify, opts) {
     }
 
     // Out-of-clan disciplines are only purchasable up to the level an ST has
-    // unlocked for this character (see routes/disciplineAccess.js).
-    const unlockedTo = async (discipline) => {
-      const [[access]] = await pool.query(
+    // unlocked for this character (see routes/disciplineAccess.js). `db` is
+    // runPurchase's own connection: it asks while holding it.
+    const unlockedTo = async (discipline, db = pool) => {
+      const [[access]] = await db.query(
         'SELECT max_level FROM discipline_access WHERE character_id=? AND discipline=?',
         [ch.id, discipline]
       );

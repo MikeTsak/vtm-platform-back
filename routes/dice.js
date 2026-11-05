@@ -61,15 +61,17 @@ module.exports = async function (fastify, opts) {
   }
 
   // Tell everyone in the session to refresh; a Messy Critical costs the
-  // roller's domain a point of safety (as the old session log did).
-  async function afterSessionRoll(session, row) {
+  // roller's domain a point of safety (as the old session log did). `db` is the
+  // caller's connection while it still holds one: asking the pool for another
+  // while holding one can leave every connection waiting (prod freeze).
+  async function afterSessionRoll(db, session, row) {
     if (!session) return;
     if (row.has_messy_critical && row.character_id) {
       try {
-        const [doms] = await pool.query('SELECT division FROM domain_claims WHERE owner_character_id=?', [row.character_id]);
+        const [doms] = await db.query('SELECT division FROM domain_claims WHERE owner_character_id=?', [row.character_id]);
         if (doms.length) {
-          await pool.query('UPDATE domain_claims SET safety_rating = GREATEST(safety_rating - 1, 0) WHERE division=?', [doms[0].division]);
-          await pool.query('INSERT INTO admin_audit_logs (admin_id, action, details) VALUES (?, ?, ?)',
+          await db.query('UPDATE domain_claims SET safety_rating = GREATEST(safety_rating - 1, 0) WHERE division=?', [doms[0].division]);
+          await db.query('INSERT INTO admin_audit_logs (admin_id, action, details) VALUES (?, ?, ?)',
             [0, 'SYSTEM_MESSY_CRIT', `Character ${row.character_id} rolled a Messy Critical. Domain ${doms[0].division} safety reduced.`]);
         }
       } catch (e) { log.err('Messy crit safety reduction failed', { error: e.message }); }
@@ -109,11 +111,14 @@ module.exports = async function (fastify, opts) {
           normal: dice.normal, hunger: dice.hunger, hungerLevel: dice.hunger.length,
           difficulty: b.difficulty, note: b.note, isHidden: !!b.isHidden,
         });
-        await afterSessionRoll(session, row);
+        await afterSessionRoll(pool, session, row);
         return reply.send({ roll: row });
       }
 
       if (b.mode === 'ghoul') {
+        // The cycle is read from settings (the pool): before taking a connection.
+        const { ghoulStates, currentCycleIndex } = require('../services/ghoulFeeding');
+        const cycleIndex = b.powerName ? await currentCycleIndex() : null;
         const conn = await pool.getConnection();
         try {
           await conn.beginTransaction();
@@ -126,8 +131,7 @@ module.exports = async function (fastify, opts) {
           if (b.powerName) {
             const power = (sheet.powers || []).find((p) => p && String(p.name) === String(b.powerName));
             if (!power) fail(400, `${ghoul.name} doesn't have that power.`);
-            const { ghoulStates, currentCycleIndex } = require('../services/ghoulFeeding');
-            const state = (await ghoulStates(conn, [ghoul.id], await currentCycleIndex()))[ghoul.id];
+            const state = (await ghoulStates(conn, [ghoul.id], cycleIndex))[ghoul.id];
             if (sheet.isGhoul === true && state?.state === 'starved') fail(400, `${ghoul.name} is starved: no powers until fed again.`);
             const catalogPower = Object.values(CATALOG.disciplines[power.discipline]?.powers || {})
               .find((p) => String(p.name).toLowerCase() === String(power.name).toLowerCase());
@@ -157,7 +161,7 @@ module.exports = async function (fastify, opts) {
             extra: { retainer_id: ghoul.id },
           });
           await conn.commit();
-          await afterSessionRoll(session, row);
+          await afterSessionRoll(conn, session, row);
           return reply.send({ roll: row, rolls: [row], ghoulSheet: sheet });
         } catch (e) {
           await conn.rollback().catch(() => {});
@@ -275,7 +279,7 @@ module.exports = async function (fastify, opts) {
 
         if (sheetChanged) await conn.query('UPDATE characters SET sheet=? WHERE id=?', [JSON.stringify(sheet), ch.id]);
         await conn.commit();
-        for (const row of rows) await afterSessionRoll(session, row);
+        for (const row of rows) await afterSessionRoll(conn, session, row);
         return reply.send({ roll: rows[rows.length - 1], rolls: rows, sheet });
       } catch (e) {
         await conn.rollback().catch(() => {});
@@ -338,7 +342,7 @@ module.exports = async function (fastify, opts) {
         await conn.commit();
         if (orig.session_id) {
           const [[s]] = await conn.query('SELECT id, session_code FROM live_sessions WHERE id=?', [orig.session_id]);
-          await afterSessionRoll(s, row);
+          await afterSessionRoll(conn, s, row);
         }
         return reply.send({ roll: row, ghoulSheet: gSheet });
       }
@@ -373,7 +377,7 @@ module.exports = async function (fastify, opts) {
       await conn.commit();
       if (orig.session_id) {
         const [[s]] = await conn.query('SELECT id, session_code FROM live_sessions WHERE id=?', [orig.session_id]);
-        await afterSessionRoll(s, row);
+        await afterSessionRoll(conn, s, row);
       }
       return reply.send({ roll: row, sheet });
     } catch (e) {

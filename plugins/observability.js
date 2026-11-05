@@ -1,37 +1,53 @@
 // plugins/observability.js
 //
-// Request/response logging, the no-store policy for admin endpoints, graceful
-// pool shutdown, and the catch-all error handler.
+// Request/response logging, freeze forensics, the no-store policy for admin
+// endpoints, graceful pool shutdown, and the catch-all error handler.
 //
 // Wrapped in fastify-plugin so the hooks and the error handler attach to the
 // root instance and therefore cover every route in the app.
 
 const fp = require('fastify-plugin');
-const { log } = require('../logger');
+const { monitorEventLoopDelay } = require('perf_hooks');
+const { log, vitals } = require('../logger');
 const { reportErrorToDiscord } = require('../services/discord');
 
 // Endpoints that would otherwise log themselves being polled, forever.
 const SILENT_PREFIXES = ['/api/admin/logs'];
 const isSilent = (url) => SILENT_PREFIXES.some((p) => url.startsWith(p));
+const SLOW_MS = 1000;
+const pathOf = (url) => String(url).split('?')[0]; // query strings can carry tokens
+
+// Requests not yet answered: request.id -> { method, url, at }.
+const inFlight = new Map();
+const oldest = (now, n) => [...inFlight.values()]
+  .sort((a, b) => a.at - b.at)
+  .slice(0, n)
+  .map((r) => `${r.method} ${r.url} ${Math.round((now - r.at) / 1000)}s`);
 
 module.exports = fp(async function observability(fastify) {
   fastify.addHook('onRequest', (request, reply, done) => {
-    if (isSilent(request.url)) return done();
-
-    log.req(`${request.method} ${request.url}`, { ip: request.ip, ua: request.headers['user-agent'] });
+    inFlight.set(request.id, { method: request.method, url: pathOf(request.url), at: Date.now() });
+    done();
+  });
+  fastify.addHook('onRequestAbort', (request, done) => {
+    inFlight.delete(request.id);
     done();
   });
 
+  // Errors, refusals and slow answers only: one line per request filled the
+  // file in hours, and what was answered quickly says nothing about a freeze.
   fastify.addHook('onResponse', (request, reply, done) => {
+    inFlight.delete(request.id);
     if (isSilent(request.url)) return done();
 
-    const ms = Math.round(reply.getResponseTime());
+    const ms = Math.round(reply.elapsedTime);
     const code = reply.statusCode;
+    const line = `${code} ${request.method} ${pathOf(request.url)} (${ms}ms)`;
     const base = { status: code, ms };
 
-    if (code >= 500) log.err(`${code} ${request.method} ${request.url} (${ms}ms)`, base);
-    else if (code >= 400) log.warn(`${code} ${request.method} ${request.url} (${ms}ms)`, base, 'warn');
-    else log.ok(`${code} ${request.method} ${request.url} (${ms}ms)`, base);
+    if (code >= 500) log.err(line, base);
+    else if (code >= 400) log.warn(line, base, 'warn');
+    else if (ms >= SLOW_MS) log.warn(`slow ${line}`, base, 'warn');
 
     done();
   });
@@ -67,9 +83,56 @@ module.exports = fp(async function observability(fastify) {
       return reply.status(error.statusCode).send({ error: error.message });
     }
 
-    log.err('Unhandled Fastify Error', { error: error.message, stack: error.stack, url: request.url });
-    await reportErrorToDiscord(`Fastify Route ${request.url}`, error).catch(() => { });
+    log.err('Unhandled Fastify Error', { error: error.message, stack: error.stack, url: pathOf(request.url) });
+    await reportErrorToDiscord(`Fastify Route ${pathOf(request.url)}`, error).catch(() => { });
 
     reply.status(500).send({ error: 'Internal Server Error' });
   });
 });
+
+/**
+ * Freeze forensics, started once by the server process. Every minute a
+ * `health` line: memory, both DB pools (see db.js poolStats), the longest
+ * event-loop stall, open requests and running jobs. Between them, a warning
+ * straight away when the event loop was blocked 2 s+ or callers have queued
+ * 5 s+ for a DB connection, naming the oldest open requests. A process that
+ * dies without an "exit" line was killed from outside (the host's limits).
+ */
+function startHealthWatch({ runningJobs = () => [] } = {}) {
+  const pool = require('../db');
+  const loop = monitorEventLoopDelay({ resolution: 20 });
+  loop.enable();
+  let last = Date.now();
+  let queuedSince = 0;
+  let lastAlarm = 0;
+  let lastHealth = Date.now();
+
+  setInterval(() => {
+    const now = Date.now();
+    const lag = now - last - 1000;
+    last = now;
+    const db = pool.poolStats();
+    queuedSince = db.queued ? (queuedSince || now) : 0;
+
+    if (lag >= 2000) {
+      log.warn(`Event loop was blocked for ${lag} ms`, { pool: db, open: inFlight.size, oldest: oldest(now, 5), jobs: runningJobs() }, 'warn');
+    } else if (queuedSince && now - queuedSince >= 5000 && now - lastAlarm >= 30000) {
+      lastAlarm = now;
+      log.warn(`Requests have waited ${Math.round((now - queuedSince) / 1000)} s for a database connection`,
+        { pool: db, open: inFlight.size, oldest: oldest(now, 5), jobs: runningJobs() }, 'warn');
+    }
+
+    if (now - lastHealth >= 60 * 1000) { // by the clock: a blocked loop skips ticks
+      lastHealth = now;
+      log.info(`health ${vitals()}`, {
+        pool: db, lockPool: pool.poolStats(pool.lockPool), open: inFlight.size, oldest: oldest(now, 3),
+        loopMaxMs: Math.round(loop.max / 1e6), jobs: runningJobs(),
+      });
+      loop.reset();
+      // A hijacked or streamed reply can skip onResponse: forget it after 10 min.
+      for (const [id, r] of inFlight) if (now - r.at > 10 * 60 * 1000) inFlight.delete(id);
+    }
+  }, 1000).unref();
+}
+
+module.exports.startHealthWatch = startHealthWatch;

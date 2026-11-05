@@ -25,7 +25,8 @@ const { initDatabase } = require('./migrations/schema');
 const { printReadyBanner } = require('./utils/bootBanner');
 const { buildApp } = require('./app');
 const { attachRealtime } = require('./realtime');
-const { startJobs } = require('./jobs');
+const { startJobs, runningJobs } = require('./jobs');
+const { startHealthWatch } = require('./plugins/observability');
 
 const bootStartedAt = Date.now();
 const PORT = Number(process.env.PORT) || 3001;
@@ -80,6 +81,7 @@ fastify
     });
 
     startJobs(fastify);
+    startHealthWatch({ runningJobs });
 
     // Track server start
     try {

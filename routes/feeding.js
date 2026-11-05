@@ -1085,8 +1085,10 @@ module.exports = async function (fastify, opts) {
   });
 
   fastify.post('/api/feeding/ghouls/:rid/feed', { preHandler: [authRequired, requireActiveCharacter] }, async (req, reply) => {
-    const conn = await pool.getConnection();
+    let conn = null;
     try {
+      // Pool reads first: holding a connection while waiting on the pool for
+      // another can leave every connection waiting.
       if (!(await isFeedingEnabled())) return reply.status(400).send({ error: 'The Feeding system is currently disabled.' });
       const char = await getMyCharacter(req.user.id);
       if (!char) return reply.status(404).send({ error: 'No character found for this account.' });
@@ -1094,6 +1096,7 @@ module.exports = async function (fastify, opts) {
       if (!ghoul) return reply.status(404).send({ error: 'Ghoul not found.' });
       const { cycleIndex } = await getCurrentCycle();
 
+      conn = await pool.getConnection();
       await conn.beginTransaction();
       const r = await feedGhoul(conn, { ghoul, feederId: char.id, cycleIndex, method: 'early' });
       if (r.error) { await conn.rollback(); return reply.status(400).send({ error: r.error }); }
@@ -1102,12 +1105,12 @@ module.exports = async function (fastify, opts) {
       log.info('Ghoul fed early', { retainer_id: ghoul.id, character_id: char.id, cycleIndex, success: r.success });
       reply.send({ ok: true, success: r.success, dice: r.dice, hungerBefore: r.hungerBefore, hungerAfter: r.hungerAfter });
     } catch (err) {
-      await conn.rollback().catch(() => {});
+      await conn?.rollback().catch(() => {});
       if (err.code === 'ER_DUP_ENTRY') return reply.status(409).send({ error: 'This ghoul has already been fed (or starved) this cycle.' });
       log.err('POST /api/feeding/ghouls/:rid/feed failed', { error: err.message });
       reply.status(500).send({ error: 'Database error feeding ghoul' });
     } finally {
-      conn.release();
+      conn?.release();
     }
   });
 
@@ -1333,9 +1336,9 @@ module.exports = async function (fastify, opts) {
   }
 
   fastify.post('/api/admin/feeding/ghouls/:rid/undo', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    const { cycleIndex } = await adminCycle(req); // settings (pool): before holding a connection
     const conn = await pool.getConnection();
     try {
-      const { cycleIndex } = await adminCycle(req);
       await conn.beginTransaction();
       const [[row]] = await conn.query(
         'SELECT * FROM ghoul_feedings WHERE retainer_id=? AND cycle_index=? FOR UPDATE',
@@ -1391,9 +1394,9 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/admin/feeding/ghoul-undo', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     const picks = Array.isArray(req.body?.rows) ? req.body.rows.slice(0, 500) : [];
     if (!picks.length) return reply.status(400).send({ error: 'Pick at least one feeding to undo.' });
+    const { cycleIndex } = await adminCycle(req); // settings (pool): before holding a connection
     const conn = await pool.getConnection();
     try {
-      const { cycleIndex } = await adminCycle(req);
       await conn.beginTransaction();
       const undone = [];
       for (const pick of picks) {

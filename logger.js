@@ -41,28 +41,39 @@ const levelBadge = (lvl) => {
 };
 
 /* =========================
- * File sink (optional)
+ * File sink (optional): JSON lines, the shape the admin Logs page reads
  * ========================= */
-let fileStream = null;
-if (LOG_FILE) {
+// Until 2026-11 production wrote only to stdout (pino), which Passenger drops:
+// the file got nothing from 2026-07-21 on and could not explain the outages.
+// Every Passenger process appends to the same file. Writes are synchronous so
+// the lines just before a crash or exit reach the disk.
+// ponytail: sync appends, fine at a few lines a second; async stream if volume grows.
+const LOG_MAX_BYTES = 20 * 1024 * 1024; // past this LOG_FILE becomes LOG_FILE.1 (one old file kept)
+let logFd = null;
+
+function openLog() {
   try {
-    // Ensure directory exists
-    const dir = path.dirname(LOG_FILE);
-    fs.mkdirSync(dir, { recursive: true });
-    fileStream = fs.createWriteStream(LOG_FILE, { flags: 'a', encoding: 'utf8' });
+    fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
+    logFd = fs.openSync(LOG_FILE, 'a');
   } catch (e) {
-    console.error('[LOGGER] Failed to open LOG_FILE:', LOG_FILE, e);
+    logFd = null;
+    console.error('[LOGGER] Failed to open LOG_FILE:', LOG_FILE, e.message);
   }
 }
 
-function writeLine(line) {
-  // Console
-  try { process.stdout.write(line + '\n'); } catch (_) {}
-  // File
-  if (fileStream) {
-    try { fileStream.write(line + '\n'); } catch (_) {}
-  }
+// Rotates a full file, and follows a rotation another process did (our fd
+// would otherwise keep writing into the renamed file).
+function checkLogFile() {
+  if (!LOG_FILE) return;
+  try {
+    const st = fs.statSync(LOG_FILE);
+    if (st.size > LOG_MAX_BYTES) fs.renameSync(LOG_FILE, `${LOG_FILE}.1`);
+    else if (logFd !== null && fs.fstatSync(logFd).ino === st.ino) return;
+  } catch (_) { /* missing: reopening creates it */ }
+  if (logFd !== null) { try { fs.closeSync(logFd); } catch (_) {} }
+  openLog();
 }
+checkLogFile();
 
 /* =========================
  * Safe stringify (handles circular)
@@ -87,21 +98,9 @@ function safeStringify(obj) {
 /* =========================
  * Core write
  * ========================= */
-function nowISO() { return new Date().toISOString(); }
-
-function formatText({ time, level, cat, msg, ctx }) {
-  const badge = levelBadge(level);
-  const emo = (USE_EMOJI && EMO[cat]) ? `${EMO[cat]} ` : '';
-  const header = `${time} [${badge}] ${emo}${cat}: ${msg}`;
-  if (ctx && Object.keys(ctx).length) {
-    return `${header} | ${safeStringify(ctx)}`;
-  }
-  return header;
-}
-
-function formatJSON({ time, level, cat, msg, ctx }) {
-  const base = { time, level, cat, msg };
-  return safeStringify(ctx ? { ...base, ...ctx } : base);
+function formatJSON({ level, cat, msg, ctx }) {
+  const base = { time: new Date().toISOString(), level, pid: process.pid, cat, msg };
+  return safeStringify(ctx ? { ...base, ...ctx, ...base } : base); // base first, and wins over ctx keys
 }
 
 const pino = require('pino');
@@ -123,12 +122,17 @@ function normalizeCtx(ctx) {
   if (ctx instanceof Error) {
     return { message: ctx.message, stack: ctx.stack, name: ctx.name, ...ctx };
   }
+  if (ctx != null && typeof ctx !== 'object') return { detail: ctx }; // a string would spread into characters
   return ctx;
 }
 
 function emit(level, cat, msg, ctx) {
   if (!allow(level)) return;
   ctx = normalizeCtx(ctx);
+
+  if (logFd !== null) {
+    try { fs.writeSync(logFd, formatJSON({ level, cat, msg, ctx }) + '\n'); } catch (_) {}
+  }
 
   if (process.env.NODE_ENV !== 'production' && !USE_JSON) {
     const d = new Date();
@@ -149,11 +153,7 @@ function emit(level, cat, msg, ctx) {
     }
     
     const line = `[${time}] ${badge}: ${emo}${catLabel}${msg}${ctxStr}`;
-    
-    if (fileStream) {
-      try { fileStream.write(`[${time}] ${levelBadge(level)}: ${emo}${cat ? `[${cat}] ` : ''}${msg}${ctxStr ? ' ' + safeStringify(ctx) : ''}\n`); } catch (_) {}
-    }
-    
+
     if (level === 'error') console.error(line);
     else if (level === 'warn') console.warn(line);
     else if (level === 'debug') console.debug(line);
@@ -302,10 +302,11 @@ function vitals() {
 }
 
 function installProcessHandlers() {
-  // Restart forensics. A silent death (no "exit"/"SIGTERM" line before the next
-  // boot) means the host's resource limiter SIGKILLed us; rss in the last
-  // vitals line then shows how close to the package's memory cap we were.
-  setInterval(() => log.info(`vitals ${vitals()}`), 5 * 60 * 1000).unref();
+  // Restart forensics. A silent death (no "exit"/"SIGTERM" line from that pid
+  // before the next boot) means the host's resource limiter SIGKILLed us; rss
+  // in its last `health` line (plugins/observability.js) then shows how close
+  // to the package's memory cap we were.
+  setInterval(checkLogFile, 60 * 1000).unref();
   process.on('exit', (code) => { try { log.adm(`exit code=${code} ${vitals()}`); } catch (_) {} });
 
   // A stray error (dropped DB socket, Discord hiccup, one bad request) should
@@ -328,7 +329,6 @@ function installProcessHandlers() {
 
   const graceful = (sig) => () => {
     log.adm(`Received ${sig}, shutting down… ${vitals()}`);
-    try { fileStream && fileStream.end(); } catch (_) {}
     setTimeout(() => process.exit(0), 50);
   };
   process.on('SIGTERM', graceful('SIGTERM'));
@@ -343,5 +343,6 @@ module.exports = {
   attachRequestLogger,
   expressErrorHandler,
   installProcessHandlers,
+  vitals,
   EMO, // exported for UI parity if needed
 };

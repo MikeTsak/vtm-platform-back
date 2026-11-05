@@ -108,11 +108,14 @@ module.exports = async function (fastify, opts) {
    * on the session feed.
    */
   fastify.post('/api/live-session/:id/ghouls/:rid/overreach', { preHandler: [authRequired] }, async (req, reply) => {
+    // sessionFor reads through the pool: before this request holds a connection,
+    // since holding one while waiting for another can leave every connection waiting.
+    const session = await sessionFor(req).catch((e) => { log.err('Ghoul overreach: session lookup failed', { message: e.message }); return undefined; });
+    if (session === undefined) return reply.status(500).send({ error: 'Failed to apply the cost' });
+    if (!session || session.status === 'ended') return reply.status(404).send({ error: 'Session not found' });
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
-      const session = await sessionFor(req);
-      if (!session || session.status === 'ended') throw Object.assign(new Error('Session not found'), { status: 404 });
       const admin = isAdmin(req.user);
       if (!admin) {
         const [seat] = await conn.query('SELECT 1 FROM live_session_participants WHERE session_id=? AND user_id=? LIMIT 1', [session.id, req.user.id]);
@@ -130,7 +133,7 @@ module.exports = async function (fastify, opts) {
         note: `Used a power above level 1${power ? ` (${power})` : ''}: 1 Aggravated Health instead of a Rouse Check${t.dead ? '. Health is full of Aggravated damage.' : ''}`,
       });
       await conn.commit();
-      await emitSessionRefresh(fastify.io, session.id);
+      emitSessionRefresh(fastify.io, session.id); // not awaited: it reads the pool, and never throws
       reply.send({ trackers: t });
     } catch (e) {
       await conn.rollback().catch(() => {});

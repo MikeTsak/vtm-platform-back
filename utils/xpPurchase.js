@@ -18,7 +18,7 @@ const { xpCost } = require('./xpCost');
 const { bloodPotencyLimits, bloodPotencyLimitMessage } = require('./bloodPotencyLimits');
 const { parseSheet } = require('./sheet');
 const { isPredatorDiscipline } = require('../data/predatorDisciplines');
-const { checkSubmission } = require('../services/downtimeSchedule');
+const { checkSubmission, ACTIONS_PER_CYCLE } = require('../services/downtimeSchedule');
 
 // House rule: a dot of Attribute, Discipline or Blood Potency costs the XP AND a downtime action
 // (Skills, Rituals and merits are XP only). Mirrored by DOWNTIME_TRAINED in the front's CharacterView.
@@ -389,22 +389,30 @@ function sanitizeEntry(e, id) {
  */
 async function runPurchase({ pool, table, id, body, isAdmin, unlockedTo, logXp = true, actorId = null, chargeDowntime = false }) {
   if (!['characters', 'npcs'].includes(table)) throw new Error('bad table');
+  // The downtime check reads settings and the calendar through the shared pool, so it runs before
+  // this purchase holds a connection (holding one while waiting on the pool for another can leave
+  // every connection waiting). Its count is redone under the row lock below.
+  const dtCheck = chargeDowntime && needsDowntime(body) ? await checkSubmission({ characterId: id }) : null;
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
     const [[row]] = await conn.query(`SELECT * FROM ${table} WHERE id=? FOR UPDATE`, [id]);
     if (!row) fail(404, 'Character not found');
 
-    const result = await applyPurchase({ sheet: row.sheet, clan: row.clan, body, isAdmin, unlockedTo });
+    const result = await applyPurchase({ sheet: row.sheet, clan: row.clan, body, isAdmin, unlockedTo: unlockedTo && ((d) => unlockedTo(d, conn)) });
     if (num(row.xp) < result.cost) fail(400, `Not enough XP (need ${result.cost}, have ${num(row.xp)})`);
 
     // Activated player characters file the training as a downtime action of this cycle, resolved on
     // the spot. Characters not yet activated (still spending their starting XP) and Storytellers skip it.
     // The row lock above serialises this character's purchases, so two can't take the last slot.
-    if (chargeDowntime && needsDowntime(body) && parseSheet(row.sheet)?.is_active === true) {
+    if (dtCheck && parseSheet(row.sheet)?.is_active === true) {
       const isIngrained = body.type === 'ingrained_discipline_flaw';
       const label = body.type === 'blood_potency' ? 'Blood Potency' : (isIngrained ? `Ingrained Flaw (${body.target})` : body.target);
-      const { error } = await checkSubmission({ characterId: id });
+      const [[cnt]] = await conn.query(
+        "SELECT COUNT(*) AS c FROM downtimes WHERE character_id=? AND created_at >= ? AND created_at <= ? AND status <> 'rejected'",
+        [id, dtCheck.from, dtCheck.to]
+      );
+      const error = dtCheck.error || (Number(cnt.c) >= ACTIONS_PER_CYCLE ? `Downtime limit reached for this cycle (${ACTIONS_PER_CYCLE}).` : null);
       if (error) fail(400, `${isIngrained ? 'Taking an Ingrained Flaw' : `Raising ${label}`} also needs a downtime action this cycle. ${error}`);
       const what = isIngrained ? `Ingrained Flaw: ${body.target}` : `${label} ${result.from ?? 0} → ${result.to}`;
       const power = body.type === 'discipline' ? findPower(body.target, body.powerId || body.powerName) : null;

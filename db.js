@@ -36,6 +36,39 @@ const lockPool = mysql.createPool({ ...options, connectionLimit: 2 });
 
 for (const p of [pool, lockPool]) require('./utils/unrefIdleSweeper')(p);
 
+// Backstop: mysql2 waits for a free connection forever. If code ever holds a
+// connection while waiting on the pool for another, enough such requests at once
+// hold all of them and the process stops answering until it is restarted (prod,
+// 2026-11-04 17:24). Every pool.query/execute/getConnection goes through the core
+// pool's getConnection(cb), so a timeout there fails that one request instead; a
+// connection that turns up after the timeout goes straight back to the pool and
+// the abandoned query never runs. Not on lockPool: jobs wait there on purpose.
+// DB_ACQUIRE_TIMEOUT_MS (read per call) is for tests.
+const corePool = pool.pool;
+const coreGetConnection = corePool.getConnection.bind(corePool);
+corePool.getConnection = (cb) => {
+  let settled = false;
+  const timer = setTimeout(() => {
+    settled = true;
+    pool.acquireTimeouts = (pool.acquireTimeouts || 0) + 1;
+    log.err('Timed out waiting for a database connection', poolStats());
+    cb(Object.assign(new Error('Timed out waiting for a database connection'), { code: 'POOL_ACQUIRE_TIMEOUT' }));
+  }, Number(process.env.DB_ACQUIRE_TIMEOUT_MS) || 20000);
+  coreGetConnection((err, conn) => {
+    if (settled) { if (conn) conn.release(); return; }
+    settled = true;
+    clearTimeout(timer);
+    cb(err, conn);
+  });
+};
+
+// all = open connections, free = idle ones, queued = callers waiting for one,
+// timeouts = acquire timeouts since boot.
+function poolStats(p = pool) {
+  const c = p.pool;
+  return { all: c._allConnections.length, free: c._freeConnections.length, queued: c._connectionQueue.length, limit: c.config.connectionLimit, timeouts: p.acquireTimeouts || 0 };
+}
+
 // When MySQL refuses a NEW connection (the user's max_user_connections, or the
 // server's max_connections), wait and try again instead of failing the request.
 // This happens around restarts, while old Passenger processes still hold their
@@ -58,20 +91,9 @@ for (const [p, method] of [pool, lockPool].flatMap((p) => ['query', 'execute', '
   };
 }
 
-// Improved Error Handling
+// Per-query acquire/release debug lines were dropped (2026-11): they flood the
+// log file once LOG_LEVEL=debug, and the minute `health` line shows pool state.
 pool.on('connection', (connection) => {
-  // Log connection acquire/release for debugging only when explicitly enabled
-  if (process.env.LOG_LEVEL === 'debug') {
-    connection.on('acquire', () => {
-      log.debug('Connection acquired from pool');
-    });
-
-    connection.on('release', () => {
-      log.debug('Connection released to pool');
-    });
-  }
-
-  // Check for errors on individual connections
   connection.on('error', (err) => {
     if (err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ECONNRESET') {
        log.warn('⚠️ Database socket reset. Pool will handle reconnection.', { error: err.message });
@@ -81,14 +103,6 @@ pool.on('connection', (connection) => {
   });
 });
 
-// Log pool events
-pool.on('acquire', (connection) => {
-  log.debug('Pool connection acquired');
-});
-
-pool.on('release', (connection) => {
-  log.debug('Pool connection released');
-});
-
 module.exports = pool;
 module.exports.lockPool = lockPool;
+module.exports.poolStats = poolStats;
