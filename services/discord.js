@@ -311,11 +311,78 @@ async function broadcastDiscordAnnouncement(content) {
   }
 }
 
+/**
+ * Fetch all text channels from all guilds the bot belongs to.
+ */
+async function getBotGuildChannels() {
+  const token = process.env.DISCORD_BOT_TOKEN;
+  if (!token) return [];
+
+  const client = getDiscordClient();
+  if (client?.isReady()) {
+    try {
+      const results = [];
+      for (const guild of client.guilds.cache.values()) {
+        const channels = [];
+        for (const ch of guild.channels.cache.values()) {
+          // ChannelType.GuildText (0), GuildAnnouncement (5)
+          if (ch.type === 0 || ch.type === 5) {
+            channels.push({ id: ch.id, name: ch.name, type: ch.type });
+          }
+        }
+        channels.sort((a, b) => a.name.localeCompare(b.name));
+        results.push({
+          guild_id: guild.id,
+          guild_name: guild.name,
+          channels
+        });
+      }
+      if (results.length > 0) return results;
+    } catch (e) {
+      log.warn('Failed to get channels from Discord client cache, falling back to REST API', { error: e.message });
+    }
+  }
+
+  // Fallback: REST API
+  try {
+    const guildsRes = await axios.get('https://discord.com/api/v10/users/@me/guilds', {
+      headers: { Authorization: `Bot ${token}` },
+      timeout: 10000
+    });
+
+    const results = [];
+    for (const guild of guildsRes.data || []) {
+      try {
+        const cRes = await axios.get(`https://discord.com/api/v10/guilds/${guild.id}/channels`, {
+          headers: { Authorization: `Bot ${token}` },
+          timeout: 10000
+        });
+        const channels = (cRes.data || [])
+          .filter(c => c.type === 0 || c.type === 5)
+          .map(c => ({ id: c.id, name: c.name, type: c.type }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+
+        results.push({
+          guild_id: guild.id,
+          guild_name: guild.name,
+          channels
+        });
+      } catch (err) {
+        log.warn(`Failed to fetch channels for guild ${guild.id}`, { error: err.message });
+      }
+    }
+    return results;
+  } catch (err) {
+    log.err('Failed to fetch bot guilds and channels', { error: err.message });
+    return [];
+  }
+}
 
 const exported = {
   getDiscordClient,
   sendDiscordDM,
   sendDiscordChannelMessage,
+  getBotGuildChannels,
   LOG_CHANNEL_ID,
   reportErrorToDiscord,
   sendDiscordMailNotifications,

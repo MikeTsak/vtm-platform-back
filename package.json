@@ -1,6 +1,6 @@
 {
   "name": "back",
-  "version": "1.0.300",
+  "version": "1.0.301",
   "private": true,
   "scripts": {
     "dev": "node swagger-autogen.js && nodemon server.fastify.js",
@@ -36,6 +36,7 @@
     "@fastify/static": "^10.1.2",
     "@fastify/swagger": "^9.8.1",
     "@fastify/swagger-ui": "^6.1.0",
+    "@google/generative-ai": "^0.24.1",
     "axios": "^1.12.2",
     "bcryptjs": "^3.0.2",
     "cheerio": "^1.2.0",

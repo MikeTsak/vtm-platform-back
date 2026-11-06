@@ -7,8 +7,10 @@ const {
   getDiscordClient,
   sendDiscordDM,
   sendDiscordChannelMessage,
-  sendDiscordMailNotifications
+  sendDiscordMailNotifications,
+  getBotGuildChannels
 } = require('../services/discord');
+const { generateGiannakisReply, DEFAULT_GIANNAKIS_PROMPT } = require('../services/giannakisAi');
 
 const KNOWN_EMOJI_KEYS = [
   'outlet_alpha', 'outlet_alter', 'outlet_ert', 'outlet_gossip',
@@ -63,7 +65,12 @@ module.exports = async function (fastify, opts) {
       const notify_mail = await getSetting('discord_notify_mail', 'true') === 'true';
       const notify_news = await getSetting('discord_notify_news', 'true') === 'true';
       const notify_prems = await getSetting('discord_notify_prems', 'true') === 'true';
-      const ai_enabled = await getSetting('giannakis_ai_enabled', 'true') === 'true';
+      const ai_enabled = await getSetting('giannakis_ai_enabled', 'false') === 'true';
+      let ai_system_prompt = await getSetting('giannakis_system_prompt');
+      if (!ai_system_prompt) {
+        ai_system_prompt = await getSetting('discord_ai_system_prompt', DEFAULT_GIANNAKIS_PROMPT);
+      }
+      const ai_has_key = Boolean(process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY);
       const emojiIdsRaw = await getSetting('discord_emoji_ids', '{}');
       let emoji_ids = {};
       try {
@@ -104,6 +111,8 @@ module.exports = async function (fastify, opts) {
         notify_news,
         notify_prems,
         ai_enabled,
+        ai_system_prompt,
+        ai_has_key,
         discord_emoji_ids: emoji_ids,
         bot_status: isOnline ? 'Online' : 'Offline',
         bot_name: botName
@@ -141,6 +150,7 @@ module.exports = async function (fastify, opts) {
       const {
         discord_channel_id, discord_schedule_time,
         discord_enabled, notify_mail, notify_news, notify_prems, ai_enabled,
+        ai_system_prompt,
         discord_emoji_ids
       } = req.body;
 
@@ -158,6 +168,10 @@ module.exports = async function (fastify, opts) {
       if (notify_news !== undefined) await setSetting('discord_notify_news', String(notify_news));
       if (notify_prems !== undefined) await setSetting('discord_notify_prems', String(notify_prems));
       if (ai_enabled !== undefined) await setSetting('giannakis_ai_enabled', String(ai_enabled));
+      if (ai_system_prompt !== undefined) {
+        await setSetting('giannakis_system_prompt', String(ai_system_prompt));
+        await setSetting('discord_ai_system_prompt', String(ai_system_prompt));
+      }
       if (discord_emoji_ids !== undefined) {
         const payload = typeof discord_emoji_ids === 'object' && discord_emoji_ids !== null
           ? JSON.stringify(discord_emoji_ids)
@@ -178,6 +192,23 @@ module.exports = async function (fastify, opts) {
     try {
       const { type } = req.params;
       const channelId = await getSetting('discord_channel_id', null);
+
+      if (type === 'ai') {
+        const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+          return reply.status(400).send({ error: 'GOOGLE_API_KEY is not configured on the server.' });
+        }
+        const [[adminUser]] = await pool.query('SELECT display_name FROM users WHERE id=?', [req.user.id]);
+        const testRes = await generateGiannakisReply({
+          query: 'Terminal ping test. Αναφορά κατάστασης SchreckNet Node.',
+          charName: adminUser?.display_name || 'Storyteller',
+          charClan: 'Nosferatu'
+        });
+        return reply.send({
+          ok: true,
+          message: `Giannakis AI (${testRes.modelUsed}): ${testRes.text}`
+        });
+      }
 
       if (!process.env.DISCORD_BOT_TOKEN) {
         return reply.status(503).send({ error: 'Discord bot token is not configured on the server.' });
@@ -261,6 +292,41 @@ module.exports = async function (fastify, opts) {
         });
       }
       reply.status(500).send({ error: e.response?.data?.message || e.message || 'Failed to send DM.' });
+    }
+  });
+
+  // Admin: Get all text channels across servers the bot is in
+  fastify.get('/api/admin/discord/channels', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      if (!process.env.DISCORD_BOT_TOKEN) {
+        return reply.status(503).send({ error: 'Discord bot token is not configured on the server.' });
+      }
+      const guilds = await getBotGuildChannels();
+      reply.send({ guilds });
+    } catch (e) {
+      log.err('Failed to fetch Discord channels', { error: e.message });
+      reply.status(500).send({ error: 'Failed to fetch Discord channels: ' + e.message });
+    }
+  });
+
+  // Admin: Send Message to a specific Discord server channel
+  fastify.post('/api/admin/discord/channel-message', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const { channel_id, message } = req.body;
+      if (!channel_id || !message || !String(message).trim()) {
+        return reply.status(400).send({ error: 'Channel and message are required.' });
+      }
+
+      if (!process.env.DISCORD_BOT_TOKEN) {
+        return reply.status(503).send({ error: 'Discord bot token is not configured on the server.' });
+      }
+
+      await sendDiscordChannelMessage(String(channel_id).trim(), String(message).trim());
+      log.adm('Admin sent Discord channel message', { admin_id: req.user.id, channel_id });
+      reply.send({ ok: true, message: 'Message sent to Discord channel successfully.' });
+    } catch (e) {
+      log.err('Failed to send Discord channel message', { error: e.message, response: e.response?.data });
+      reply.status(500).send({ error: e.response?.data?.message || e.message || 'Failed to send channel message.' });
     }
   });
 };

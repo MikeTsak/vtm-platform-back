@@ -6,7 +6,7 @@ const { getSetting } = require('./utils/settings');
 // The !roll command called computeV5Outcome without ever importing it, so it
 // threw ReferenceError. Same shared implementation the API routes use.
 const { computeV5Outcome } = require('./services/dice');
-// AI disabled for memory optimization
+const { generateGiannakisReply } = require('./services/giannakisAi');
 const axios = require('axios');
 const sharp = require('sharp');
 const TextToSVG = require('text-to-svg');
@@ -177,7 +177,7 @@ if (process.env.DISCORD_BOT_TOKEN) {
     if (message.mentions.has(discordClient.user, { ignoreRoles: true, ignoreEveryone: true })) {
       try {
         // Check if AI is enabled in settings
-        const aiEnabled = await getSetting('giannakis_ai_enabled', 'true');
+        const aiEnabled = await getSetting('giannakis_ai_enabled', 'false');
         if (aiEnabled !== 'true' && aiEnabled !== '1' && aiEnabled !== true) {
           return message.reply("The AI Node is currently offline for maintenance.");
         }
@@ -199,7 +199,7 @@ if (process.env.DISCORD_BOT_TOKEN) {
             const dbUser = userRows[0];
             charName = dbUser.display_name; // Fallback to portal name
 
-            // Match character using the user.id - NEW: Added 'clan' to the SELECT
+            // Match character using the user.id
             const [charRows] = await pool.query(
               'SELECT name, clan FROM characters WHERE user_id = ? LIMIT 1',
               [dbUser.id]
@@ -207,7 +207,7 @@ if (process.env.DISCORD_BOT_TOKEN) {
 
             if (charRows.length > 0) {
               if (charRows[0].name) charName = charRows[0].name;
-              if (charRows[0].clan) charClan = charRows[0].clan; // <-- NEW: Store the clan
+              if (charRows[0].clan) charClan = charRows[0].clan;
             }
           }
         } catch (dbLookupErr) {
@@ -215,168 +215,22 @@ if (process.env.DISCORD_BOT_TOKEN) {
         }
 
         const userQuery = message.content.replace(`<@${discordClient.user.id}>`, '').trim();
-        log.info(`🤖 [DEBUG] Ο/Η \${charName} (${charClan}) ρώτησε τον Γιαννάκη: "${userQuery}"`);
+        log.info(`🤖 [DEBUG] Ο/Η ${charName} (${charClan}) ρώτησε τον Γιαννάκη: "${userQuery}"`);
 
         const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
-
         if (!apiKey) {
           log.warn('Discord Bot AI Error: API Key is undefined in your environment.');
           return message.reply({ content: "Συγγνώμη κ. Administrator... το κλειδί πρόσβασής μου (API Key) λείπει." });
         }
 
-        // AI has been completely deactivated for memory optimization
-        return message.reply({ content: "The AI module is currently disabled to conserve server resources." });
-
-        const tools = [{
-          functionDeclarations: [
-            {
-              name: "get_domain_owner",
-              description: "Βρίσκει ποιος ελέγχει μια περιοχή (domain) της Αθήνας. Χρησιμοποίησε αυτό το ευρετήριο για τον αριθμό: 1:Παγκράτι, 2:Ζωγράφου/Καισαριανή, 3:Εξάρχεια, 8:Πλάκα, 12:Μοσχάτο, 18:Κολωνάκι, 20:Αιγάλεω, 23:Ψυχικό, 27:Κηφισιά, 31:Χαλάνδρι, 32:Πέραμα/Κερατσίνι, 39:Αθήνα, 43:Πειραιάς. Αν η περιοχή δεν υπάρχει στη λίστα, μάντεψε τον κοντινότερο αριθμό.",
-              parameters: {
-                type: "OBJECT",
-                properties: {
-                  division_number: {
-                    type: "INTEGER",
-                    description: "Ο αριθμός της περιοχής, π.χ. 32 για το Πέραμα."
-                  }
-                },
-                required: ["division_number"]
-              }
-            },
-            {
-              name: "get_latest_news",
-              description: "Επιστρέφει τα τελευταία νέα, ανακοινώσεις ή πληροφορίες για πρόσωπα/events που υπάρχουν στα News του δικτύου.",
-            }
-          ]
-        }];
-
-        // --- FETCH PROMPT FROM DATABASE ---
-
-
-        // --- FETCH PROMPT FROM DATABASE ---
-
-        // Τράβηγμα του prompt απευθείας από τη βάση δεδομένων
-        let rawSystemPrompt = await getSetting('giannakis_system_prompt');
-
-        if (!rawSystemPrompt) {
-          log.warn('System prompt missing from database configuration.');
-          return message.reply({ content: "Συγγνώμη κ. Administrator... έχασα τα αρχεία ρυθμίσεων της προσωπικότητάς μου." });
-        }
-
-        // Δυναμική εισαγωγή του ονόματος χαρακτήρα και της Clan
-        let systemPrompt = rawSystemPrompt
-          .replace(/\$\{charName\}/g, charName)
-          .replace(/\{charName\}/g, charName)
-          .replace(/\$\{charClan\}/g, charClan)
-          .replace(/\{charClan\}/g, charClan);
-
-        // <-- NEW: Hardcode the context into the system prompt so the AI never misses it
-        systemPrompt += `\n\n[SYSTEM CONTEXT: The user you are currently talking to is named "\${charName}" and belongs to Clan "${charClan}". Adapt your response, slang, and attitude towards them based on their Clan's stereotypes.]`;
-
-        const model = genAI.getGenerativeModel({
-          model: "gemini-3.1-flash-lite",
-          systemInstruction: systemPrompt,
-          tools: tools
+        const { text: replyTextRes } = await generateGiannakisReply({
+          query: userQuery,
+          charName,
+          charClan
         });
 
-        const chat = model.startChat();
-
-        log.info(`🤖 [DEBUG] Στέλνω την πρώτη ερώτηση στο Gemini...`);
-        let result = await chat.sendMessage(userQuery);
-        let response = result.response;
-
-        // BULLETPROOF: Διαβάζουμε σωστά τα function calls ανάλογα με την έκδοση του SDK
-        const calls = typeof response.functionCalls === 'function' ? response.functionCalls() : response.functionCalls;
-
-        // Check if Gemini wants to call a Database Function
-        if (calls && calls.length > 0) {
-          const call = calls[0];
-          let functionResult = {};
-
-          try {
-            // EXECUTE DB QUERIES BASED ON AI REQUEST
-            if (call.name === 'get_domain_owner') {
-              const div = call.args.division_number;
-              log.info(`🤖 [DEBUG] Το Gemini ζήτησε Tool: get_domain_owner για division [${div}]`);
-
-              const [rows] = await pool.query('SELECT owner_name FROM domain_claims WHERE division = ? LIMIT 1', [div]);
-              if (rows.length > 0 && rows[0].owner_name) {
-                functionResult = { status: "claimed", owner: rows[0].owner_name, division: div };
-              } else {
-                functionResult = { status: "unclaimed", message: "Η περιοχή είναι free/unclaimed." };
-              }
-            }
-            else if (call.name === 'get_latest_news') {
-              log.info(`🤖 [DEBUG] Το Gemini ζήτησε Tool: get_latest_news`);
-
-              const bannerEnabled = await getSetting('banner_enabled', 'false');
-
-              if (bannerEnabled === 'true' || bannerEnabled === '1' || bannerEnabled === true) {
-                const bannerMessage = await getSetting('banner_message', '');
-
-                if (bannerMessage) {
-                  functionResult = { latest_news: bannerMessage };
-                } else {
-                  functionResult = { latest_news: "Το δίκτυο είναι ήσυχο. Δεν υπάρχουν νέα." };
-                }
-              } else {
-                functionResult = { latest_news: "Το δίκτυο είναι ήσυχο. Δεν υπάρχουν ενεργές ανακοινώσεις αυτή τη στιγμή." };
-              }
-            }
-
-            log.info(`🤖 [DEBUG] Απάντηση από τη Βάση (στέλνεται στο Gemini):`, JSON.stringify(functionResult));
-
-            // Επιστροφή των δεδομένων πίσω στο Gemini
-            result = await chat.sendMessage([{
-              functionResponse: {
-                name: call.name,
-                response: functionResult
-              }
-            }]);
-            response = result.response;
-
-            log.info(`🤖 [DEBUG] Raw Response από Gemini ΜΕΤΑ το Tool:`, JSON.stringify(response));
-
-          } catch (dbErr) {
-            log.err('DB Tool Execution Failed', { error: dbErr.message });
-            result = await chat.sendMessage([{
-              functionResponse: {
-                name: call.name,
-                response: { error: "Database error. Database unreachable." }
-              }
-            }]);
-            response = result.response;
-          }
-        } else {
-          log.info(`🤖 [DEBUG] Το Gemini ΔΕΝ ζήτησε εργαλείο. Απαντάει απευθείας.`);
-        }
-
-        // --- BULLETPROOF EMPTY MESSAGE FALLBACK & SAFETY CHECK ---
-        let replyTextRes = "";
-        try {
-          if (response.candidates && response.candidates[0]?.content?.parts[0]?.text) {
-            replyTextRes = response.candidates[0].content.parts[0].text;
-            log.info(`🤖 [DEBUG] Τελικό Κείμενο που διαβάστηκε: "${replyTextRes}"`);
-          } else if (response && typeof response.text === 'function') {
-            replyTextRes = response.text();
-            log.info(`🤖 [DEBUG] Τελικό Κείμενο που διαβάστηκε: "${replyTextRes}"`);
-          } else if (response && response.text) {
-            replyTextRes = response.text;
-          }
-        } catch (textErr) {
-          log.err('Gemini response extraction threw error', { error: textErr.message });
-          if (response.candidates && response.candidates.length > 0) {
-            log.warn(`🤖 [DEBUG] Finish Reason: ${response.candidates[0].finishReason}`);
-          }
-        }
-
-        if (!replyTextRes || replyTextRes.trim() === "") {
-          replyTextRes = `Συγγνώμη κ. \${charName}, το σήμα χάθηκε και το firewall της βάσης δεδομένων μπλόκαρε την απάντηση. Μπορείτε να επαναλάβετε;`;
-        }
-
-        await message.reply({ content: replyTextRes });
+        await message.reply({ content: replyTextRes || `Συγγνώμη κ. ${charName}, το σήμα χάθηκε. Μπορείτε να επαναλάβετε;` });
         return;
-
       } catch (error) {
         log.err('Giannakis AI Critical Error', { error: error.message });
         await message.reply({ content: "Συγγνώμη... το terminal έκανε crash. (Exception Thrown) Κάνω reboot." });
