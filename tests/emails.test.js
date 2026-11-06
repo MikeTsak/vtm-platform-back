@@ -3,8 +3,9 @@
 // a chat_media id the sender may see, visible afterwards to the thread's player
 // and the Storytellers only, and to the player only once a queued identity
 // email has actually been sent.
-// Storyteller edit / delete (0083): any message, marked edited; a thread left
-// empty goes with its last message.
+// Editing and deleting (0083): a Storyteller edits the identity's emails and
+// deletes any; a player edits or deletes their own for 4 hours, until it has
+// been read. Edits are marked; a thread left empty goes with its last message.
 const { setupTestDatabase, teardownTestDatabase, truncateAll } = require('./setup/testDb');
 const { buildTestApp } = require('./setup/testApp');
 const { registerUser } = require('./setup/helpers');
@@ -69,38 +70,54 @@ it("the Storyteller's queued image reaches the player only once it is sent", asy
   expect(await canSee(stranger, id)).toBe(false);
 });
 
-describe('a Storyteller edits and deletes messages', () => {
-  let thread, first, second;
-  const ids = async () => (await pool.query('SELECT id, body, edited FROM email_messages WHERE thread_id = ? ORDER BY id', [thread]))[0];
+describe('editing and deleting', () => {
+  let thread, mine, npc;
+  const msgs = async () => (await pool.query('SELECT id, body, edited FROM email_messages WHERE thread_id = ? ORDER BY id', [thread]))[0];
+  const edit = (who, id, body) => as(who, 'PUT', `/api/emails/messages/${id}`, { body });
+  const del = (who, id) => as(who, 'DELETE', `/api/emails/messages/${id}`);
 
-  beforeAll(async () => {
+  beforeEach(async () => {
     thread = JSON.parse((await send(player, { to_email: 'prince@court.test', subject: 'Edits', body: 'tpyo' })).body).thread_id;
-    const img = await image(admin);
-    await as(admin, 'POST', '/api/admin/emails/reply', { thread_id: thread, body: '', attachment_id: img });
-    [first, second] = (await ids()).map(m => m.id);
+    await as(admin, 'POST', '/api/admin/emails/reply', { thread_id: thread, body: 'Noted.', attachment_id: await image(admin) });
+    [mine, npc] = (await msgs()).map(m => m.id);
   });
 
-  it('players may do neither', async () => {
-    expect((await as(player, 'PUT', `/api/admin/emails/messages/${first}`, { body: 'mine' })).statusCode).toBe(403);
-    expect((await as(player, 'DELETE', `/api/admin/emails/messages/${first}`)).statusCode).toBe(403);
+  it("a Storyteller edits the identity's words, never the player's, but may delete them", async () => {
+    expect((await edit(admin, mine, 'rewritten')).statusCode).toBe(403);
+    expect((await edit(admin, npc, '')).statusCode).toBe(200); // it has an image: text may go
+    expect((await edit(admin, 999999, 'x')).statusCode).toBe(404);
+    expect((await msgs()).map(m => [m.body, m.edited])).toEqual([['tpyo', 0], ['', 1]]);
+    expect(JSON.parse((await del(admin, mine)).body)).toEqual({ ok: true, thread_deleted: false });
   });
 
-  it('an edit is marked; only a message with an image may be left without text', async () => {
-    expect((await as(admin, 'PUT', `/api/admin/emails/messages/${first}`, { body: 'typo' })).statusCode).toBe(200);
-    expect((await as(admin, 'PUT', `/api/admin/emails/messages/${first}`, { body: ' ' })).statusCode).toBe(400);
-    expect((await as(admin, 'PUT', `/api/admin/emails/messages/${second}`, { body: '' })).statusCode).toBe(200);
-    expect((await as(admin, 'PUT', '/api/admin/emails/messages/999999', { body: 'x' })).statusCode).toBe(404);
-    expect((await ids()).map(m => [m.body, m.edited])).toEqual([['typo', 1], ['', 1]]);
+  it('a player changes only their own unread email, never to nothing', async () => {
+    expect((await edit(player, mine, 'typo')).statusCode).toBe(200);
+    expect((await edit(player, mine, ' ')).statusCode).toBe(400);
+    expect((await edit(player, npc, 'mine now')).statusCode).toBe(404);
+    expect((await edit(stranger, mine, 'hijack')).statusCode).toBe(404);
+    expect((await del(stranger, mine)).statusCode).toBe(404);
+    expect((await msgs()).map(m => [m.body, m.edited])).toEqual([['typo', 1], ['Noted.', 0]]);
   });
 
-  it('deleting takes the image from the player, and the last message takes the thread', async () => {
-    const [[{ attachment_id: img }]] = await pool.query('SELECT attachment_id FROM email_messages WHERE id = ?', [second]);
+  it('once the identity has read it, it stays as sent', async () => {
+    await as(admin, 'GET', `/api/admin/emails/threads/${thread}`); // a Storyteller opens the thread
+    expect((await edit(player, mine, 'too late')).statusCode).toBe(403);
+    expect((await del(player, mine)).statusCode).toBe(403);
+  });
+
+  it('after 4 hours, it stays as sent', async () => {
+    await pool.query('UPDATE email_messages SET created_at = NOW() - INTERVAL 5 HOUR WHERE id = ?', [mine]);
+    expect((await edit(player, mine, 'too late')).statusCode).toBe(403);
+    expect((await del(player, mine)).statusCode).toBe(403);
+  });
+
+  it("deleting takes the image from the player, and the last message takes the thread", async () => {
+    const [[{ attachment_id: img }]] = await pool.query('SELECT attachment_id FROM email_messages WHERE id = ?', [npc]);
     expect(await canSee(player, img)).toBe(true);
-    expect(JSON.parse((await as(admin, 'DELETE', `/api/admin/emails/messages/${second}`)).body)).toEqual({ ok: true, thread_deleted: false });
+    expect(JSON.parse((await del(admin, npc)).body)).toEqual({ ok: true, thread_deleted: false });
     expect(await canSee(player, img)).toBe(false);
 
-    expect(JSON.parse((await as(admin, 'DELETE', `/api/admin/emails/messages/${first}`)).body)).toEqual({ ok: true, thread_deleted: true });
-    const [rows] = await pool.query('SELECT 1 FROM email_threads WHERE id = ?', [thread]);
-    expect(rows).toEqual([]);
+    expect(JSON.parse((await del(player, mine)).body)).toEqual({ ok: true, thread_deleted: true });
+    expect((await pool.query('SELECT 1 FROM email_threads WHERE id = ?', [thread]))[0]).toEqual([]);
   });
 });

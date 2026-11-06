@@ -109,8 +109,13 @@ module.exports = async function (fastify, opts) {
     `, [req.params.id]);
 
       // Mark user messages as read
-      await pool.query(`UPDATE email_messages SET is_read=1 WHERE thread_id=? AND sender_type='user'`, [req.params.id]);
-      if (fastify.io) fastify.io.to(`user_${req.user.id}`).emit('emails:refresh', { type: 'read' });
+      const [read] = await pool.query(`UPDATE email_messages SET is_read=1 WHERE thread_id=? AND sender_type='user' AND is_read=0`, [req.params.id]);
+      if (fastify.io) {
+        fastify.io.to(`user_${req.user.id}`).emit('emails:refresh', { type: 'read' });
+        // Read emails can't be edited any more: the player's open thread reloads.
+        const [[thread]] = read.affectedRows ? await pool.query('SELECT user_id FROM email_threads WHERE id=?', [req.params.id]) : [[]];
+        if (thread) fastify.io.to(`user_${thread.user_id}`).emit('emails:refresh', { type: 'read', thread_id: Number(req.params.id) });
+      }
 
       reply.send({ messages });
     } catch (e) {
@@ -418,13 +423,33 @@ module.exports = async function (fastify, opts) {
     }
   });
 
-  // 10-11. Admin: edit or delete any message, either side, sent or queued.
-  // The message with its thread's player, or undefined.
-  const loadMessage = async (id) => (await pool.query(
-    'SELECT m.id, m.thread_id, m.attachment_id, t.user_id FROM email_messages m JOIN email_threads t ON t.id = m.thread_id WHERE m.id = ?',
-    [id]))[0][0];
+  // 10-11. Edit or delete a message. A Storyteller edits only what an identity
+  // wrote (a player's words stay theirs) and deletes anything. A player edits
+  // or deletes their own email for 4 hours, and only until the identity has
+  // read it (is_read, set when a Storyteller opens the thread).
+  // Returns { msg, admin } or { status, error }.
+  const loadChangeable = async (req, verb) => {
+    const [[msg]] = await pool.query(
+      `SELECT m.id, m.thread_id, m.attachment_id, m.sender_type, m.is_read, t.user_id,
+              m.created_at > NOW() - INTERVAL 4 HOUR AS recent
+         FROM email_messages m JOIN email_threads t ON t.id = m.thread_id WHERE m.id = ?`, [req.params.id]);
+    if (!msg) return { status: 404, error: 'Message not found' };
+    if (checkIsAdmin(req.user)) {
+      if (verb === 'edit' && msg.sender_type !== 'identity') {
+        return { status: 403, error: "A player's email can't be edited, only deleted." };
+      }
+      return { msg, admin: true };
+    }
+    if (Number(msg.user_id) !== Number(req.user.id) || msg.sender_type !== 'user') return { status: 404, error: 'Message not found' };
+    if (!msg.recent) return { status: 403, error: `An email can only be ${verb}ed within 4 hours of sending it.` };
+    if (msg.is_read) return { status: 403, error: `This email has been read: it can no longer be ${verb}ed.` };
+    return { msg, admin: false };
+  };
+  // A player's write also re-checks is_read, so a read landing meanwhile wins.
+  const unreadGuard = (admin) => (admin ? '' : ' AND is_read = 0');
+  const READ_MEANWHILE = 'This email has just been read: it can no longer be changed.';
   // The thread's stamp doesn't move, so say which thread to reload: the
-  // player's open view and the other Storyteller tabs.
+  // player's open view and the Storytellers'.
   const emitChanged = (msg) => {
     if (!fastify.io) return;
     const payload = { type: 'changed', thread_id: msg.thread_id };
@@ -432,40 +457,42 @@ module.exports = async function (fastify, opts) {
     fastify.io.to('admin_chat').emit('emails:refresh', payload);
   };
 
-  fastify.put('/api/admin/emails/messages/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  fastify.put('/api/emails/messages/:id', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const { body } = req.body || {};
-      const msg = await loadMessage(req.params.id);
-      if (!msg) return reply.status(404).send({ error: 'Message not found' });
+      const { msg, admin, status, error } = await loadChangeable(req, 'edit');
+      if (error) return reply.status(status).send({ error });
       if (!hasText(body) && !msg.attachment_id) return reply.status(400).send({ error: 'The message cannot be empty.' });
 
-      await pool.query('UPDATE email_messages SET body = ?, edited = 1 WHERE id = ?', [body || '', msg.id]);
+      const [r] = await pool.query(`UPDATE email_messages SET body = ?, edited = 1 WHERE id = ?${unreadGuard(admin)}`, [body || '', msg.id]);
+      if (!r.affectedRows) return reply.status(403).send({ error: READ_MEANWHILE });
       emitChanged(msg);
-      log.adm('Admin edited an email', { admin: req.user.id, message: msg.id });
+      log.info('Email edited', { by: req.user.id, admin, message: msg.id });
       reply.send({ ok: true });
     } catch (e) {
-      log.err('Admin edit email failed', { message: e.message });
+      log.err('Edit email failed', { message: e.message });
       reply.status(500).send({ error: 'Failed to edit the message' });
     }
   });
 
   // A thread left with no message goes too (one statement: a message sent
   // meanwhile keeps it).
-  fastify.delete('/api/admin/emails/messages/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+  fastify.delete('/api/emails/messages/:id', { preHandler: [authRequired] }, async (req, reply) => {
     try {
-      const msg = await loadMessage(req.params.id);
-      if (!msg) return reply.status(404).send({ error: 'Message not found' });
+      const { msg, admin, status, error } = await loadChangeable(req, 'delete');
+      if (error) return reply.status(status).send({ error });
 
-      await pool.query('DELETE FROM email_messages WHERE id = ?', [msg.id]);
+      const [r] = await pool.query(`DELETE FROM email_messages WHERE id = ?${unreadGuard(admin)}`, [msg.id]);
+      if (!r.affectedRows) return reply.status(403).send({ error: READ_MEANWHILE });
       const [gone] = await pool.query(
         'DELETE FROM email_threads WHERE id = ? AND NOT EXISTS (SELECT 1 FROM email_messages WHERE thread_id = ?)',
         [msg.thread_id, msg.thread_id]
       );
       emitChanged(msg);
-      log.adm('Admin deleted an email', { admin: req.user.id, message: msg.id });
+      log.info('Email deleted', { by: req.user.id, admin, message: msg.id });
       reply.send({ ok: true, thread_deleted: gone.affectedRows > 0 });
     } catch (e) {
-      log.err('Admin delete email failed', { message: e.message });
+      log.err('Delete email failed', { message: e.message });
       reply.status(500).send({ error: 'Failed to delete the message' });
     }
   });
