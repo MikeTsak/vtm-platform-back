@@ -13,10 +13,12 @@ const { imageClient } = require('./media');
 const { isAdmin } = require('./guards');
 
 // A chat_media row is visible to whoever uploaded it, or to a participant of a
-// message (DM / group / NPC) that has it as its attachment_id, never to anyone
-// who merely guesses its numeric id. Admins see everything (moderation). The
-// send routes check it too (services/chatForward.js): attaching an id makes
-// the attachment visible to that chat, so nobody may attach one they can't see.
+// message (DM / group / NPC, or a sent Surface Web email: its thread's player)
+// that has it as its attachment_id, never to anyone who merely guesses its
+// numeric id. Admins see everything (moderation; they also write the emails'
+// identity side). The send routes check it too (services/chatForward.js,
+// routes/emails.js): attaching an id makes the attachment visible to that chat,
+// so nobody may attach one they can't see.
 async function canAccessChatMedia(mediaId, user) {
   if (!mediaId || !user) return false;
   if (isAdmin(user)) return true;
@@ -30,8 +32,11 @@ async function canAccessChatMedia(mediaId, user) {
      SELECT 1 FROM chat_group_messages gm
        JOIN chat_group_members mem ON mem.group_id = gm.group_id AND mem.user_id = ?
      WHERE gm.attachment_id = ?
+     UNION
+     SELECT 1 FROM email_messages em JOIN email_threads t ON t.id = em.thread_id
+     WHERE em.attachment_id = ? AND em.status = 'sent' AND t.user_id = ?
      LIMIT 1`,
-    [mediaId, user.id, mediaId, user.id, user.id, mediaId, user.id, user.id, mediaId]
+    [mediaId, user.id, mediaId, user.id, user.id, mediaId, user.id, user.id, mediaId, mediaId, user.id]
   );
   return rows.length > 0;
 }

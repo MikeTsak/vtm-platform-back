@@ -4,6 +4,22 @@
 // the player inbox on the other.
 
 const { isAdmin: checkIsAdmin } = require('../services/guards');
+const { canAccessChatMedia } = require('../services/chatMedia');
+
+// The image an email carries: attachment_id, a chat_media row uploaded through
+// /api/chat/upload, as on SchreckNet. Attaching it shows it to the thread, so
+// it must be one the sender may see. Returns { id } or { status, error }.
+// Queries the pool: call it before taking a connection.
+async function attachmentOf(req) {
+  const raw = req.body?.attachment_id;
+  if (!raw) return { id: null };
+  const id = Number(raw);
+  if (!Number.isInteger(id) || id <= 0 || !(await canAccessChatMedia(id, req.user))) {
+    return { status: 403, error: 'That image is not yours to send.' };
+  }
+  return { id };
+}
+const hasText = (body) => !!(body && String(body).trim());
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, sendPushNotification } = opts;
@@ -106,10 +122,12 @@ module.exports = async function (fastify, opts) {
   fastify.post('/api/admin/emails/reply', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
       const { thread_id, body, queue } = req.body;
-      if (!body || !thread_id) return reply.status(400).send({ error: 'Missing body' });
+      const att = await attachmentOf(req);
+      if (att.error) return reply.status(att.status).send({ error: att.error });
+      if (!thread_id || (!hasText(body) && !att.id)) return reply.status(400).send({ error: 'Missing body' });
 
       const status = queue ? 'queued' : 'sent';
-      await pool.query(`INSERT INTO email_messages (thread_id, sender_type, body, is_read, status) VALUES (?, 'identity', ?, 0, ?)`, [thread_id, body, status]);
+      await pool.query(`INSERT INTO email_messages (thread_id, sender_type, body, is_read, status, attachment_id) VALUES (?, 'identity', ?, 0, ?, ?)`, [thread_id, body || '', status, att.id]);
 
       if (status === 'sent') {
         await pool.query(`UPDATE email_threads SET updated_at=NOW() WHERE id=?`, [thread_id]);
@@ -213,24 +231,28 @@ module.exports = async function (fastify, opts) {
 
   // 3. Send Email (Validation Logic & Admin Push)
   fastify.post('/api/emails/send', { preHandler: [authRequired] }, async (req, reply) => {
+    const att = await attachmentOf(req); // before the connection: it uses the pool
+    if (att.error) return reply.status(att.status).send({ error: att.error });
     const conn = await pool.getConnection();
     try {
       const { to_email, subject, body, thread_id } = req.body;
+      const hasContent = hasText(body) || !!att.id;
       let finalThreadId = thread_id;
       let identityId = null;
       let identityName = 'NPC';
 
       if (thread_id) {
         // REPLY to existing thread
+        if (!hasContent) return reply.status(400).send({ error: 'Missing body' });
         const [check] = await conn.query('SELECT identity_id FROM email_threads WHERE id=? AND user_id=?', [thread_id, req.user.id]);
         if (!check.length) return reply.status(403).send({ error: 'Thread not found' });
         identityId = check[0].identity_id;
 
-        await conn.query(`INSERT INTO email_messages (thread_id, sender_type, body, is_read) VALUES (?, 'user', ?, 0)`, [thread_id, body]);
+        await conn.query(`INSERT INTO email_messages (thread_id, sender_type, body, is_read, attachment_id) VALUES (?, 'user', ?, 0, ?)`, [thread_id, body || '', att.id]);
         await conn.query(`UPDATE email_threads SET updated_at=NOW() WHERE id=?`, [thread_id]);
       } else {
         // NEW THREAD
-        if (!to_email || !subject || !body) return reply.status(400).send({ error: 'Missing fields' });
+        if (!to_email || !subject || !hasContent) return reply.status(400).send({ error: 'Missing fields' });
         const emailLower = to_email.trim().toLowerCase();
         const [identity] = await conn.query('SELECT id, display_name FROM email_identities WHERE email_address = ?', [emailLower]);
 
@@ -241,7 +263,7 @@ module.exports = async function (fastify, opts) {
         await conn.beginTransaction();
         const [t] = await conn.query(`INSERT INTO email_threads (user_id, identity_id, subject) VALUES (?, ?, ?)`, [req.user.id, identityId, subject]);
         finalThreadId = t.insertId;
-        await conn.query(`INSERT INTO email_messages (thread_id, sender_type, body, is_read) VALUES (?, 'user', ?, 0)`, [finalThreadId, body]);
+        await conn.query(`INSERT INTO email_messages (thread_id, sender_type, body, is_read, attachment_id) VALUES (?, 'user', ?, 0, ?)`, [finalThreadId, body || '', att.id]);
         await conn.commit();
       }
 
@@ -288,10 +310,12 @@ module.exports = async function (fastify, opts) {
 
   // 7. Admin Direct Message — create identity on-the-fly and open a DM thread with a player
   fastify.post('/api/admin/emails/dm', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    const att = await attachmentOf(req); // before the connection: it uses the pool
+    if (att.error) return reply.status(att.status).send({ error: att.error });
     const conn = await pool.getConnection();
     try {
       const { email_address, display_name, user_id, subject, body, queue } = req.body;
-      if (!email_address || !display_name || !user_id || !subject || !body) {
+      if (!email_address || !display_name || !user_id || !subject || (!hasText(body) && !att.id)) {
         return reply.status(400).send({ error: 'Missing required fields' });
       }
       const status = queue ? 'queued' : 'sent';
@@ -323,8 +347,8 @@ module.exports = async function (fastify, opts) {
 
       // Insert first message as the identity (admin speaking as NPC)
       await conn.query(
-        `INSERT INTO email_messages (thread_id, sender_type, body, is_read, status) VALUES (?, 'identity', ?, 0, ?)`,
-        [threadId, body, status]
+        `INSERT INTO email_messages (thread_id, sender_type, body, is_read, status, attachment_id) VALUES (?, 'identity', ?, 0, ?, ?)`,
+        [threadId, body || '', status, att.id]
       );
 
       await conn.commit();
@@ -391,6 +415,58 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       log.err('Admin cancel queued email failed', { message: e.message });
       reply.status(500).send({ error: 'Failed to cancel queued email' });
+    }
+  });
+
+  // 10-11. Admin: edit or delete any message, either side, sent or queued.
+  // The message with its thread's player, or undefined.
+  const loadMessage = async (id) => (await pool.query(
+    'SELECT m.id, m.thread_id, m.attachment_id, t.user_id FROM email_messages m JOIN email_threads t ON t.id = m.thread_id WHERE m.id = ?',
+    [id]))[0][0];
+  // The thread's stamp doesn't move, so say which thread to reload: the
+  // player's open view and the other Storyteller tabs.
+  const emitChanged = (msg) => {
+    if (!fastify.io) return;
+    const payload = { type: 'changed', thread_id: msg.thread_id };
+    fastify.io.to(`user_${msg.user_id}`).emit('emails:refresh', payload);
+    fastify.io.to('admin_chat').emit('emails:refresh', payload);
+  };
+
+  fastify.put('/api/admin/emails/messages/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const { body } = req.body || {};
+      const msg = await loadMessage(req.params.id);
+      if (!msg) return reply.status(404).send({ error: 'Message not found' });
+      if (!hasText(body) && !msg.attachment_id) return reply.status(400).send({ error: 'The message cannot be empty.' });
+
+      await pool.query('UPDATE email_messages SET body = ?, edited = 1 WHERE id = ?', [body || '', msg.id]);
+      emitChanged(msg);
+      log.adm('Admin edited an email', { admin: req.user.id, message: msg.id });
+      reply.send({ ok: true });
+    } catch (e) {
+      log.err('Admin edit email failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to edit the message' });
+    }
+  });
+
+  // A thread left with no message goes too (one statement: a message sent
+  // meanwhile keeps it).
+  fastify.delete('/api/admin/emails/messages/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    try {
+      const msg = await loadMessage(req.params.id);
+      if (!msg) return reply.status(404).send({ error: 'Message not found' });
+
+      await pool.query('DELETE FROM email_messages WHERE id = ?', [msg.id]);
+      const [gone] = await pool.query(
+        'DELETE FROM email_threads WHERE id = ? AND NOT EXISTS (SELECT 1 FROM email_messages WHERE thread_id = ?)',
+        [msg.thread_id, msg.thread_id]
+      );
+      emitChanged(msg);
+      log.adm('Admin deleted an email', { admin: req.user.id, message: msg.id });
+      reply.send({ ok: true, thread_deleted: gone.affectedRows > 0 });
+    } catch (e) {
+      log.err('Admin delete email failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to delete the message' });
     }
   });
 };
