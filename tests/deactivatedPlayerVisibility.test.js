@@ -128,4 +128,56 @@ describe('Deactivated player visibility in Court Hierarchy and Comms', () => {
     expect(selfCharNames).not.toContain('Deceased Kindred');
     expect(selfCharNames).not.toContain('Missing Kindred');
   });
+
+  it('includes deceased and inactive players if they have historical messages, but blocks new messages', async () => {
+    const viewer = await registerUser(app, { displayName: 'Viewer Player' });
+    await makeCharacter(viewer.user.id, 'Viewer Kindred', { isActive: true });
+
+    // Inactive & deceased player with chat history (like character #42)
+    const deadHistorical = await registerUser(app, { displayName: 'Dead Historical' });
+    const decCharId = await makeCharacter(deadHistorical.user.id, 'Matteo Historical', { isActive: false });
+    await pool.query('UPDATE characters SET is_deceased = 1 WHERE id = ?', [decCharId]);
+
+    // Insert historical message between deadHistorical and viewer
+    await pool.query('INSERT INTO chat_messages (sender_id, recipient_id, body) VALUES (?, ?, ?)', [
+      deadHistorical.user.id,
+      viewer.user.id,
+      'Old final words'
+    ]);
+
+    // Newly created player with no messages (isActive: false)
+    const brandNew = await registerUser(app, { displayName: 'Brand New' });
+    await makeCharacter(brandNew.user.id, 'Unapproved Neonate', { isActive: false });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/chat/users',
+      headers: { cookie: viewer.cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const users = JSON.parse(res.body).users;
+    const names = users.map(u => u.char_name).filter(Boolean);
+
+    // Matteo Historical must appear because of existing conversation thread
+    expect(names).toContain('Matteo Historical');
+    const matteoEntry = users.find(u => u.char_name === 'Matteo Historical');
+    expect(matteoEntry.is_deceased).toBe(true);
+    expect(matteoEntry.is_active).toBe(false);
+
+    // Brand new unapproved character with 0 messages must NOT appear
+    expect(names).not.toContain('Unapproved Neonate');
+
+    // Attempting to send a message to a deceased character must be rejected with 409
+    const sendRes = await app.inject({
+      method: 'POST',
+      url: '/api/chat/messages',
+      headers: { cookie: viewer.cookie },
+      payload: {
+        recipient_id: deadHistorical.user.id,
+        body: 'Can you hear me?'
+      }
+    });
+    expect(sendRes.statusCode).toBe(409);
+    expect(JSON.parse(sendRes.body).error).toBe('This character is no longer in play');
+  });
 });

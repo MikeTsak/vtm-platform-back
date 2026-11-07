@@ -778,7 +778,7 @@ module.exports = async function (fastify, opts) {
         MAX(c.is_deceased) AS is_deceased,
         MAX(c.is_left) AS is_left,
         MAX(c.is_missing) AS is_missing,
-        MAX(CASE WHEN JSON_EXTRACT(c.sheet, '$.is_active') = true OR JSON_UNQUOTE(JSON_EXTRACT(c.sheet, '$.is_active')) IN ('true', '1') THEN 1 ELSE 0 END) AS is_char_active,
+        MAX(CASE WHEN c.sheet IS NULL OR (JSON_EXTRACT(c.sheet, '$.is_active') != false AND JSON_UNQUOTE(JSON_EXTRACT(c.sheet, '$.is_active')) NOT IN ('false', '0')) THEN 1 ELSE 0 END) AS is_char_active,
         (
           SELECT created_at 
           FROM chat_messages 
@@ -848,10 +848,14 @@ module.exports = async function (fastify, opts) {
           };
         })
         .filter(u => {
-          // Exclude deactivated players from comms entirely (a retired
-          // character's old thread stays, read-only).
-          if (u.char_id && !u.is_char_active && !u.is_archived) return false;
-          return true;
+          // Active in-play characters are always reachable in comms
+          if (u.is_active) return true;
+          // Conversations with existing message history remain accessible (even if character is dead, inactive, or archived)
+          if (u.last_message_at) return true;
+          // Admins are reachable in their designated admin section
+          if (u.role === 'admin' || u.is_admin) return true;
+          // Inactive, deceased, or newly created unapproved characters with 0 messages are excluded
+          return false;
         });
 
       reply.send({ users });
@@ -961,55 +965,65 @@ module.exports = async function (fastify, opts) {
       if (!recipient_id || (!attachment_id && (!body || !body.trim()))) {
         return reply.status(400).send({ error: 'Recipient and content required' });
       }
-      // A retired character's archive account (migration 0075) reads nothing.
-      const [[to]] = await pool.query('SELECT archived_character_id FROM users WHERE id=?', [recipient_id]);
-      if (!to) return reply.status(404).send({ error: 'Recipient not found' });
-      if (to.archived_character_id) return reply.status(409).send({ error: 'This character is no longer in play' });
-
-      const replyTo = await validReplyTo(reply_to_id,
-        "SELECT id FROM chat_messages WHERE id=? AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)) AND IFNULL(type, 'text') != 'system'",
-        [req.user.id, recipient_id, recipient_id, req.user.id]);
-
-      const [r] = await pool.query(
-        'INSERT INTO chat_messages (sender_id, recipient_id, body, attachment_id, reply_to_id, emoji_size, forwarded_from) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [req.user.id, recipient_id, body ? body.trim() : '', attachment_id || null, replyTo, attachment_id ? null : emojiSize(body, req.body.emoji_size), forwarded_from]
+      // A retired character's archive account or an out-of-play character reads nothing.
+      const [[to]] = await pool.query(
+        `SELECT u.archived_character_id, c.id AS char_id, c.is_deceased, c.is_left, c.is_missing,
+                CASE WHEN c.sheet IS NOT NULL AND (JSON_EXTRACT(c.sheet, '$.is_active') = false OR JSON_UNQUOTE(JSON_EXTRACT(c.sheet, '$.is_active')) IN ('false', '0')) THEN 1 ELSE 0 END AS is_char_deactivated
+         FROM users u
+         LEFT JOIN characters c ON c.user_id = u.id OR c.id = u.archived_character_id
+         WHERE u.id = ?`,
+        [recipient_id]
       );
+      if (!to) return reply.status(404).send({ error: 'Recipient not found' });
+        const isTilemachos = Number(recipient_id) === 2 || Number(to.char_id) === 34;
+        if (to.archived_character_id || to.is_deceased || to.is_left || to.is_missing || to.is_char_deactivated || isTilemachos) {
+          return reply.status(409).send({ error: 'This character is no longer in play' });
+        }
 
-      // Fetch back with attachment info
-      const [[message]] = await pool.query(
-        `SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at, cm.attachment_id, cm.reply_to_id, cm.emoji_size, cm.forwarded_from,
+        const replyTo = await validReplyTo(reply_to_id,
+          "SELECT id FROM chat_messages WHERE id=? AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)) AND IFNULL(type, 'text') != 'system'",
+          [req.user.id, recipient_id, recipient_id, req.user.id]);
+
+        const [r] = await pool.query(
+          'INSERT INTO chat_messages (sender_id, recipient_id, body, attachment_id, reply_to_id, emoji_size, forwarded_from) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [req.user.id, recipient_id, body ? body.trim() : '', attachment_id || null, replyTo, attachment_id ? null : emojiSize(body, req.body.emoji_size), forwarded_from]
+        );
+
+        // Fetch back with attachment info
+        const [[message]] = await pool.query(
+          `SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at, cm.attachment_id, cm.reply_to_id, cm.emoji_size, cm.forwarded_from,
               u_sender.display_name as sender_name,
               c.name as char_name
        FROM chat_messages cm
        JOIN users u_sender ON cm.sender_id = u_sender.id
        LEFT JOIN characters c ON c.user_id = cm.sender_id
        WHERE cm.id = ?`,
-        [r.insertId]
-      );
+          [r.insertId]
+        );
 
-      // Was missing category: 'chat' — it fell through to the default
-      // 'system' category, so a player who'd only enabled chat
-      // notifications (not system) never got pushed for a DM at all.
-      const finalSenderName = message.char_name || message.sender_name;
-      sendPushNotification(
-        recipient_id,
-        `Erebus Portal - ${finalSenderName}`,
-        message.attachment_id ? '📷 Image Attachment' : message.body,
-        { url: '/schrecknet', icon: `/api/users/${req.user.id}/avatar` },
-        'chat'
-      ).catch(() => { });
+        // Was missing category: 'chat' — it fell through to the default
+        // 'system' category, so a player who'd only enabled chat
+        // notifications (not system) never got pushed for a DM at all.
+        const finalSenderName = message.char_name || message.sender_name;
+        sendPushNotification(
+          recipient_id,
+          `Erebus Portal - ${finalSenderName}`,
+          message.attachment_id ? '📷 Image Attachment' : message.body,
+          { url: '/schrecknet', icon: `/api/users/${req.user.id}/avatar` },
+          'chat'
+        ).catch(() => { });
 
-      if (fastify.io) {
-        fastify.io.to(`user_${recipient_id}`).emit('chat:refresh', { type: 'user', partnerId: req.user.id });
-        fastify.io.to(`user_${req.user.id}`).emit('chat:refresh', { type: 'user', partnerId: recipient_id });
+        if (fastify.io) {
+          fastify.io.to(`user_${recipient_id}`).emit('chat:refresh', { type: 'user', partnerId: req.user.id });
+          fastify.io.to(`user_${req.user.id}`).emit('chat:refresh', { type: 'user', partnerId: recipient_id });
+        }
+
+        reply.status(201).send({ message });
+      } catch (e) {
+        log.err('Failed to send message', { message: e.message });
+        reply.status(500).send({ error: 'Failed' });
       }
-
-      reply.status(201).send({ message });
-    } catch (e) {
-      log.err('Failed to send message', { message: e.message });
-      reply.status(500).send({ error: 'Failed' });
-    }
-  });
+    });
 
   // Socket rooms whose clients are showing a given message: both sides of a
   // DM, the group's room, or the player plus the admin room for NPC chats.
