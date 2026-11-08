@@ -5,6 +5,7 @@ const { sendDiscordChannelMessage } = require('../services/discord');
 const { getSetting } = require('../utils/settings');
 const { sanitizeRichText } = require('../utils/sanitize');
 const { isVideoUrl, resolveMediaUrl } = require('../services/news');
+const { htmlToDiscordMarkdown, truncateDiscordMarkdown } = require('../utils/discordMarkdown');
 
 const guards = require('../services/guards');
 module.exports = async function (fastify, opts) {
@@ -87,12 +88,12 @@ module.exports = async function (fastify, opts) {
             const prefix = discord_prefix || "🤫 A new whisper echoes in the night...";
             const prefixWithEmoji = (emojiTag && !prefix.includes(emojiTag)) ? `${emojiTag} ${prefix}` : prefix;
 
-            let plainBody = safeBody.replace(/<[^>]*>?/gm, '').trim();
-            if (plainBody.length > 1500) {
-              plainBody = plainBody.substring(0, 1500) + '...';
+            let formattedBody = htmlToDiscordMarkdown(safeBody);
+            if (formattedBody.length > 1500) {
+              formattedBody = truncateDiscordMarkdown(formattedBody, 1500);
             }
 
-            const broadcast = `# ${prefixWithEmoji}\n\n**${title}**\n\n_${plainBody}_\n\n**Investigate the Rumors:**\n${rumorLink}`;
+            const broadcast = `# ${prefixWithEmoji}\n\n**${title}**\n\n${formattedBody}\n\n**Investigate the Rumors:**\n${rumorLink}`;
 
             const payload = { content: broadcast };
             const resolvedImg = await resolveMediaUrl(media_url, appBase, pool);
@@ -158,12 +159,12 @@ module.exports = async function (fastify, opts) {
       const prefix = req.body?.discord_prefix || "🤫 A new whisper echoes in the night...";
       const prefixWithEmoji = (emojiTag && !prefix.includes(emojiTag)) ? `${emojiTag} ${prefix}` : prefix;
 
-      let plainBody = body.replace(/<[^>]*>?/gm, '').trim();
-      if (plainBody.length > 1500) {
-        plainBody = plainBody.substring(0, 1500) + '...';
+      let formattedBody = htmlToDiscordMarkdown(body);
+      if (formattedBody.length > 1500) {
+        formattedBody = truncateDiscordMarkdown(formattedBody, 1500);
       }
 
-      const broadcast = `# ${prefixWithEmoji}\n\n**${title}**\n\n_${plainBody}_\n\n**Investigate the Rumors:**\n${rumorLink}`;
+      const broadcast = `# ${prefixWithEmoji}\n\n**${title}**\n\n${formattedBody}\n\n**Investigate the Rumors:**\n${rumorLink}`;
 
       const payload = { content: broadcast };
       const resolvedImg = await resolveMediaUrl(media_url, appBase, pool);

@@ -413,7 +413,7 @@ module.exports = async function (fastify, opts) {
       const [messages] = await pool.query(`
       SELECT * FROM (
       SELECT m.id, m.sender_id, m.body, m.created_at, m.type, m.edited, m.emoji_size,
-            m.attachment_id, m.reply_to_id, m.forwarded_from,
+            m.attachment_id, m.reply_to_id, m.forwarded_from, m.is_pinned, m.pinned_at, m.pinned_by,
             u.display_name, c.name as char_name, c.clan,
             r.id AS reply_found, LEFT(r.body, 300) AS reply_body, r.sender_id AS reply_sender_id,
             r.attachment_id AS reply_attachment_id, COALESCE(rc.name, ru.display_name) AS reply_sender_name
@@ -626,6 +626,7 @@ module.exports = async function (fastify, opts) {
 
       const [[message]] = await pool.query(`
       SELECT m.id, m.sender_id, m.body, m.created_at, m.attachment_id, m.type, m.reply_to_id, m.emoji_size, m.forwarded_from,
+             m.is_pinned, m.pinned_at, m.pinned_by,
              u.display_name, c.name as char_name, c.clan
       FROM chat_group_messages m
       LEFT JOIN users u ON m.sender_id = u.id
@@ -930,6 +931,7 @@ module.exports = async function (fastify, opts) {
          SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at,
                 cm.read_at, cm.delivered_at, cm.edited, cm.emoji_size, cm.type,
                 cm.attachment_id, cm.reply_to_id, cm.forwarded_from,
+                cm.is_pinned, cm.pinned_at, cm.pinned_by,
                 u_sender.display_name as sender_name,
                 r.id AS reply_found, LEFT(r.body, 300) AS reply_body,
                 r.sender_id AS reply_sender_id, r.attachment_id AS reply_attachment_id
@@ -992,6 +994,7 @@ module.exports = async function (fastify, opts) {
         // Fetch back with attachment info
         const [[message]] = await pool.query(
           `SELECT cm.id, cm.sender_id, cm.recipient_id, cm.body, cm.created_at, cm.attachment_id, cm.reply_to_id, cm.emoji_size, cm.forwarded_from,
+              cm.is_pinned, cm.pinned_at, cm.pinned_by,
               u_sender.display_name as sender_name,
               c.name as char_name
        FROM chat_messages cm
@@ -1045,9 +1048,9 @@ module.exports = async function (fastify, opts) {
 
   // Edits and deletes don't create a newer message, so without this the other
   // side kept showing the old text (or the deleted message) until it reopened the chat.
-  const emitMessageChanged = (rooms, table, messageId, change) => {
+  const emitMessageChanged = (rooms, table, messageId, change, extra = {}) => {
     if (!fastify.io) return;
-    for (const room of rooms) fastify.io.to(room).emit('chat:refresh', { type: change, table, messageId });
+    for (const room of rooms) fastify.io.to(room).emit('chat:refresh', { type: change, table, messageId, ...extra });
   };
 
   /* --- Chat Reactions --- */
@@ -1229,6 +1232,63 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       log.err('Failed to batch fetch reactions', { error: e.message });
       reply.status(500).send({ error: 'Failed to batch fetch reactions' });
+    }
+  });
+
+  /* --- Chat Pinned Messages --- */
+
+  // Pin or unpin a message (DMs, Group Chats, NPC Chats)
+  fastify.post('/api/chat/messages/:id/pin', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const messageId = Number(req.params.id);
+      const { table, is_pinned } = req.body || {};
+      const userId = req.user.id;
+
+      if (!messageId || !table || !ALLOWED_REACTION_TABLES.includes(table)) {
+        return reply.status(400).send({ error: 'Invalid parameters' });
+      }
+
+      const [[msg]] = await pool.query(`SELECT * FROM ${table} WHERE id=? LIMIT 1`, [messageId]);
+      if (!msg) return reply.status(404).send({ error: 'Message not found' });
+      if (msg.type === 'system') return reply.status(400).send({ error: 'Cannot pin system messages' });
+
+      const isAdmin = checkIsAdmin(req.user);
+      if (table === 'chat_messages') {
+        if (!isAdmin && msg.sender_id !== userId && msg.recipient_id !== userId) {
+          return reply.status(403).send({ error: 'Forbidden' });
+        }
+      } else if (table === 'chat_group_messages') {
+        const [mem] = await pool.query('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?', [msg.group_id, userId]);
+        if (!isAdmin && !mem.length) return reply.status(403).send({ error: 'Forbidden' });
+      } else if (table === 'npc_messages') {
+        if (!isAdmin && msg.user_id !== userId) return reply.status(403).send({ error: 'Forbidden' });
+      }
+
+      const targetPinned = (is_pinned !== undefined) ? (is_pinned ? 1 : 0) : (msg.is_pinned ? 0 : 1);
+
+      if (targetPinned) {
+        await pool.query(`UPDATE ${table} SET is_pinned=1, pinned_at=NOW(), pinned_by=? WHERE id=?`, [userId, messageId]);
+      } else {
+        await pool.query(`UPDATE ${table} SET is_pinned=0, pinned_at=NULL, pinned_by=NULL WHERE id=?`, [messageId]);
+      }
+
+      let rooms = [];
+      try {
+        rooms = await messageRooms(table, messageId);
+      } catch (err) {
+        log.warn('Could not determine message rooms for pin broadcast', { error: err.message });
+      }
+
+      if (rooms.length) {
+        emitMessageChanged(rooms, table, messageId, 'pin', { is_pinned: targetPinned === 1 });
+      } else if (fastify.io) {
+        fastify.io.emit('chat:refresh', { type: 'pin', table, messageId, is_pinned: targetPinned === 1 });
+      }
+
+      reply.send({ ok: true, is_pinned: targetPinned === 1, messageId, table });
+    } catch (e) {
+      log.err('Pin message failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to pin message' });
     }
   });
 
@@ -1594,6 +1654,59 @@ module.exports = async function (fastify, opts) {
     } catch (e) {
       log.err('Chat media list failed', { message: e.message });
       reply.status(500).send({ error: 'Failed to load media' });
+    }
+  });
+
+  // Get all pinned messages in a conversation (newest pinned first)
+  fastify.get('/api/chat/pinned', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const { kind, id, user_id } = req.query;
+      const conv = await resolveConversation(req, kind, id, user_id);
+      if (conv.error) return reply.status(conv.error).send({ error: 'Conversation not found' });
+
+      let sql = '';
+      if (conv.kind === 'group') {
+        sql = `SELECT m.id, m.group_id, m.sender_id, m.body, m.created_at, m.attachment_id,
+                      m.emoji_size, m.type, m.forwarded_from, m.is_pinned, m.pinned_at, m.pinned_by,
+                      COALESCE(c.name, u.display_name) AS sender_name, c.clan AS sender_clan
+               FROM chat_group_messages m
+               LEFT JOIN users u ON m.sender_id = u.id
+               LEFT JOIN characters c ON (c.user_id = u.id OR c.id = u.archived_character_id)
+               WHERE ${conv.where} AND m.is_pinned = 1
+               ORDER BY m.pinned_at DESC, m.created_at DESC`;
+      } else if (conv.kind === 'user') {
+        sql = `SELECT m.id, m.sender_id, m.recipient_id, m.body, m.created_at, m.attachment_id,
+                      m.emoji_size, m.type, m.forwarded_from, m.is_pinned, m.pinned_at, m.pinned_by,
+                      COALESCE(c.name, u.display_name) AS sender_name, c.clan AS sender_clan
+               FROM chat_messages m
+               LEFT JOIN users u ON m.sender_id = u.id
+               LEFT JOIN characters c ON (c.user_id = u.id OR c.id = u.archived_character_id)
+               WHERE ${conv.where} AND m.is_pinned = 1
+               ORDER BY m.pinned_at DESC, m.created_at DESC`;
+      } else if (conv.kind === 'npc') {
+        sql = `SELECT m.id, m.npc_id, m.user_id, m.from_side, m.body, m.created_at, m.attachment_id,
+                      m.emoji_size, m.type, m.forwarded_from, m.is_pinned, m.pinned_at, m.pinned_by,
+                      CASE
+                        WHEN m.from_side = 'npc' THEN n.name
+                        ELSE COALESCE(c.name, u.display_name)
+                      END AS sender_name,
+                      CASE
+                        WHEN m.from_side = 'npc' THEN n.clan
+                        ELSE c.clan
+                      END AS sender_clan
+               FROM npc_messages m
+               LEFT JOIN npcs n ON m.npc_id = n.id
+               LEFT JOIN users u ON m.user_id = u.id
+               LEFT JOIN characters c ON (c.user_id = u.id OR c.id = u.archived_character_id)
+               WHERE ${conv.where} AND m.is_pinned = 1
+               ORDER BY m.pinned_at DESC, m.created_at DESC`;
+      }
+
+      const [messages] = await pool.query(sql, conv.params);
+      reply.send({ messages });
+    } catch (e) {
+      log.err('Failed to get pinned messages', { message: e.message });
+      reply.status(500).send({ error: 'Failed to get pinned messages' });
     }
   });
 
