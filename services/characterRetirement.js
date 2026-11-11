@@ -17,6 +17,7 @@
 // Both helpers take a connection inside the caller's transaction.
 
 const { parseSheet } = require('../utils/sheet');
+const { removeFromCoteries } = require('./coterieLifecycle');
 
 // Character status flags that end a character's story: its player may make a
 // new one themselves (POST /api/characters). Missing may come back; hunted lives.
@@ -40,6 +41,10 @@ const COMMS_COLUMNS = [
   ['anonymous_notes', 'user_id'],
   ['premonition_recipients', 'user_id'], ['premonition_targets', 'user_id'],
   ['comms_drafts', 'user_id'],
+  // Blocks, pinned/muted chats and saved messages (migration 0086): the next
+  // character starts with none, and a block on the dead stays with the dead.
+  ['chat_blocks', 'blocker_id'], ['chat_blocks', 'blocked_id'],
+  ['chat_contact_prefs', 'user_id'], ['chat_saved_messages', 'user_id'],
 ];
 
 // Conversation keys (utils/chatConversation.js convKey) name accounts:
@@ -69,6 +74,8 @@ async function moveComms(conn, from, to) {
       await conn.query(`UPDATE IGNORE \`${table}\` SET conv_key = ? WHERE conv_key = ?`, [swapConvKey(conv_key, from, to), conv_key]);
     }
   }
+  // Others' pin or mute on the DM with this account follows the DM.
+  await conn.query('UPDATE IGNORE chat_contact_prefs SET contact_key = ? WHERE contact_key = ?', [`u:${to}`, `u:${from}`]);
 }
 
 // The character's archive account, created on its first retirement. It wears
@@ -117,9 +124,10 @@ async function retireCharacter(conn, charId) {
             sheet = IF(JSON_VALID(sheet), JSON_REMOVE(sheet, '$.allow_new_character'), sheet)
       WHERE id = ?`, [charId]
   );
-  await conn.query(
-    'DELETE FROM coterie_members WHERE character_id = ? OR (user_id = ? AND character_id IS NULL)', [charId, ch.user_id]
-  );
+  // Out of its coteries, with its contributions taken back (services/coterieLifecycle.js).
+  // A death marked at court has usually done this already. No push from here:
+  // the coterie job's deadline reminder still reaches the members.
+  await removeFromCoteries(conn, charId, ch.user_id, 'was retired');
   await moveComms(conn, ch.user_id, await archiveAccount(conn, charId));
 
   // Left to right: previous_* take the owner before it is cleared.

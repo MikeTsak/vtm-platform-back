@@ -2,7 +2,7 @@
 //
 // Player <-> NPC direct messages, and the Storyteller side that answers them.
 const { idempotencyCheck, idempotencySave } = require('../utils/idempotency');
-const { convKey, loadConvSettings, historyWindow, emojiSize } = require('../utils/chatConversation');
+const { convKey, loadConvSettings, historyWindow, emojiSize, mutedUserIds } = require('../utils/chatConversation');
 const { messageInput } = require('../services/chatForward');
 
 module.exports = async function (fastify, opts) {
@@ -272,10 +272,11 @@ module.exports = async function (fastify, opts) {
         // 2. Only admins who picked this NPC under "My NPCs" (Master tab) are pushed.
         // The list lives in users.ntfy_subscribed_npcs (column name predates the switch to web push).
         const [admins] = await pool.query("SELECT id, ntfy_subscribed_npcs FROM users WHERE role = 'admin'");
+        const muted = await mutedUserIds(pool, admins.map((a) => a.id), `n:${npc_id}`);
 
         for (const admin of admins) {
-          // Skip the admin who is testing/playing as this user
-          if (admin.id === userId) continue;
+          // Skip the admin who is testing/playing as this user, and one who muted this NPC.
+          if (admin.id === userId || muted.has(Number(admin.id))) continue;
           let mine = [];
           try { mine = typeof admin.ntfy_subscribed_npcs === 'string' ? JSON.parse(admin.ntfy_subscribed_npcs) : admin.ntfy_subscribed_npcs; } catch (e) { }
           if (!Array.isArray(mine) || !mine.includes(Number(npc_id))) continue;
@@ -371,8 +372,10 @@ module.exports = async function (fastify, opts) {
           const npcName = npcInfo?.name || 'NPC';
           const notifBody = message.attachment_id ? '📷 Image Attachment' : message.body;
 
-          // Send push directly to the player (not awaited, see above)
-          sendPushNotification(user_id, `Erebus Portal - ${npcName}`, notifBody, { url: '/schrecknet', icon: `/api/npcs/${npc_id}/avatar` }, 'chat').catch(() => { });
+          // Send push directly to the player (not awaited, see above), unless they muted this NPC.
+          if (!(await mutedUserIds(pool, [user_id], `n:${npc_id}`)).size) {
+            sendPushNotification(user_id, `Erebus Portal - ${npcName}`, notifBody, { url: '/schrecknet', icon: `/api/npcs/${npc_id}/avatar` }, 'chat').catch(() => { });
+          }
         } catch (pushErr) {
           log.err('Failed to notify player of NPC reply', { error: pushErr.message });
         }

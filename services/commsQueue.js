@@ -5,6 +5,8 @@
 // comms status/schedule routes, and once a minute as a safety net for
 // schedule-based openings (see jobs/index.js).
 
+const { mutedUserIds } = require('../utils/chatConversation');
+
 async function flushQueuedMessages(pool, { log, sendPushNotification, io }) {
   let flushedChat = 0;
   let flushedEmail = 0;
@@ -26,7 +28,9 @@ async function flushQueuedMessages(pool, { log, sendPushNotification, io }) {
       const [[npcInfo]] = await pool.query('SELECT name FROM npcs WHERE id=?', [m.npc_id]);
       const npcName = npcInfo?.name || 'NPC';
       const notifBody = m.attachment_id ? '📷 Image Attachment' : m.body;
-      await sendPushNotification(m.user_id, npcName, notifBody, { url: '/schrecknet', icon: `/api/npcs/${m.npc_id}/avatar` }, 'chat').catch(() => {});
+      if (!(await mutedUserIds(pool, [m.user_id], `n:${m.npc_id}`)).size) {
+        await sendPushNotification(m.user_id, npcName, notifBody, { url: '/schrecknet', icon: `/api/npcs/${m.npc_id}/avatar` }, 'chat').catch(() => {});
+      }
     } catch (pushErr) {
       log.err('Queued NPC chat push failed', { error: pushErr.message });
     }

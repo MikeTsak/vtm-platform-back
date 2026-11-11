@@ -70,4 +70,48 @@ function emojiSize(body, raw) {
   return [1, 2, 3].includes(size) && text && text.length <= 32 ? size : null;
 }
 
-module.exports = { convKey, loadConvSettings, historyWindow, courtStanding, emojiSize };
+// The accounts among `userIds` that muted this chat right now. `key` is the
+// chat as each of them sees it in their list (chat_contact_prefs, migration
+// 0086): 'u:<other>' for a DM, 'g:<id>' for a group, 'n:<npc>' for an NPC.
+async function mutedUserIds(db, userIds, key) {
+  const ids = [...new Set(userIds.map(Number))].filter(Boolean);
+  if (!ids.length) return new Set();
+  const [rows] = await db.query(
+    'SELECT user_id FROM chat_contact_prefs WHERE contact_key = ? AND user_id IN (?) AND muted_until > NOW()',
+    [key, ids]
+  );
+  return new Set(rows.map((r) => Number(r.user_id)));
+}
+
+// Who has blocked whom between two accounts (chat_blocks, migration 0086).
+async function blockState(db, me, other) {
+  const [rows] = await db.query(
+    'SELECT blocker_id FROM chat_blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)',
+    [me, other, other, me]
+  );
+  const by = new Set(rows.map((r) => Number(r.blocker_id)));
+  return { byMe: by.has(Number(me)), byThem: by.has(Number(other)) };
+}
+
+// Group members named in a message as '@Name' (the composer inserts each
+// member's in-universe name). Case-insensitive, and the name has to end there,
+// so '@Ann' does not ping 'Anna'. members: [{ user_id, name }].
+function mentionedIds(body, members) {
+  const text = String(body || '').toLowerCase();
+  const out = new Set();
+  if (!text.includes('@')) return out;
+  for (const m of members) {
+    const tag = `@${String(m.name || '').trim().toLowerCase()}`;
+    if (tag === '@') continue;
+    for (let at = text.indexOf(tag); at !== -1; at = text.indexOf(tag, at + 1)) {
+      const next = text[at + tag.length];
+      if (next === undefined || !/[\p{L}\p{N}_]/u.test(next)) {
+        out.add(Number(m.user_id));
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+module.exports = { convKey, loadConvSettings, historyWindow, courtStanding, emojiSize, mutedUserIds, blockState, mentionedIds };

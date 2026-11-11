@@ -15,6 +15,7 @@ const { COOKIE_NAME } = require('./utils/authCookie');
 const { getAuthState } = require('./utils/tokenVersion');
 const { isAdmin, isCourt } = require('./services/guards');
 const { getSessionRow, emitSessionPresence } = require('./services/liveSession');
+const { blockState } = require('./utils/chatConversation');
 
 function attachRealtime(fastify) {
   const io = new Server(fastify.server, {
@@ -138,6 +139,38 @@ function attachRealtime(fastify) {
 
     socket.on('leave_group', (groupId) => {
       if (groupId) socket.leave(`group_${groupId}`);
+    });
+
+    // "<name> is typing" in SchreckNet. Relayed only where the typist may write:
+    // a DM with no block either way, a group room they joined (join_group
+    // checked membership), or an NPC thread (an admin types as the NPC).
+    // Best effort and throttled: the client sends one every ~2.5 s at most.
+    socket.on('chat:typing', async (p) => {
+      try {
+        const id = Number(p?.id);
+        if (!uid || !id) return;
+        const now = Date.now();
+        if (now - (socket.data.lastTyping || 0) < 1000) return;
+        socket.data.lastTyping = now;
+
+        if (p.kind === 'user') {
+          if (id === uid) return;
+          const block = await blockState(pool, uid, id);
+          if (block.byMe || block.byThem) return;
+          io.to(`user_${id}`).emit('chat:typing', { kind: 'user', id: uid, userId: uid });
+        } else if (p.kind === 'group') {
+          if (socket.rooms.has(`group_${id}`)) socket.to(`group_${id}`).emit('chat:typing', { kind: 'group', id, userId: uid });
+        } else if (p.kind === 'npc') {
+          if (isAdmin(socket.user)) {
+            const player = Number(p.user_id);
+            if (player) io.to(`user_${player}`).emit('chat:typing', { kind: 'npc', id, userId: null });
+          } else {
+            io.to('admin_chat').emit('chat:typing', { kind: 'npc', id, userId: uid });
+          }
+        }
+      } catch {
+        // A missed typing hint is harmless.
+      }
     });
 
     socket.on('join_session', async (sessionId) => {

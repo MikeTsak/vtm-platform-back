@@ -52,4 +52,38 @@ function checkGhoulGift(vampSheet, sheet, oldSheet, who) {
   return null;
 }
 
-module.exports = { highestDisciplines, giftError, checkGhoulGift };
+// A coterie ghoul carries its domitor's Discipline plus one extra per Tier,
+// each from a different member's blood: `sheet.bloodSources` maps
+// Discipline -> giving character id. Splits a ghoul sheet into the domitor's
+// own part and those extras.
+function splitBlood(sheet) {
+  const all = sheet || {};
+  const sources = all.bloodSources || {};
+  const extras = Object.keys(sources)
+    .filter((d) => all.disciplines && all.disciplines[d])
+    .map((d) => ({
+      discipline: d,
+      source: Number(sources[d]),
+      power: (all.powers || []).find((x) => x && x.discipline === d) || null,
+    }));
+  const names = new Set(extras.map((e) => e.discipline));
+  const own = {
+    ...all,
+    disciplines: Object.fromEntries(Object.entries(all.disciplines || {}).filter(([d]) => !names.has(d))),
+    powers: (all.powers || []).filter((x) => !(x && names.has(x.discipline))),
+  };
+  delete own.bloodSources;
+  return { own, extras };
+}
+
+function withBlood(own, extras) {
+  if (!extras.length) return own;
+  return {
+    ...own,
+    disciplines: { ...own.disciplines, ...Object.fromEntries(extras.map((e) => [e.discipline, 1])) },
+    powers: [...(own.powers || []), ...extras.filter((e) => e.power).map((e) => e.power)],
+    bloodSources: Object.fromEntries(extras.map((e) => [e.discipline, e.source])),
+  };
+}
+
+module.exports = { highestDisciplines, giftError, checkGhoulGift, splitBlood, withBlood };

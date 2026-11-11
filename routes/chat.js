@@ -5,7 +5,9 @@
 
 const { isAdmin: checkIsAdmin, isOwnerOrAdmin } = require('../services/guards');
 const { idempotencyCheck, idempotencySave } = require('../utils/idempotency');
-const { convKey, loadConvSettings, historyWindow, courtStanding, emojiSize } = require('../utils/chatConversation');
+const {
+  convKey, loadConvSettings, historyWindow, courtStanding, emojiSize, mutedUserIds, blockState, mentionedIds,
+} = require('../utils/chatConversation');
 const { uploadChatImage, storedUrl, canAccessChatMedia } = require('../services/chatMedia');
 const { messageInput } = require('../services/chatForward');
 
@@ -662,15 +664,28 @@ module.exports = async function (fastify, opts) {
           }
         }
 
-        // 3. Βρίσκουμε όλα τα μέλη εκτός από τον αποστολέα
-        [members] = await pool.query('SELECT user_id FROM chat_group_members WHERE group_id=? AND user_id!=?', [groupId, req.user.id]);
+        // 3. Every member but the sender, with the name an @mention uses.
+        [members] = await pool.query(
+          `SELECT gm.user_id, COALESCE(c.name, u.display_name) AS name
+             FROM chat_group_members gm
+             JOIN users u ON u.id = gm.user_id
+             LEFT JOIN characters c ON c.user_id = u.id
+            WHERE gm.group_id = ? AND gm.user_id != ?`,
+          [groupId, req.user.id]
+        );
+        const mentioned = mentionedIds(message.body, members);
+        const muted = await mutedUserIds(pool, members.map((mb) => mb.user_id), `g:${groupId}`);
 
-        // 4. Στέλνουμε push notification στο κάθε μέλος
+        // 4. Push each member. A mention gets through a muted group (that is
+        // what it is for) and says who named them.
         // Not awaited: the sender's request used to wait on every member's
         // web push in turn, so one slow push endpoint made the send look
         // stuck, and the retry stored the message twice.
         for (const member of members) {
-          sendPushNotification(member.user_id, notifTitle, notifBody, { url: '/schrecknet', icon: iconUrl }, 'chat').catch(() => { });
+          const isMentioned = mentioned.has(Number(member.user_id));
+          if (muted.has(Number(member.user_id)) && !isMentioned) continue;
+          const title = isMentioned ? `${senderName} mentioned you in ${groupName}` : notifTitle;
+          sendPushNotification(member.user_id, title, notifBody, { url: '/schrecknet', icon: iconUrl }, 'chat').catch(() => { });
         }
       } catch (pushErr) {
         log.err('Failed to notify group members', { error: pushErr.message });
@@ -981,6 +996,15 @@ module.exports = async function (fastify, opts) {
         if (to.archived_character_id || to.is_deceased || to.is_left || to.is_missing || to.is_char_deactivated || isTilemachos) {
           return reply.status(409).send({ error: 'This character is no longer in play' });
         }
+        // A block stops new messages both ways, and says so openly (user's choice).
+        const block = await blockState(pool, req.user.id, recipient_id);
+        if (block.byThem || block.byMe) {
+          const name = await nameFor(recipient_id);
+          return reply.status(403).send({
+            error: block.byThem ? `${name} has blocked you.` : `You blocked ${name}. Unblock them to write again.`,
+            blocked: block.byThem ? 'by_them' : 'by_me',
+          });
+        }
 
         const replyTo = await validReplyTo(reply_to_id,
           "SELECT id FROM chat_messages WHERE id=? AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)) AND IFNULL(type, 'text') != 'system'",
@@ -1008,13 +1032,16 @@ module.exports = async function (fastify, opts) {
         // 'system' category, so a player who'd only enabled chat
         // notifications (not system) never got pushed for a DM at all.
         const finalSenderName = message.char_name || message.sender_name;
-        sendPushNotification(
-          recipient_id,
-          `Erebus Portal - ${finalSenderName}`,
-          message.attachment_id ? '📷 Image Attachment' : message.body,
-          { url: '/schrecknet', icon: `/api/users/${req.user.id}/avatar` },
-          'chat'
-        ).catch(() => { });
+        const muted = await mutedUserIds(pool, [recipient_id], `u:${req.user.id}`);
+        if (!muted.size) {
+          sendPushNotification(
+            recipient_id,
+            `Erebus Portal - ${finalSenderName}`,
+            message.attachment_id ? '📷 Image Attachment' : message.body,
+            { url: '/schrecknet', icon: `/api/users/${req.user.id}/avatar` },
+            'chat'
+          ).catch(() => { });
+        }
 
         if (fastify.io) {
           fastify.io.to(`user_${recipient_id}`).emit('chat:refresh', { type: 'user', partnerId: req.user.id });
@@ -1056,6 +1083,20 @@ module.exports = async function (fastify, opts) {
   /* --- Chat Reactions --- */
   const ALLOWED_REACTION_TABLES = ['chat_messages', 'npc_messages', 'chat_group_messages'];
 
+  // Whether this person can see a message (and so react to, pin or save it):
+  // a DM they are in, a group they still belong to, their own NPC thread.
+  // Admins see every thread.
+  async function canSeeMessage(user, table, msg) {
+    if (checkIsAdmin(user)) return true;
+    const me = Number(user.id);
+    if (table === 'chat_messages') return Number(msg.sender_id) === me || Number(msg.recipient_id) === me;
+    if (table === 'chat_group_messages') {
+      const [rows] = await pool.query('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?', [msg.group_id, me]);
+      return rows.length > 0;
+    }
+    return table === 'npc_messages' && Number(msg.user_id) === me;
+  }
+
   fastify.post('/api/chat/messages/:id/reactions', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const messageId = Number(req.params.id);
@@ -1072,10 +1113,17 @@ module.exports = async function (fastify, opts) {
         return reply.status(400).send({ error: 'Invalid reaction' });
       }
 
-      // Disallow reactions on system messages
-      const [[targetMsg]] = await pool.query(`SELECT type FROM ${table} WHERE id=? LIMIT 1`, [messageId]);
-      if (targetMsg && targetMsg.type === 'system') {
+      // Only a message the reactor can see, never a system line, never across a block.
+      const [[targetMsg]] = await pool.query(`SELECT * FROM ${table} WHERE id=? LIMIT 1`, [messageId]);
+      if (!targetMsg) return reply.status(404).send({ error: 'Message not found' });
+      if (targetMsg.type === 'system') {
         return reply.status(400).send({ error: 'Cannot react to system messages' });
+      }
+      if (!(await canSeeMessage(req.user, table, targetMsg))) return reply.status(403).send({ error: 'Forbidden' });
+      if (table === 'chat_messages') {
+        const other = Number(targetMsg.sender_id) === Number(userId) ? targetMsg.recipient_id : targetMsg.sender_id;
+        const block = await blockState(pool, userId, other);
+        if (block.byMe || block.byThem) return reply.status(403).send({ error: 'This conversation is blocked.' });
       }
 
       // Toggle reaction: delete if exists, otherwise insert
@@ -1251,18 +1299,7 @@ module.exports = async function (fastify, opts) {
       const [[msg]] = await pool.query(`SELECT * FROM ${table} WHERE id=? LIMIT 1`, [messageId]);
       if (!msg) return reply.status(404).send({ error: 'Message not found' });
       if (msg.type === 'system') return reply.status(400).send({ error: 'Cannot pin system messages' });
-
-      const isAdmin = checkIsAdmin(req.user);
-      if (table === 'chat_messages') {
-        if (!isAdmin && msg.sender_id !== userId && msg.recipient_id !== userId) {
-          return reply.status(403).send({ error: 'Forbidden' });
-        }
-      } else if (table === 'chat_group_messages') {
-        const [mem] = await pool.query('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?', [msg.group_id, userId]);
-        if (!isAdmin && !mem.length) return reply.status(403).send({ error: 'Forbidden' });
-      } else if (table === 'npc_messages') {
-        if (!isAdmin && msg.user_id !== userId) return reply.status(403).send({ error: 'Forbidden' });
-      }
+      if (!(await canSeeMessage(req.user, table, msg))) return reply.status(403).send({ error: 'Forbidden' });
 
       const targetPinned = (is_pinned !== undefined) ? (is_pinned ? 1 : 0) : (msg.is_pinned ? 0 : 1);
 
@@ -1292,6 +1329,194 @@ module.exports = async function (fastify, opts) {
     }
   });
 
+
+  /* --- Saved messages: private bookmarks, unlike pins (migration 0086) --- */
+
+  // body: { table, saved } -- saved false removes it.
+  fastify.post('/api/chat/messages/:id/save', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const messageId = Number(req.params.id);
+      const { table, saved } = req.body || {};
+      if (!messageId || !ALLOWED_REACTION_TABLES.includes(table)) return reply.status(400).send({ error: 'Invalid parameters' });
+
+      const [[msg]] = await pool.query(`SELECT * FROM ${table} WHERE id=? LIMIT 1`, [messageId]);
+      if (!msg) return reply.status(404).send({ error: 'Message not found' });
+      if (msg.type === 'system') return reply.status(400).send({ error: 'Cannot save system messages' });
+      if (!(await canSeeMessage(req.user, table, msg))) return reply.status(403).send({ error: 'Forbidden' });
+
+      if (saved === false) {
+        await pool.query('DELETE FROM chat_saved_messages WHERE user_id=? AND message_table=? AND message_id=?', [req.user.id, table, messageId]);
+      } else {
+        await pool.query('INSERT IGNORE INTO chat_saved_messages (user_id, message_table, message_id) VALUES (?,?,?)', [req.user.id, table, messageId]);
+      }
+      if (fastify.io) fastify.io.to(`user_${req.user.id}`).emit('chat:refresh', { type: 'saved' });
+      reply.send({ ok: true, saved: saved !== false });
+    } catch (e) {
+      log.err('Save message failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to save message' });
+    }
+  });
+
+  // Everything this person saved and can still see (a deleted message, or a
+  // group they left, drops out), newest saved first, with where it lives.
+  fastify.get('/api/chat/saved', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const me = Number(req.user.id);
+      const admin = checkIsAdmin(req.user) ? 1 : 0;
+      const name = (c, u) => `COALESCE(${c}.name, ${u}.display_name)`;
+      const wears = (c, u) => `LEFT JOIN characters ${c} ON ${c}.user_id = ${u}.id OR ${c}.id = ${u}.archived_character_id`;
+      const [[dms], [groupMsgs], [npcMsgs]] = await Promise.all([
+        pool.query(
+          `SELECT 'chat_messages' AS message_table, m.id, m.body, m.attachment_id, m.created_at, s.created_at AS saved_at,
+                  'user' AS kind, uo.id AS chat_id, NULL AS player_id,
+                  ${name('cs', 'us')} AS sender_name, ${name('co', 'uo')} AS chat_name
+             FROM chat_saved_messages s
+             JOIN chat_messages m ON m.id = s.message_id
+             JOIN users us ON us.id = m.sender_id ${wears('cs', 'us')}
+             JOIN users uo ON uo.id = IF(m.sender_id = ?, m.recipient_id, m.sender_id) ${wears('co', 'uo')}
+            WHERE s.user_id = ? AND s.message_table = 'chat_messages' AND ? IN (m.sender_id, m.recipient_id)`,
+          [me, me, me]
+        ),
+        pool.query(
+          `SELECT 'chat_group_messages' AS message_table, m.id, m.body, m.attachment_id, m.created_at, s.created_at AS saved_at,
+                  'group' AS kind, m.group_id AS chat_id, NULL AS player_id,
+                  ${name('c', 'u')} AS sender_name, g.name AS chat_name
+             FROM chat_saved_messages s
+             JOIN chat_group_messages m ON m.id = s.message_id
+             JOIN chat_groups g ON g.id = m.group_id
+             JOIN chat_group_members gm ON gm.group_id = m.group_id AND gm.user_id = s.user_id
+             LEFT JOIN users u ON u.id = m.sender_id ${wears('c', 'u')}
+            WHERE s.user_id = ? AND s.message_table = 'chat_group_messages'`,
+          [me]
+        ),
+        pool.query(
+          `SELECT 'npc_messages' AS message_table, m.id, m.body, m.attachment_id, m.created_at, s.created_at AS saved_at,
+                  'npc' AS kind, m.npc_id AS chat_id, m.user_id AS player_id,
+                  IF(m.from_side = 'npc', n.name, ${name('c', 'u')}) AS sender_name, n.name AS chat_name,
+                  ${name('c', 'u')} AS player_name
+             FROM chat_saved_messages s
+             JOIN npc_messages m ON m.id = s.message_id
+             JOIN npcs n ON n.id = m.npc_id
+             LEFT JOIN users u ON u.id = m.user_id ${wears('c', 'u')}
+            WHERE s.user_id = ? AND s.message_table = 'npc_messages' AND (? = 1 OR m.user_id = s.user_id)`,
+          [me, admin]
+        ),
+      ]);
+      const saved = [...dms, ...groupMsgs, ...npcMsgs]
+        .sort((a, b) => new Date(b.saved_at) - new Date(a.saved_at))
+        .slice(0, 300);
+      reply.send({ saved });
+    } catch (e) {
+      log.err('Load saved messages failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to load saved messages' });
+    }
+  });
+
+  /* --- Per-person chat list controls: pin to top, mute (migration 0086) --- */
+
+  // A chat as its owner sees it in their list: 'u:<other>', 'g:<group>', 'n:<npc>'.
+  const CONTACT_KEY_RE = /^[ugn]:\d{1,10}$/;
+  const MUTE_HOURS = { '1h': 1, '5h': 5, '1d': 24, '1w': 168 };
+  const MUTED_FOREVER = '9999-12-31 23:59:59';
+
+  // Fetched with the contact lists: pins, live mutes, and blocks both ways.
+  fastify.get('/api/chat/prefs', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const me = Number(req.user.id);
+      const [[rows], [blocks]] = await Promise.all([
+        pool.query(
+          `SELECT contact_key, pinned_at, IF(muted_until > NOW(), muted_until, NULL) AS muted_until
+             FROM chat_contact_prefs WHERE user_id = ? AND (pinned_at IS NOT NULL OR muted_until > NOW())`,
+          [me]
+        ),
+        pool.query('SELECT blocker_id, blocked_id FROM chat_blocks WHERE blocker_id = ? OR blocked_id = ?', [me, me]),
+      ]);
+      reply.send({
+        prefs: Object.fromEntries(rows.map((r) => [r.contact_key, { pinned_at: r.pinned_at, muted_until: r.muted_until }])),
+        blocked: blocks.filter((b) => Number(b.blocker_id) === me).map((b) => Number(b.blocked_id)),
+        blocked_by: blocks.filter((b) => Number(b.blocked_id) === me).map((b) => Number(b.blocker_id)),
+      });
+    } catch (e) {
+      log.err('Load chat prefs failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to load chat settings' });
+    }
+  });
+
+  // body: { key, pinned?: boolean, mute?: '1h'|'5h'|'1d'|'1w'|'forever'|null }
+  fastify.put('/api/chat/prefs', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const me = Number(req.user.id);
+      const { key, pinned, mute } = req.body || {};
+      if (!CONTACT_KEY_RE.test(String(key || ''))) return reply.status(400).send({ error: 'Unknown chat' });
+
+      const sets = [];
+      const vals = [];
+      if (pinned !== undefined) sets.push(pinned ? 'pinned_at = COALESCE(pinned_at, NOW())' : 'pinned_at = NULL');
+      if (mute !== undefined) {
+        if (mute === null) {
+          sets.push('muted_until = NULL');
+        } else if (mute === 'forever') {
+          sets.push('muted_until = ?');
+          vals.push(MUTED_FOREVER);
+        } else if (MUTE_HOURS[mute]) {
+          sets.push('muted_until = NOW() + INTERVAL ? HOUR');
+          vals.push(MUTE_HOURS[mute]);
+        } else {
+          return reply.status(400).send({ error: 'Unknown mute length' });
+        }
+      }
+      if (!sets.length) return reply.status(400).send({ error: 'Nothing to change' });
+
+      await pool.query('INSERT IGNORE INTO chat_contact_prefs (user_id, contact_key) VALUES (?, ?)', [me, key]);
+      await pool.query(`UPDATE chat_contact_prefs SET ${sets.join(', ')} WHERE user_id = ? AND contact_key = ?`, [...vals, me, key]);
+      const [[row]] = await pool.query(
+        'SELECT pinned_at, IF(muted_until > NOW(), muted_until, NULL) AS muted_until FROM chat_contact_prefs WHERE user_id = ? AND contact_key = ?',
+        [me, key]
+      );
+      if (fastify.io) fastify.io.to(`user_${me}`).emit('chat:refresh', { type: 'prefs' });
+      reply.send({ key, pinned_at: row.pinned_at, muted_until: row.muted_until });
+    } catch (e) {
+      log.err('Save chat prefs failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to save' });
+    }
+  });
+
+  /* --- Blocks: DMs only, and the blocked person is told (migration 0086) --- */
+
+  fastify.post('/api/chat/blocks', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const me = Number(req.user.id);
+      const other = Number(req.body?.user_id);
+      if (!other || other === me) return reply.status(400).send({ error: 'Choose someone to block.' });
+      const [[target]] = await pool.query('SELECT id, role, archived_character_id FROM users WHERE id = ?', [other]);
+      if (!target) return reply.status(404).send({ error: 'Not found' });
+      // A Storyteller's line can never be cut; a retired character writes nothing anyway.
+      if (checkIsAdmin(target)) return reply.status(400).send({ error: 'Storytellers cannot be blocked.' });
+      if (target.archived_character_id) return reply.status(400).send({ error: 'That character is no longer on SchreckNet.' });
+
+      await pool.query('INSERT IGNORE INTO chat_blocks (blocker_id, blocked_id) VALUES (?, ?)', [me, other]);
+      log.adm('Chat block', { blocker_id: me, blocked_id: other });
+      if (fastify.io) for (const id of [me, other]) fastify.io.to(`user_${id}`).emit('chat:refresh', { type: 'block' });
+      reply.send({ ok: true });
+    } catch (e) {
+      log.err('Block failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to block' });
+    }
+  });
+
+  fastify.delete('/api/chat/blocks/:userId', { preHandler: [authRequired] }, async (req, reply) => {
+    try {
+      const me = Number(req.user.id);
+      const other = Number(req.params.userId);
+      await pool.query('DELETE FROM chat_blocks WHERE blocker_id = ? AND blocked_id = ?', [me, other]);
+      log.adm('Chat unblock', { blocker_id: me, blocked_id: other });
+      if (fastify.io) for (const id of [me, other]) fastify.io.to(`user_${id}`).emit('chat:refresh', { type: 'block' });
+      reply.send({ ok: true });
+    } catch (e) {
+      log.err('Unblock failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to unblock' });
+    }
+  });
 
   /* --- Chat Media --- */
 

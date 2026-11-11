@@ -548,7 +548,7 @@ async function court(pool, people, P) {
 
 async function coteries(pool, people) {
   const [[groups], [retainers]] = await Promise.all([
-    pool.query('SELECT c.id, c.name, COUNT(m.id) members FROM coteries c LEFT JOIN coterie_members m ON m.coterie_id = c.id GROUP BY c.id, c.name'),
+    pool.query("SELECT c.id, c.name, COUNT(m.id) members FROM coteries c LEFT JOIN coterie_members m ON m.coterie_id = c.id WHERE c.status <> 'dissolved' GROUP BY c.id, c.name"),
     pool.query('SELECT character_id, coterie_id, domitor_character_id, sheet FROM retainers'),
   ]);
   const ghouls = retainers.filter((r) => parseSheet(r.sheet).isGhoul === true);

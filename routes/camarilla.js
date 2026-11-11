@@ -4,6 +4,7 @@
 
 const { MAIN_COURT, parseTitles, getCourtContext } = require('../services/courtOffices');
 const { parseSheet } = require('../utils/sheet');
+const coterieLifecycle = require('../services/coterieLifecycle');
 
 // A retired character (no account playing it) stays on the court roster with
 // its fate: the dead, the departed, the missing, the exiled, the hunted. One
@@ -162,6 +163,12 @@ module.exports = async function (fastify, opts) {
     try {
       await pool.query(`UPDATE ${table} SET ${dbField} = ? WHERE id = ?`, [dbValue, id]);
       log.adm(`Updated Camarilla ${field}`, { type, id, value: dbValue, by_user: req.user.id });
+      // A character leaving play leaves its coterie and takes its contributions
+      // with it. If this fails, the coterie job catches it on its next run.
+      if (type === 'player' && dbValue === 1 && coterieLifecycle.OUT_OF_PLAY_FLAGS.includes(dbField)) {
+        await coterieLifecycle.characterLeftPlay(pool, id)
+          .catch((e) => log.err('Coterie removal after leaving play failed', { character_id: id, message: e.message }));
+      }
       // Titles (or ex-status) on a player can change whether their account should
       // be a court user; hand the editor a hint so it can offer to fix the role.
       let court_access = null;

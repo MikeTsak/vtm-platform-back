@@ -20,7 +20,8 @@ const { attachFeeding } = require('../services/ghoulFeeding');
 const { isAdmin, userOwnsCharacter } = require('../services/guards');
 const { parseSheet } = require('../utils/sheet');
 const { validateRetainerSheet } = require('../utils/retainerValidation');
-const { giftError, checkGhoulGift } = require('../utils/ghoulBlood');
+const { giftError, checkGhoulGift, splitBlood, withBlood } = require('../utils/ghoulBlood');
+const lifecycle = require('../services/coterieLifecycle');
 const { withSetOnceDates, notifyNewDates, RETAINER_DATES } = require('../utils/sheetDates');
 const { keepTrackers, ghoulTrackers } = require('../services/ghoulTrackers');
 
@@ -64,37 +65,6 @@ const cleanPower = (power, discipline) => {
   }
   return out;
 };
-
-// Splits a ghoul sheet into the domitor's own part and the extra Disciplines.
-function splitBlood(sheet) {
-  const all = sheet || {};
-  const sources = all.bloodSources || {};
-  const extras = Object.keys(sources)
-    .filter((d) => all.disciplines && all.disciplines[d])
-    .map((d) => ({
-      discipline: d,
-      source: Number(sources[d]),
-      power: (all.powers || []).find((x) => x && x.discipline === d) || null,
-    }));
-  const names = new Set(extras.map((e) => e.discipline));
-  const own = {
-    ...all,
-    disciplines: Object.fromEntries(Object.entries(all.disciplines || {}).filter(([d]) => !names.has(d))),
-    powers: (all.powers || []).filter((x) => !(x && names.has(x.discipline))),
-  };
-  delete own.bloodSources;
-  return { own, extras };
-}
-
-function withBlood(own, extras) {
-  if (!extras.length) return own;
-  return {
-    ...own,
-    disciplines: { ...own.disciplines, ...Object.fromEntries(extras.map((e) => [e.discipline, 1])) },
-    powers: [...(own.powers || []), ...extras.filter((e) => e.power).map((e) => e.power)],
-    bloodSources: Object.fromEntries(extras.map((e) => [e.discipline, e.source])),
-  };
-}
 
 const disciplineCount = (sheet) =>
   Object.values((sheet && sheet.disciplines) || {}).filter((v) => Number(v) === 1).length;
@@ -145,6 +115,10 @@ function presentCoterie(row, members = []) {
     advancement_dots: Number(row.advancement_dots) || 0,
     coterie_xp: Number(row.coterie_xp) || 0,
     rules_override: !!row.rules_override,
+    // services/coterieLifecycle.js: 'active' | 'dormant' | 'dissolved'
+    status: row.status || 'active',
+    dormant_since: row.dormant_since || null,
+    dissolve_at: row.dissolve_at || null,
     created_by: row.created_by,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -399,8 +373,9 @@ module.exports = async function (fastify, opts) {
     try {
       const [rows] = await pool.query(`
         SELECT c.id, c.name, c.type, c.concept, c.domain_id,
-               c.chasse, c.lien, c.portillon
+               c.chasse, c.lien, c.portillon, c.status, c.dissolve_at
           FROM coteries c
+         WHERE c.status <> 'dissolved'
          ORDER BY c.name ASC
       `);
       if (!rows.length) return reply.send({ coteries: [] });
@@ -524,7 +499,7 @@ module.exports = async function (fastify, opts) {
         coterie: presentCoterie(row, members),
         members,
         xp_log: xpLog,
-        events: xpLog.filter((x) => x.kind === 'member_left'),
+        events: xpLog.filter((x) => ['member_left', 'status', 'revoked'].includes(x.kind)),
         retainers,
       });
     } catch (e) {
@@ -758,6 +733,8 @@ module.exports = async function (fastify, opts) {
             [id, b.user_id, b.character_id || null, remName, `${remName} left the coterie`]
           );
         }
+        // At least MIN_MEMBERS by now: wakes a dormant coterie.
+        await lifecycle.syncFloor(conn, id);
 
         await conn.commit();
       } catch (e) {
@@ -835,6 +812,7 @@ module.exports = async function (fastify, opts) {
         );
 
         let deleted = false;
+        let notice = null;
         if (Number(remaining?.count || 0) === 0) {
           await conn.query('DELETE FROM coteries WHERE id=?', [id]);
           deleted = true;
@@ -854,9 +832,12 @@ module.exports = async function (fastify, opts) {
             character_name: charName,
             remaining_members: remaining.count,
           });
+          // Below the floor now: the coterie goes dormant.
+          notice = await lifecycle.syncFloor(conn, id);
         }
 
         await conn.commit();
+        lifecycle.announce([notice]);
         reply.send({ ok: true, deleted, coterie_id: id, character_name: charName });
       } catch (e) {
         await conn.rollback();
@@ -1699,6 +1680,28 @@ module.exports = async function (fastify, opts) {
   /* ================================================================ *
    * Delete
    * ================================================================ */
+
+  /* ================================================================ *
+   * Dormancy deadline — a Calendar date, set from the admin Calendar
+   * ================================================================ */
+
+  fastify.patch('/api/coteries/:id/dissolve-at', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    const raw = req.body?.dissolve_at;
+    const when = new Date(raw);
+    if (!raw || isNaN(when.getTime())) return reply.status(400).send({ error: 'Pick a valid date.' });
+    if (when <= new Date()) return reply.status(400).send({ error: 'The deadline must be in the future.' });
+    try {
+      const id = Number(req.params.id);
+      const result = await lifecycle.setDeadline(pool, id, when);
+      if (result === 'not_found') return reply.status(404).send({ error: 'Not found' });
+      if (result === 'not_dormant') return reply.status(409).send({ error: 'Only a dormant coterie has a deadline.' });
+      log.adm('Coterie dissolution deadline moved', { coterie_id: id, dissolve_at: when.toISOString(), by_user_id: req.user.id });
+      reply.send({ ok: true, dissolve_at: when });
+    } catch (e) {
+      log.err('Set coterie deadline failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to move the deadline' });
+    }
+  });
 
   fastify.delete('/api/coteries/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {

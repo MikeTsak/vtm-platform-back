@@ -4,7 +4,7 @@ const { setupTestDatabase, teardownTestDatabase, truncateAll } = require('./setu
 const { buildTestApp } = require('./setup/testApp');
 const { registerUser } = require('./setup/helpers');
 
-let pool, app, harpy, marcus, selene, dorian;
+let pool, app, harpy, marcus, selene, dorian, admin;
 
 const call = (who, method, url, payload) => app.inject({ method, url, payload, headers: { cookie: who.cookie } });
 const body = (res) => JSON.parse(res.body);
@@ -12,11 +12,13 @@ const pushedTo = () => app.testPushNotifications.map(p => p.userId).sort();
 // Pushes are fire-and-forget after the reply; give them a moment to land.
 const settle = () => new Promise(r => setTimeout(r, 150));
 
-async function player(name, { court = false, deceased = false } = {}) {
+async function player(name, { role = null, titles = [], deceased = false } = {}) {
   const u = await registerUser(app, { displayName: `${name} Account` });
-  await pool.query('INSERT INTO characters (user_id, name, clan, xp, is_deceased) VALUES (?, ?, ?, 0, ?)', [u.user.id, name, 'Toreador', deceased ? 1 : 0]);
-  if (court) {
-    await pool.query("UPDATE users SET role='courtuser' WHERE id=?", [u.user.id]);
+  const [c] = await pool.query('INSERT INTO characters (user_id, name, clan, xp, is_deceased, camarilla_titles) VALUES (?, ?, ?, 0, ?, ?)',
+    [u.user.id, name, 'Toreador', deceased ? 1 : 0, JSON.stringify(titles)]);
+  u.charId = c.insertId;
+  if (role) {
+    await pool.query('UPDATE users SET role=? WHERE id=?', [role, u.user.id]);
     const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: u.email, password: u.password } });
     u.cookie = login.cookies.map(c => `${c.name}=${c.value}`).join('; ');
   }
@@ -29,7 +31,8 @@ beforeAll(async () => {
   app = buildTestApp(pool);
   await app.ready();
 
-  harpy = await player('Livia', { court: true });
+  harpy = await player('Livia', { role: 'courtuser', titles: ['Harpy'] });
+  admin = await player('Storyteller', { role: 'admin' });
   marcus = await player('Marcus');
   selene = await player('Selene');
   dorian = await player('Dorian', { deceased: true });
@@ -94,6 +97,37 @@ describe('boons between bodies', () => {
 });
 
 describe('orphaned boons', () => {
+  it('a death marked at court orphans open boons, and the Harpy can edit or pass them on', async () => {
+    const heir = await player('Octavia');
+    const owed = body(await call(harpy, 'POST', '/api/boons', { from_name: 'Selene', to_name: 'Marcus', level: 'minor', status: 'owed' })).boon;
+    const holds = body(await call(harpy, 'POST', '/api/boons', { from_name: 'Marcus', to_name: 'Octavia', level: 'major', status: 'owed' })).boon;
+    expect(Boolean(owed.to_dead)).toBe(false);
+
+    // The Storyteller marks Marcus dead from the Court hierarchy, then his player makes a new character.
+    const died = await call(admin, 'PATCH', '/api/admin/camarilla/update', { id: marcus.charId, type: 'player', field: 'is_deceased', value: true });
+    expect(died.statusCode).toBe(200);
+    await pool.query('UPDATE characters SET retired_user_id = user_id, user_id = NULL WHERE id = ?', [marcus.charId]);
+
+    const ledger = body(await call(harpy, 'GET', '/api/boons')).boons;
+    expect(Boolean(ledger.find(b => b.id === owed.id).to_dead)).toBe(true);
+    expect(Boolean(ledger.find(b => b.id === holds.id).from_dead)).toBe(true);
+
+    // Edit: the Harpy rewrites the dead holder as the heir.
+    const edited = await call(harpy, 'PATCH', `/api/boons/${owed.id}`, { to_name: 'Octavia' });
+    expect(edited.statusCode).toBe(200);
+    expect(body(edited).boon).toMatchObject({ to_name: 'Octavia', status: 'Owed' });
+    expect(Boolean(body(edited).boon.to_dead)).toBe(false);
+
+    // Transfer: the dead debtor's debt falls on the heir's coterie instead.
+    app.testPushNotifications.length = 0;
+    const moved = await call(harpy, 'POST', `/api/boons/${holds.id}/transfer`, { side: 'from', name: 'The Night Watch' });
+    expect(moved.statusCode).toBe(200);
+    expect(body(moved).boon).toMatchObject({ from_name: 'The Night Watch', to_name: 'Octavia' });
+    expect(Boolean(body(moved).boon.from_dead)).toBe(false);
+    await settle();
+    expect(pushedTo()).toEqual([selene.user.id, heir.user.id].sort()); // the dead Marcus gets nothing
+  });
+
   it('flags a side that met Final Death until the debt passes to the living', async () => {
     const created = body(await call(harpy, 'POST', '/api/boons', { from_name: 'Dorian', to_name: 'Selene', level: 'major', status: 'owed' })).boon;
     expect(Boolean(created.from_dead)).toBe(true);
@@ -101,8 +135,8 @@ describe('orphaned boons', () => {
     await settle();
     expect(pushedTo()).toEqual([selene.user.id]); // the dead get no pushes
 
-    const res = await call(harpy, 'POST', `/api/boons/${created.id}/transfer`, { side: 'from', name: 'Marcus' });
-    expect(body(res).boon).toMatchObject({ from_name: 'Marcus' });
+    const res = await call(harpy, 'POST', `/api/boons/${created.id}/transfer`, { side: 'from', name: 'Octavia' });
+    expect(body(res).boon).toMatchObject({ from_name: 'Octavia' });
     expect(Boolean(body(res).boon.from_dead)).toBe(false);
   });
 });

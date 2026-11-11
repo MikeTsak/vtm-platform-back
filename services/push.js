@@ -53,7 +53,7 @@ const PUSH_CATEGORIES = {
   notes: 'chat',       // anonymous notes
   downtimes: 'system', // resolutions released, ST replies on an action
   court: 'system',     // domain claims, Blood Hunts, boons, feeding incidents in your domain
-  character: 'system', // discipline access, ghoul upkeep, hunt evidence
+  character: 'system', // discipline access, ghoul upkeep, hunt evidence, coterie dormancy
   system: null,        // Storyteller broadcasts
 };
 

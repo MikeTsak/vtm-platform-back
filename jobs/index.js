@@ -27,6 +27,7 @@ const { releasePendingAndNotify, advanceActiveCycle, broadcastMassDowntimeDiscor
 const { checkAndAutoSendElysiumInvitations } = require('../services/elysiumDiscord');
 const { closeStaleSessions } = require('../services/liveSession');
 const { expireBloodHunts } = require('../services/bloodHunts');
+const { sweepCoteries } = require('../services/coterieLifecycle');
 const { runWillpowerReset } = require('../services/willpowerReset');
 const { offloadChatImages } = require('../services/chatMedia');
 
@@ -340,6 +341,17 @@ const JOBS = [
     async run() {
       const n = await expireBloodHunts();
       return n ? `expired ${n}` : 'none due';
+    },
+  },
+  {
+    // Coteries under the member floor go dormant, get one reminder a week
+    // before the deadline, then dissolve. Also removes out-of-play members the
+    // court hooks missed (services/coterieLifecycle.js).
+    name: 'coterie-floor', label: 'Coterie dormancy and dissolution', cron: '23 * * * *', boot: true, maxGapMin: 3 * 60,
+    async run() {
+      const done = await sweepCoteries(pool);
+      const parts = Object.entries(done).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`);
+      return parts.length ? parts.join(', ') : 'nothing to do';
     },
   },
   {

@@ -108,7 +108,7 @@ module.exports = async function (fastify, opts) {
       // by name, so these only feed the picker and how the ledger shows them.
       const [coteries] = await pool.query(
         `SELECT c.id, c.name, EXISTS(SELECT 1 FROM coterie_members m WHERE m.coterie_id = c.id AND m.user_id = ?) AS mine
-           FROM coteries c ORDER BY c.name ASC`,
+           FROM coteries c WHERE c.status <> 'dissolved' ORDER BY c.name ASC`,
         [req.user.id]
       );
       const clans = [...new Set([...characters.filter(c => c.user_id), ...npcs].map(c => c.clan).filter(Boolean))].sort();
