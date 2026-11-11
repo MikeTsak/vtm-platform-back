@@ -52,7 +52,7 @@ const PUSH_CATEGORIES = {
   mail: 'chat',        // SurfaceWeb email
   notes: 'chat',       // anonymous notes
   downtimes: 'system', // resolutions released, ST replies on an action
-  court: 'system',     // domain claims, Blood Hunts, feeding incidents in your domain
+  court: 'system',     // domain claims, Blood Hunts, boons, feeding incidents in your domain
   character: 'system', // discipline access, ghoul upkeep, hunt evidence
   system: null,        // Storyteller broadcasts
 };
