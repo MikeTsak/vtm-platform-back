@@ -58,6 +58,7 @@ const ROUTE_MODULES = [
   { name: 'domain-residents', path: './domainResidents' },
   { name: 'domain-overlays', path: './domainOverlays' },
   { name: 'boons', path: './boons' },
+  { name: 'print-tool', path: './printTool' },
   { name: 'coteries', path: './coteries' },
   { name: 'discord-admin', path: './discordAdmin' },
   { name: 'admin-users', path: './adminUsers' },

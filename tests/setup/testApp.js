@@ -230,6 +230,8 @@ function buildTestApp(pool) {
     sendPushNotification: capturePushNotification,
   });
 
+  app.register(require('../../routes/printTool'), { pool, log: testLog, authRequired, requireAdmin });
+
   app.register(require('../../routes/emails'), { pool, log: testLog, authRequired, requireAdmin, sendPushNotification: capturePushNotification });
   app.register(require('../../routes/drafts'), { pool, log: testLog, authRequired });
   app.register(require('../../routes/comms'), { pool, log: testLog, authRequired, requireAdmin, sendPushNotification: capturePushNotification });
