@@ -13,6 +13,8 @@ const { NEWS_AUTHOR_COLUMNS, NEWS_AUTHOR_JOINS, resolveMediaUrl, isVideoUrl } = 
 const { atkinson } = require('../utils/dither');
 
 const KINDS = ['rumors', 'news', 'decrees', 'boons'];
+// One printed item's kind, as stored in print_log.
+const PRINT_KINDS = ['rumor', 'news', 'decree', 'boon'];
 const PER_KIND = 1000;
 // TM-T20III: 72 mm printable at 203 dpi = 576 dots across.
 const THERMAL_DOTS = 576;
@@ -92,11 +94,44 @@ module.exports = async function (fastify, opts) {
         items.push(...rows.map((r) => ({ kind: 'boon', ...r })));
       }
 
+      // When each was last printed (print_log, migration 0087).
+      const kindsFound = [...new Set(items.map((i) => i.kind))];
+      if (kindsFound.length) {
+        const [printed] = await pool.query('SELECT kind, item_id, printed_at FROM print_log WHERE kind IN (?)', [kindsFound]);
+        const when = new Map(printed.map((p) => [`${p.kind}-${p.item_id}`, p.printed_at]));
+        for (const i of items) i.printed_at = when.get(`${i.kind}-${i.id}`) || null;
+      }
+
       items.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
       reply.send({ items });
     } catch (e) {
       log.err('Print items failed', { message: e.message });
       reply.status(500).send({ error: 'Failed to load the items' });
+    }
+  });
+
+  // The admin confirms a print came out; body: { items: [{ kind, id }] }.
+  // Printing an item again moves its date forward.
+  fastify.post('/api/admin/print/printed', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    const list = Array.isArray(req.body?.items) ? req.body.items : [];
+    const rows = list
+      .map((i) => [String(i?.kind), Number(i?.id)])
+      .filter(([kind, id]) => PRINT_KINDS.includes(kind) && Number.isInteger(id) && id > 0);
+    if (!rows.length || rows.length !== list.length || rows.length > 5000) {
+      return reply.status(400).send({ error: 'Nothing valid to mark.' });
+    }
+    try {
+      await pool.query(
+        `INSERT INTO print_log (kind, item_id, printed_by) VALUES ?
+           ON DUPLICATE KEY UPDATE printed_at = CURRENT_TIMESTAMP, printed_by = VALUES(printed_by)`,
+        [rows.map(([kind, id]) => [kind, id, req.user.id])]
+      );
+      const [[{ now }]] = await pool.query('SELECT CURRENT_TIMESTAMP AS now');
+      log.adm('Marked as printed', { count: rows.length, by_user_id: req.user.id });
+      reply.send({ ok: true, printed_at: now });
+    } catch (e) {
+      log.err('Mark printed failed', { message: e.message });
+      reply.status(500).send({ error: 'Failed to save' });
     }
   });
 

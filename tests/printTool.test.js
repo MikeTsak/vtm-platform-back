@@ -12,7 +12,7 @@ const body = (res) => JSON.parse(res.body);
 beforeAll(async () => {
   pool = await setupTestDatabase();
   await truncateAll();
-  for (const t of ['rumors', 'news_entries', 'boons']) await pool.query(`DELETE FROM ${t}`);
+  for (const t of ['rumors', 'news_entries', 'boons', 'print_log']) await pool.query(`DELETE FROM ${t}`);
   app = buildTestApp(pool);
   await app.ready();
 
@@ -68,6 +68,30 @@ describe('print items', () => {
     expect((await call(player, '/api/admin/print/items?kinds=rumors')).statusCode).toBe(403);
     expect((await call(admin, '/api/admin/print/items?kinds=gossip')).statusCode).toBe(400);
     expect((await call(admin, '/api/admin/print/items?kinds=rumors&from=yesterday')).statusCode).toBe(400);
+  });
+});
+
+describe('what has been printed', () => {
+  const post = (who, payload) => app.inject({ method: 'POST', url: '/api/admin/print/printed', payload, headers: { cookie: who.cookie } });
+
+  it('remembers printed items, per kind', async () => {
+    const before = body(await call(admin, '/api/admin/print/items?kinds=rumors,news,decrees')).items;
+    expect(before.every((i) => i.printed_at === null)).toBe(true);
+    const rumor = before.find((i) => i.kind === 'rumor');
+
+    expect((await post(admin, { items: [{ kind: 'rumor', id: rumor.id }] })).statusCode).toBe(200);
+    const after = body(await call(admin, '/api/admin/print/items?kinds=rumors,news,decrees')).items;
+    expect(after.find((i) => i.kind === 'rumor' && i.id === rumor.id).printed_at).toBeTruthy();
+    expect(after.filter((i) => i.printed_at)).toHaveLength(1);
+
+    // Printing it again is fine.
+    expect((await post(admin, { items: [{ kind: 'rumor', id: rumor.id }] })).statusCode).toBe(200);
+  });
+
+  it('is for admins only, and refuses bad items', async () => {
+    expect((await post(player, { items: [{ kind: 'rumor', id: 1 }] })).statusCode).toBe(403);
+    expect((await post(admin, { items: [{ kind: 'gossip', id: 1 }] })).statusCode).toBe(400);
+    expect((await post(admin, { items: [] })).statusCode).toBe(400);
   });
 });
 
