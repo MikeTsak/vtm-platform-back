@@ -1,0 +1,38 @@
+{
+  "title": "Erebus Portal API",
+  "tagline": "Server authoritative Fastify backend powering live action Vampire: The Masquerade role play platforms.",
+  "description": "The backend engine for the Athens Through Time chronicle, managing game mechanics, character progression, and in fiction communications. Built with Fastify, MariaDB, and Socket.IO, it computes all server authoritative dice rolls, Rouse checks, downtime feeding, and XP transactions. Features include scheduled chronicle world cycles, real time messaging, push notifications, and Discord bot integration.",
+  "type": "API",
+  "status": "live",
+  "year": 2025,
+  "role": "Solo developer",
+  "tags": [
+    "Fastify",
+    "Node.js",
+    "MariaDB",
+    "Socket.IO",
+    "Vitest",
+    "Zod"
+  ],
+  "highlights": [
+    "Server authoritative rules engine for dice rolls, Rouse checks, and XP progression",
+    "Real time chat, presence, and live session sync over Socket.IO",
+    "Automated world cycles for downtime, feeding, and communications",
+    "Automated migrations on boot and interactive Swagger documentation"
+  ],
+  "links": [
+    {
+      "label": "Read API docs",
+      "url": "https://api.attlarp.gr/api-docs"
+    },
+    {
+      "label": "Check health",
+      "url": "https://api.attlarp.gr/api/health"
+    },
+    {
+      "label": "Open portal",
+      "url": "https://portal.attlarp.gr"
+    }
+  ],
+  "cover": "cover.webp"
+}
