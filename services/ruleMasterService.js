@@ -356,7 +356,7 @@ function retrieveGroundedContext(query) {
 /**
  * Query Google Generative AI models with automatic fallback.
  */
-async function callGeminiGenerate(prompt, systemInstruction, history = [], maxTokens = 1000) {
+async function callGeminiGenerate(prompt, systemInstruction, history = [], maxTokens = 1000, timeoutMs = 10000) {
   const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error('Google Generative AI API key is not configured in environment variables');
@@ -420,7 +420,7 @@ async function callGeminiGenerate(prompt, systemInstruction, history = [], maxTo
         };
       }
 
-      const response = await axios.post(url, payload, { timeout: 10000 });
+      const response = await axios.post(url, payload, { timeout: timeoutMs });
       const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
       if (text) {
         return { text, modelUsed: model };
@@ -851,6 +851,7 @@ module.exports = {
   deepSearchRuleMaster,
   retrieveGroundedContext,
   sanitizeTypography,
+  callGeminiGenerate,
   CANDIDATE_MODELS
 };
 
