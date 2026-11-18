@@ -35,7 +35,7 @@ async function migrate() {
     for (const { table, column, urlCol, hasMime } of migrations) {
         console.log(`\n----------------------------------------`);
         console.log(`📂 [TABLE] Migrating ${table}.${column} -> ${urlCol}`);
-        
+
         // 1. Ensure the URL column exists (schema.js should handle this, but just in case)
         try {
             await pool.query(`ALTER TABLE ${table} ADD COLUMN ${urlCol} VARCHAR(2048) DEFAULT NULL`);
@@ -50,7 +50,7 @@ async function migrate() {
             ? `${column} IS NOT NULL AND OCTET_LENGTH(${column}) >= 100`
             : `${column} IS NOT NULL AND ${urlCol} IS NULL`;
         const [rows] = await pool.query(`SELECT ${selectCols} FROM ${table} WHERE ${whereClause}`);
-        
+
         console.log(`📊 [INFO] Found ${rows.length} candidate rows in ${table}.`);
 
         // 3. Upload and Update
@@ -72,8 +72,8 @@ async function migrate() {
 
             const ext = extFromMimeOrBuffer(blob, row.mime || '');
             const filename = `${table}_${row.id}.${ext}`;
-            
-            console.log(`  ⏳ [UPLOAD] Row ID ${row.id}: Uploading ${filename} (${Math.round(blob.length/1024)} KB)...`);
+
+            console.log(`  ⏳ [UPLOAD] Row ID ${row.id}: Uploading ${filename} (${Math.round(blob.length / 1024)} KB)...`);
             const result = await client.uploadImage(blob, filename);
 
             if (result.success) {

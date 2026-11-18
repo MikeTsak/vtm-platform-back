@@ -423,7 +423,7 @@ module.exports = async function (fastify, opts) {
           if (wRows.length && wRows[0].warnings) {
             mediaWarnings = parseWarnings(wRows[0].warnings);
           }
-        } catch {}
+        } catch { }
 
         return reply.send({
           url: cdnOk ? data_url : `/api/premonitions/media/${id}`,
