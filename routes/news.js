@@ -4,6 +4,7 @@
 // permissions, media, and broadcast.
 const sharp = require('sharp');
 const { getSetting } = require('../utils/settings');
+const { getAppBase } = require('../utils/appBase');
 const { sanitizeRichText } = require('../utils/sanitize');
 const { xmlEscape, getAuthorSignature, isVideoUrl, resolveMediaUrl, redactNewsAuthor, broadcastNewsEntry, editableUntil, NEWS_AUTHOR_COLUMNS, NEWS_AUTHOR_JOINS } = require('../services/news');
 
@@ -370,7 +371,7 @@ module.exports = async function (fastify, opts) {
 
       if (discordEnabled && notifyPrems && tokenPresent && !is_private) {
         try {
-          const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
+          const appBase = getAppBase(req);
           await broadcastNewsEntry(
             { id: insertResult.insertId, type, title, subtitle, theme, media_url },
             { pool, log, discordPrefix: req.body?.discord_prefix, appBase }
@@ -436,7 +437,7 @@ module.exports = async function (fastify, opts) {
       if (rows.length === 0) return reply.status(404).send({ error: 'Entry not found' });
 
       const entry = rows[0];
-      const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
+      const appBase = getAppBase(req);
 
       const res = await broadcastNewsEntry(entry, {
         pool,
@@ -464,7 +465,7 @@ module.exports = async function (fastify, opts) {
       if (rows.length === 0) return reply.status(404).send({ error: 'Not found' });
 
       const entry = rows[0];
-      const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
+      const appBase = getAppBase(req);
 
       if (entry.is_private === 0) {
         if (!req.body?.skip_discord) {

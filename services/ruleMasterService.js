@@ -8,6 +8,7 @@ const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 const { log } = require('../logger');
+const { detectSelfHarm, SELF_HARM_RESPONSE } = require('../utils/selfHarmGuard');
 
 // Load static index catalogs safely
 let subjectIndex = [];
@@ -797,6 +798,16 @@ Please provide an authoritative, concise deep research ruling with exact verbati
  * Ask the Rule Master AI.
  */
 async function askRuleMaster(question, options = {}) {
+  if (detectSelfHarm(question)) {
+    return {
+      question: String(question || '').trim(),
+      answer: SELF_HARM_RESPONSE,
+      citations: [],
+      modelUsed: 'safety-guard',
+      isDeepSearch: !!options.deepSearch
+    };
+  }
+
   if (options.deepSearch) {
     return deepSearchRuleMaster(question, options);
   }

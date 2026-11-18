@@ -411,6 +411,7 @@ module.exports = async function (fastify, opts) {
   });
 
   // Admin image proxy: fetches remote CDN images server-side to bypass browser CORS restrictions during report generation and canvas export
+  const CDN_HOST = 'img.miketsak.gr';
   fastify.get('/api/admin/inventory/image-proxy', { preHandler: adminOnly }, async (req, reply) => {
     let url;
     try {
@@ -418,18 +419,21 @@ module.exports = async function (fastify, opts) {
     } catch {
       return reply.status(400).send({ error: 'Invalid image address' });
     }
-    if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-      return reply.status(400).send({ error: 'Invalid image protocol' });
+    if (url.protocol !== 'https:' || url.host !== CDN_HOST || url.username || url.password) {
+      return reply.status(400).send({ error: 'Only images from the portal image host can be proxied' });
     }
     try {
       const r = await axios.get(url.href, {
         responseType: 'arraybuffer',
         timeout: 15000,
         maxContentLength: 15 * 1024 * 1024,
-        maxRedirects: 3,
+        maxRedirects: 0,
         validateStatus: (s) => s === 200,
       });
-      const type = String(r.headers['content-type'] || 'image/jpeg');
+      const type = String(r.headers['content-type'] || '');
+      if (!type.startsWith('image/')) {
+        return reply.status(415).send({ error: 'Not an image' });
+      }
       reply.header('Content-Type', type).header('Cache-Control', 'private, max-age=86400').send(Buffer.from(r.data));
     } catch (e) {
       log.warn('Inventory image proxy failed', { message: e.message });

@@ -130,7 +130,7 @@ module.exports = async function (fastify, opts) {
   });
 
   // POST /api/auth/forgot
-  fastify.post('/forgot', async (req, reply) => {
+  fastify.post('/forgot', { preHandler: [authLimiter] }, async (req, reply) => {
     const { email } = req.body || {};
     const norm = (email || '').trim().toLowerCase();
     const okResponse = () => reply.send({ ok: true, message: 'If the email exists, a reset link has been sent.' });

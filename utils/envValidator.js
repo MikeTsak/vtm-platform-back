@@ -35,7 +35,10 @@ const envSchema = z.object({
 
 function validateEnv() {
   try {
-    envSchema.parse(process.env);
+    const parsed = envSchema.parse(process.env);
+    if (parsed.JWT_SECRET.length < 32) {
+      log.warn('⚠️  JWT_SECRET is shorter than 32 characters; rotate to a strong random secret (>= 32 chars).');
+    }
     log.ok('Environment variables validated successfully.');
   } catch (error) {
     log.err('❌ Environment Variable Validation Failed:');

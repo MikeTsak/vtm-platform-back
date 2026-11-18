@@ -3,6 +3,7 @@
 // Rumours: short in-fiction posts with optional broadcast to Discord/ntfy.
 const { sendDiscordChannelMessage } = require('../services/discord');
 const { getSetting } = require('../utils/settings');
+const { getAppBase } = require('../utils/appBase');
 const { sanitizeRichText } = require('../utils/sanitize');
 const { isVideoUrl, resolveMediaUrl } = require('../services/news');
 const { htmlToDiscordMarkdown, truncateDiscordMarkdown } = require('../utils/discordMarkdown');
@@ -71,7 +72,7 @@ module.exports = async function (fastify, opts) {
         try {
           const channelId = await getSetting('discord_channel_id', null);
           if (channelId) {
-            const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
+            const appBase = getAppBase(req);
             const rumorLink = `${appBase}/rumors`;
 
             let emojiTag = '';
@@ -142,7 +143,7 @@ module.exports = async function (fastify, opts) {
         return reply.status(400).send({ error: 'Discord channel not configured.' });
       }
 
-      const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'http://localhost:3000';
+      const appBase = getAppBase(req);
       const rumorLink = `${appBase}/rumors`;
 
       let emojiTag = '';
