@@ -9,6 +9,7 @@ const path = require('path');
 const fs = require('fs');
 const { log } = require('../logger');
 const { detectSelfHarm, SELF_HARM_RESPONSE } = require('../utils/selfHarmGuard');
+const { assertAiEnabled, checkAndRecordAiBudget } = require('../utils/aiBudget');
 
 // Load static index catalogs safely
 let subjectIndex = [];
@@ -362,6 +363,9 @@ async function callGeminiGenerate(prompt, systemInstruction, history = [], maxTo
   if (!apiKey) {
     throw new Error('Google Generative AI API key is not configured in environment variables');
   }
+
+  await assertAiEnabled();
+  checkAndRecordAiBudget('rule-master');
 
   // Format multi turn conversation contents for Gemini API
   const formattedContents = [];

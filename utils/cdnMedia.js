@@ -95,9 +95,27 @@ async function isCdnUrlReachable(url, mime) {
   return ok;
 }
 
+async function deleteCdnAsset(imageClient, url, log) {
+  if (!imageClient || typeof imageClient.deleteImage !== 'function' || !url) return;
+  try {
+    const parsed = new URL(String(url));
+    if (parsed.hostname !== 'img.miketsak.gr' || !parsed.pathname.includes('/uploads/')) return;
+    const filename = pathBasename(parsed.pathname);
+    if (filename) await imageClient.deleteImage(filename);
+  } catch (err) {
+    if (log?.warn) log.warn('CDN orphan cleanup failed', { url, error: err.message });
+  }
+}
+
+function pathBasename(p) {
+  const parts = String(p || '').split('/').filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : '';
+}
+
 module.exports = {
   hasNonEmptyBlob,
   isMismatchedVideoImageUrl,
   extFromMimeOrBuffer,
   isCdnUrlReachable,
+  deleteCdnAsset,
 };

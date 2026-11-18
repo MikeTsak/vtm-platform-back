@@ -8,14 +8,45 @@ const path = require('path');
 const { getSetting } = require('../utils/settings');
 const { formatDate } = require('../services/format');
 const { DEFAULT_CORS_ORIGINS } = require('../config/cors');
+const { makeLimiter } = require('../services/guards');
+const { log } = require('../logger');
 
 // This module lives in routes/, but the files it reads (views/, package.json)
 // sit at the application root.
 const APP_ROOT = path.join(__dirname, '..');
 
 module.exports = async function (fastify, opts) {
-  const { pool, wikiPool, authRequired, requireAdmin } = opts;
+  const { pool, wikiPool, authRequired, requireAdmin, optionalAuth } = opts;
   const wikiDb = wikiPool || fastify.wikiDb;
+  const clientErrorLimiter = makeLimiter('clientErrors', 20, 60_000);
+
+  // Throttled client-side error/media failure telemetry (feeds pino server logs).
+  fastify.post('/api/client-errors', {
+    preHandler: [optionalAuth || ((req, reply, done) => done()), clientErrorLimiter],
+    schema: {
+      body: {
+        type: 'object',
+        required: ['context', 'message'],
+        properties: {
+          context: { type: 'string', maxLength: 80 },
+          message: { type: 'string', maxLength: 500 },
+          url: { type: 'string', maxLength: 300 },
+          meta: { type: 'object', additionalProperties: true },
+        },
+      },
+    },
+  }, async (req, reply) => {
+    const { context, message, url, meta } = req.body;
+    log.warn('Client error report', {
+      context: String(context).slice(0, 80),
+      message: String(message).slice(0, 500),
+      url: url ? String(url).slice(0, 300) : undefined,
+      user_id: req.user?.id || null,
+      ua: String(req.headers['user-agent'] || '').slice(0, 160),
+      meta: meta && typeof meta === 'object' ? JSON.stringify(meta).slice(0, 400) : undefined,
+    });
+    return reply.send({ ok: true });
+  });
 
   // --- Simple status/health ---
 

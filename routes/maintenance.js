@@ -29,7 +29,8 @@ module.exports = async function (fastify, opts) {
     });
     reply.raw.flushHeaders();
 
-    const scripts = ['migrate_media.js'];
+    const repairMode = req.query?.repair === '1' || req.query?.repair === 'true';
+    const scripts = [{ file: 'migrate_media.js', args: repairMode ? ['--repair'] : [] }];
     const total = scripts.length;
     let current = 0;
 
@@ -43,17 +44,17 @@ module.exports = async function (fastify, opts) {
 
     const runNext = () => {
       if (current >= total) {
-        sendEvent('done', { message: 'Media migration complete!' });
+        sendEvent('done', { message: repairMode ? 'Media repair complete!' : 'Media migration complete!' });
         return setTimeout(() => {
           reply.raw.end();
         }, 500);
       }
 
-      const script = scripts[current];
+      const { file: script, args } = scripts[current];
       sendEvent('progress', { script, current: current + 1, total });
-      sendEvent('log', `\n--- Running ${script} ---`);
+      sendEvent('log', `\n--- Running ${script}${args.length ? ' ' + args.join(' ') : ''} ---`);
 
-      const child = spawn(process.execPath, [script], { cwd: APP_ROOT });
+      const child = spawn(process.execPath, [script, ...args], { cwd: APP_ROOT });
 
       child.stdout.on('data', (data) => {
         sendEvent('log', data.toString());

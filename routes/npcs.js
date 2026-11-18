@@ -3,9 +3,10 @@
 // NPC CRUD and NPC XP spending — Storyteller only.
 const { runPurchase, PurchaseError } = require('../utils/xpPurchase');
 const { parseSheet } = require('../utils/sheet');
+const { deleteCdnAsset } = require('../utils/cdnMedia');
 
 module.exports = async function (fastify, opts) {
-  const { pool, log, authRequired, requireAdmin } = opts;
+  const { pool, log, authRequired, requireAdmin, imageClient } = opts;
 
   // List NPCs (admin) — single canonical route
   fastify.get('/api/admin/npcs', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
@@ -74,7 +75,10 @@ module.exports = async function (fastify, opts) {
 
   // Delete NPC
   fastify.delete('/api/admin/npcs/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
+    const [[existing]] = await pool.query('SELECT avatar_url, avatar_url_thumb FROM npcs WHERE id=?', [req.params.id]);
     await pool.query('DELETE FROM npcs WHERE id=?', [req.params.id]);
+    if (existing?.avatar_url) deleteCdnAsset(imageClient, existing.avatar_url, log);
+    if (existing?.avatar_url_thumb) deleteCdnAsset(imageClient, existing.avatar_url_thumb, log);
     reply.send({ ok: true });
   });
 

@@ -3,30 +3,7 @@ const pool = require('../db');
 const { log } = require('../logger');
 const { getSetting } = require('../utils/settings');
 const { detectSelfHarm, SELF_HARM_RESPONSE } = require('../utils/selfHarmGuard');
-
-// In-memory daily & per-minute AI call caps to prevent runaway Gemini API spend.
-const aiUsage = { day: '', dayCount: 0, minuteStart: 0, minuteCount: 0 };
-
-function checkAndRecordAiBudget() {
-  const now = Date.now();
-  const day = new Date(now).toISOString().slice(0, 10);
-  if (aiUsage.day !== day) {
-    aiUsage.day = day;
-    aiUsage.dayCount = 0;
-  }
-  if (now - aiUsage.minuteStart >= 60_000) {
-    aiUsage.minuteStart = now;
-    aiUsage.minuteCount = 0;
-  }
-  const dailyMax = Math.max(1, Number(process.env.AI_DAILY_LIMIT) || 200);
-  const minuteMax = Math.max(1, Number(process.env.AI_MINUTE_LIMIT) || 12);
-  if (aiUsage.dayCount >= dailyMax || aiUsage.minuteCount >= minuteMax) {
-    return false;
-  }
-  aiUsage.dayCount += 1;
-  aiUsage.minuteCount += 1;
-  return true;
-}
+const { assertAiEnabled, checkAndRecordAiBudget } = require('../utils/aiBudget');
 
 const DEFAULT_GIANNAKIS_PROMPT = `Είσαι ο "Γιαννάκης", ένας νεαρός (neonate) Nosferatu hacker, gamer και geek που τρέχει το τοπικό SchreckNet terminal από τα σκοτεινά υπόγεια της Αθήνας. Γνωρίζεις τα πάντα για την τοπική κοινωνία των Kindred και τα κλισέ των clans.
 ΟΔΗΓΙΕΣ ΠΡΟΣΩΠΙΚΟΤΗΤΑΣ:
@@ -129,15 +106,8 @@ async function generateGiannakisReply({
     return { text: SELF_HARM_RESPONSE, modelUsed: 'safety-guard', toolUsed: null };
   }
 
-  const aiDisabled = await getSetting('ai_disabled', 'false');
-  if (aiDisabled === 'true' || aiDisabled === '1') {
-    throw new Error('AI_DISABLED');
-  }
-
-  if (!checkAndRecordAiBudget()) {
-    log.warn('Giannakis AI budget cap reached', { day: aiUsage.day, dayCount: aiUsage.dayCount });
-    throw new Error('AI_RATE_LIMIT');
-  }
+  await assertAiEnabled();
+  checkAndRecordAiBudget('giannakis');
 
   const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
   if (!apiKey) {

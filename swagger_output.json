@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Erebus Portal API",
-    "version": "1.0.314",
+    "version": "1.0.315",
     "description": "API documentation for the Vampire: The Masquerade RPG portal."
   },
   "servers": [
@@ -960,6 +960,9 @@
         "responses": {
           "400": {
             "description": "Bad Request"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
           },
           "502": {
             "description": "Bad Gateway"
@@ -10051,15 +10054,6 @@
     "/api/admin/premonitions/send": {
       "post": {
         "description": "",
-        "parameters": [
-          {
-            "name": "origin",
-            "in": "header",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
         "responses": {
           "201": {
             "description": "Created"
@@ -11081,15 +11075,6 @@
       },
       "post": {
         "description": "",
-        "parameters": [
-          {
-            "name": "origin",
-            "in": "header",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "OK"
@@ -11364,13 +11349,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "origin",
-            "in": "header",
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -11397,13 +11375,6 @@
             "name": "id",
             "in": "path",
             "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "origin",
-            "in": "header",
             "schema": {
               "type": "string"
             }
@@ -11725,15 +11696,6 @@
       },
       "post": {
         "description": "",
-        "parameters": [
-          {
-            "name": "origin",
-            "in": "header",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "OK"
@@ -11828,13 +11790,6 @@
             "name": "id",
             "in": "path",
             "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "origin",
-            "in": "header",
             "schema": {
               "type": "string"
             }

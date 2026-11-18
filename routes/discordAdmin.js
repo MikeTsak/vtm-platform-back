@@ -11,6 +11,7 @@ const {
   getBotGuildChannels
 } = require('../services/discord');
 const { generateGiannakisReply, DEFAULT_GIANNAKIS_PROMPT } = require('../services/giannakisAi');
+const { getAiBudgetStatus } = require('../utils/aiBudget');
 
 const KNOWN_EMOJI_KEYS = [
   'outlet_alpha', 'outlet_alter', 'outlet_ert', 'outlet_gossip',
@@ -66,6 +67,7 @@ module.exports = async function (fastify, opts) {
       const notify_news = await getSetting('discord_notify_news', 'true') === 'true';
       const notify_prems = await getSetting('discord_notify_prems', 'true') === 'true';
       const ai_enabled = await getSetting('giannakis_ai_enabled', 'false') === 'true';
+      const ai_disabled = await getSetting('ai_disabled', 'false') === 'true';
       let ai_system_prompt = await getSetting('giannakis_system_prompt');
       if (!ai_system_prompt) {
         ai_system_prompt = await getSetting('discord_ai_system_prompt', DEFAULT_GIANNAKIS_PROMPT);
@@ -111,6 +113,8 @@ module.exports = async function (fastify, opts) {
         notify_news,
         notify_prems,
         ai_enabled,
+        ai_disabled,
+        ai_usage: getAiBudgetStatus(),
         ai_system_prompt,
         ai_has_key,
         discord_emoji_ids: emoji_ids,
@@ -149,7 +153,7 @@ module.exports = async function (fastify, opts) {
     try {
       const {
         discord_channel_id, discord_schedule_time,
-        discord_enabled, notify_mail, notify_news, notify_prems, ai_enabled,
+        discord_enabled, notify_mail, notify_news, notify_prems, ai_enabled, ai_disabled,
         ai_system_prompt,
         discord_emoji_ids
       } = req.body;
@@ -168,6 +172,7 @@ module.exports = async function (fastify, opts) {
       if (notify_news !== undefined) await setSetting('discord_notify_news', String(notify_news));
       if (notify_prems !== undefined) await setSetting('discord_notify_prems', String(notify_prems));
       if (ai_enabled !== undefined) await setSetting('giannakis_ai_enabled', String(ai_enabled));
+      if (ai_disabled !== undefined) await setSetting('ai_disabled', String(Boolean(ai_disabled)));
       if (ai_system_prompt !== undefined) {
         await setSetting('giannakis_system_prompt', String(ai_system_prompt));
         await setSetting('discord_ai_system_prompt', String(ai_system_prompt));

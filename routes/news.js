@@ -5,7 +5,7 @@
 const sharp = require('sharp');
 const { getSetting } = require('../utils/settings');
 const { getAppBase } = require('../utils/appBase');
-const { hasNonEmptyBlob, isCdnUrlReachable } = require('../utils/cdnMedia');
+const { hasNonEmptyBlob, isCdnUrlReachable, deleteCdnAsset } = require('../utils/cdnMedia');
 const { sanitizeRichText } = require('../utils/sanitize');
 const { xmlEscape, getAuthorSignature, isVideoUrl, resolveMediaUrl, redactNewsAuthor, broadcastNewsEntry, editableUntil, NEWS_AUTHOR_COLUMNS, NEWS_AUTHOR_JOINS } = require('../services/news');
 
@@ -557,7 +557,9 @@ module.exports = async function (fastify, opts) {
   // DELETE /api/news/:id (Admin Only)
   fastify.delete('/api/news/:id', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
+      const [[existing]] = await pool.query('SELECT media_url FROM news_entries WHERE id=?', [req.params.id]);
       await pool.query('DELETE FROM news_entries WHERE id=?', [req.params.id]);
+      if (existing?.media_url) deleteCdnAsset(imageClient, existing.media_url, log);
       reply.send({ ok: true });
     } catch (e) {
       reply.status(500).send({ error: 'Delete failed' });

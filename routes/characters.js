@@ -8,6 +8,7 @@ const { isAdmin, userOwnsCharacter } = require('../services/guards');
 const { parseSheet } = require('../utils/sheet');
 const { mergePlayerSheetEdit } = require('../utils/playerSheetEdit');
 const { retireCharacter, canStartNew } = require('../services/characterRetirement');
+const { deleteCdnAsset } = require('../utils/cdnMedia');
 
 // Grants only a Storyteller sets (Admin > Characters): never taken from a sheet
 // the player sends when creating or rebuilding a character.
@@ -24,7 +25,7 @@ async function isClanDisabled(clan) {
 }
 
 module.exports = async function (fastify, opts) {
-  const { pool, log, authRequired, moderateLimiter, requireAdmin, validateRetainerSheet, getMimeType, sharp, broadcastNtfyAlert } = opts;
+  const { pool, log, authRequired, moderateLimiter, requireAdmin, validateRetainerSheet, getMimeType, sharp, broadcastNtfyAlert, imageClient } = opts;
 
   // A player saving their own sheet: only the narrative and live-session
   // fields are taken from the request (utils/playerSheetEdit.js). Dots,
@@ -591,7 +592,10 @@ module.exports = async function (fastify, opts) {
 
   fastify.delete('/api/retainers/:retainerId', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
+      const [[existing]] = await pool.query('SELECT avatar_url, avatar_url_thumb FROM retainers WHERE id=?', [req.params.retainerId]);
       await pool.query('DELETE FROM retainers WHERE id=?', [req.params.retainerId]);
+      if (existing?.avatar_url) deleteCdnAsset(imageClient, existing.avatar_url, log);
+      if (existing?.avatar_url_thumb) deleteCdnAsset(imageClient, existing.avatar_url_thumb, log);
       reply.send({ success: true });
     } catch (e) {
       log.err('Failed to delete retainer', { message: e.message, retainer_id: req.params.retainerId });
