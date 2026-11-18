@@ -54,4 +54,48 @@ describe('GET /api/premonitions/media/:id', () => {
     expect(res.body).toBe('abc');
     expect((await get(admin)).statusCode).toBe(200);
   });
+
+  it('resolves premonitions.id even when premonition_media.id shares the same numeric id', async () => {
+    const [[{ nextId }]] = await pool.query(
+      'SELECT GREATEST(COALESCE((SELECT MAX(id) FROM premonitions),0), COALESCE((SELECT MAX(id) FROM premonition_media),0)) + 1 AS nextId'
+    );
+    // Old premonition owning premonition_media.id = nextId (for `recipient` only).
+    await pool.query("INSERT INTO premonition_media (id, mime, size, data) VALUES (?, 'image/png', 3, 'xyz')", [nextId]);
+    const [oldP] = await pool.query(
+      "INSERT INTO premonitions (id, sender_id, content_type, content_url) VALUES (?, ?, 'image', ?)",
+      [nextId + 1, admin.user.id, `/api/premonitions/media/${nextId}`]
+    );
+    await pool.query('INSERT INTO premonition_recipients (premonition_id, user_id) VALUES (?, ?)', [oldP.insertId, recipient.user.id]);
+
+    // New premonition whose premonitions.id collides numerically with nextId (for `otherRecipient`).
+    const otherRecipient = await registerUser(app);
+    await pool.query(
+      "INSERT INTO premonitions (id, sender_id, content_type, content_url) VALUES (?, ?, 'video', 'https://img.miketsak.gr/uploads/sha_colliding.mp4')",
+      [nextId, admin.user.id]
+    );
+    await pool.query('INSERT INTO premonition_recipients (premonition_id, user_id) VALUES (?, ?)', [nextId, otherRecipient.user.id]);
+
+    const resDefault = await app.inject({
+      method: 'GET',
+      url: `/api/premonitions/media/${nextId}?info=1`,
+      headers: { cookie: otherRecipient.cookie },
+    });
+    expect(resDefault.statusCode).toBe(200);
+    expect(resDefault.json().url).toBe('https://img.miketsak.gr/uploads/sha_colliding.mp4');
+
+    const resExplicit = await app.inject({
+      method: 'GET',
+      url: `/api/premonitions/media/${nextId}?info=1&by=premonition`,
+      headers: { cookie: admin.cookie },
+    });
+    expect(resExplicit.statusCode).toBe(200);
+    expect(resExplicit.json().url).toBe('https://img.miketsak.gr/uploads/sha_colliding.mp4');
+
+    const resIntruder = await app.inject({
+      method: 'GET',
+      url: `/api/premonitions/media/${nextId}?info=1&by=premonition`,
+      headers: { cookie: intruder.cookie },
+    });
+    expect(resIntruder.statusCode).toBe(404);
+  });
 });

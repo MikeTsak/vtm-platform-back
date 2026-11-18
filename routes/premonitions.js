@@ -245,7 +245,10 @@ module.exports = async function (fastify, opts) {
         if (discordEnabled && notifyPrems && process.env.DISCORD_BOT_TOKEN) {
           try {
             const [userRows] = await pool.query(
-              `SELECT discord_id, display_name FROM users WHERE id IN (?) AND discord_id IS NOT NULL AND discord_id != ''`,
+              `SELECT u.discord_id, u.display_name, c.name AS char_name
+                 FROM users u
+                 LEFT JOIN characters c ON c.user_id = u.id
+                WHERE u.id IN (?) AND u.discord_id IS NOT NULL AND u.discord_id != ''`,
               [uniqueUserIds]
             );
 
@@ -257,7 +260,8 @@ module.exports = async function (fastify, opts) {
 
             for (const row of userRows) {
               try {
-                let dmMsg = `🧠 **A sudden vision pierces your mind...**\n\n`;
+                const who = row.char_name ? ` (${row.char_name})` : '';
+                let dmMsg = `🧠 **A sudden vision pierces your mind${who}...**\n\n`;
                 if (normalizedWarnings.length) {
                   dmMsg += `⚠️ **Content Warning: ${normalizedWarnings.join(', ')}**\n\n`;
                 }
@@ -373,31 +377,49 @@ module.exports = async function (fastify, opts) {
     return !!row;
   }
 
+  async function loadPremonitionRow(id) {
+    const [pRows] = await pool.query(`
+      SELECT pm.data_url, pm.mime, pm.size, pm.data, p.content_url
+      FROM premonitions p
+      LEFT JOIN premonition_media pm ON pm.id = CAST(SUBSTRING_INDEX(p.content_url, '/', -1) AS UNSIGNED)
+        AND p.content_url LIKE '%/media/%'
+      WHERE p.id=? LIMIT 1
+    `, [id]);
+    if (!pRows.length) return [];
+    if (pRows[0].data_url || hasNonEmptyBlob(pRows[0].data)) {
+      return [{ data_url: pRows[0].data_url, mime: pRows[0].mime, size: pRows[0].size, data: pRows[0].data }];
+    }
+    if (pRows[0].content_url && (pRows[0].content_url.startsWith('http://') || pRows[0].content_url.startsWith('https://'))) {
+      return [{ data_url: pRows[0].content_url, mime: null, size: null, data: null }];
+    }
+    return [];
+  }
+
   // MEDIA: Stream media from DB or return media info
   fastify.get('/api/premonitions/media/:id', { preHandler: [authRequired] }, async (req, reply) => {
     try {
       const id = Number(req.params.id) || 0;
+      const byPremonition = req.query.by === 'premonition';
 
-      // Check premonition_media first
-      let [rows] = await pool.query('SELECT data_url, mime, size, data FROM premonition_media WHERE id=? LIMIT 1', [id]);
-      const isMediaId = rows.length > 0;
-      // 404 rather than 403: don't confirm that someone else's vision exists.
-      if (!(await canViewMedia(req.user, id, isMediaId))) return reply.status(404).send('Not found');
-      if (!rows.length) {
-        // Fallback: :id might be the premonitions.id
-        const [pRows] = await pool.query(`
-          SELECT pm.data_url, pm.mime, pm.size, pm.data, p.content_url
-          FROM premonitions p
-          LEFT JOIN premonition_media pm ON pm.id = CAST(SUBSTRING_INDEX(p.content_url, '/', -1) AS UNSIGNED)
-            AND p.content_url LIKE '%/media/%'
-          WHERE p.id=? LIMIT 1
-        `, [id]);
-        if (pRows.length) {
-          if (pRows[0].data_url || hasNonEmptyBlob(pRows[0].data)) {
-            rows = [{ data_url: pRows[0].data_url, mime: pRows[0].mime, size: pRows[0].size, data: pRows[0].data }];
-          } else if (pRows[0].content_url && (pRows[0].content_url.startsWith('http://') || pRows[0].content_url.startsWith('https://'))) {
-            rows = [{ data_url: pRows[0].content_url, mime: null, size: null, data: null }];
-          }
+      let rows = [];
+      let isMediaId = false;
+
+      if (byPremonition) {
+        if (!(await canViewMedia(req.user, id, false))) return reply.status(404).send('Not found');
+        rows = await loadPremonitionRow(id);
+      } else {
+        // :id can be either premonition_media.id (legacy /api/premonitions/media/:id)
+        // or premonitions.id (Discord /media/:id links). They share numeric space, so
+        // check access against both before returning 404.
+        const [mRows] = await pool.query('SELECT data_url, mime, size, data FROM premonition_media WHERE id=? LIMIT 1', [id]);
+        if (mRows.length > 0 && (await canViewMedia(req.user, id, true))) {
+          rows = mRows;
+          isMediaId = true;
+        } else if (await canViewMedia(req.user, id, false)) {
+          rows = await loadPremonitionRow(id);
+        } else {
+          // 404 rather than 403: don't confirm that someone else's vision exists.
+          return reply.status(404).send('Not found');
         }
       }
 
