@@ -6,6 +6,8 @@ const { getSetting } = require('../utils/settings');
 const { sendDiscordDM } = require('../services/discord');
 const { isVideoUrl, resolveMediaUrl } = require('../services/news');
 const { isAdmin } = require('../services/guards');
+const { getAppBase } = require('../utils/appBase');
+const { hasNonEmptyBlob, extFromMimeOrBuffer, isCdnUrlReachable } = require('../utils/cdnMedia');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, imageClient } = opts;
@@ -20,6 +22,20 @@ module.exports = async function (fastify, opts) {
     }
   }
 
+  async function resolvePremonitionRowUrls(rows) {
+    for (const r of rows) {
+      if (r.cdn_url && (!r.has_blob || await isCdnUrlReachable(r.cdn_url, r.media_mime))) {
+        r.content_url = r.cdn_url;
+      } else {
+        r.content_url = r.raw_content_url || r.cdn_url;
+      }
+      delete r.raw_content_url;
+      delete r.cdn_url;
+      delete r.media_mime;
+      delete r.has_blob;
+    }
+  }
+
   /* -------------------- NEW PREMONITION ROUTES -------------------- */
 
   // ADMIN: List all premonitions (+ recipients)
@@ -30,7 +46,10 @@ module.exports = async function (fastify, opts) {
       const [prems] = await pool.query(`
       SELECT p.id, p.sender_id, u.display_name AS sender_name,
              p.content_type, p.content_text,
-             COALESCE(pm.data_url, p.content_url) AS content_url,
+             p.content_url AS raw_content_url,
+             pm.data_url AS cdn_url,
+             pm.mime AS media_mime,
+             (pm.data IS NOT NULL AND OCTET_LENGTH(pm.data) > 0) AS has_blob,
              p.warnings,
              p.created_at
       FROM premonitions p
@@ -42,6 +61,8 @@ module.exports = async function (fastify, opts) {
     `);
 
       if (prems.length === 0) return reply.send({ premonitions: [] });
+
+      await resolvePremonitionRowUrls(prems);
 
       // Recipients per premonition
       const ids = prems.map(p => p.id);
@@ -132,7 +153,7 @@ module.exports = async function (fastify, opts) {
         return reply.status(400).send({ error: `File too large (${sizeMB}MB). Max for ${isImage ? 'images' : 'video/audio'} is ${maxLabel}.` });
       }
 
-      const ext = originalname ? originalname.split('.').pop() : 'bin';
+      const ext = extFromMimeOrBuffer(buffer, mimetype, originalname);
       const filenameToUpload = 'premonitions_media_' + Date.now() + '.' + ext;
       const result = await imageClient.uploadImage(buffer, filenameToUpload);
       if (!result || !result.success) throw new Error((result && result.error) || 'CDN upload failed');
@@ -231,7 +252,7 @@ module.exports = async function (fastify, opts) {
             // Log how many Discord accounts were found
             log.ok(`Discord Premonition: Found ${userRows.length} linked accounts for targets.`, { targets: uniqueUserIds });
 
-            const appBase = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '') || 'https://portal.attlarp.gr';
+            const appBase = getAppBase(req);
             const resolvedMedia = await resolveMediaUrl(content_url, appBase, pool);
 
             for (const row of userRows) {
@@ -291,7 +312,10 @@ module.exports = async function (fastify, opts) {
       const [rows] = await pool.query(`
       SELECT p.id,
              p.content_type, p.content_text,
-             COALESCE(pm.data_url, p.content_url) AS content_url,
+             p.content_url AS raw_content_url,
+             pm.data_url AS cdn_url,
+             pm.mime AS media_mime,
+             (pm.data IS NOT NULL AND OCTET_LENGTH(pm.data) > 0) AS has_blob,
              p.warnings,
              p.created_at
       FROM premonitions p
@@ -301,6 +325,8 @@ module.exports = async function (fastify, opts) {
       WHERE pr.user_id = ?
       ORDER BY p.created_at DESC
     `, [req.user.id]);
+
+      await resolvePremonitionRowUrls(rows);
 
       // fire & forget mark viewed
       if (rows.length > 0) {
@@ -367,7 +393,7 @@ module.exports = async function (fastify, opts) {
           WHERE p.id=? LIMIT 1
         `, [id]);
         if (pRows.length) {
-          if (pRows[0].data_url) {
+          if (pRows[0].data_url || hasNonEmptyBlob(pRows[0].data)) {
             rows = [{ data_url: pRows[0].data_url, mime: pRows[0].mime, size: pRows[0].size, data: pRows[0].data }];
           } else if (pRows[0].content_url && (pRows[0].content_url.startsWith('http://') || pRows[0].content_url.startsWith('https://'))) {
             rows = [{ data_url: pRows[0].content_url, mime: null, size: null, data: null }];
@@ -380,6 +406,8 @@ module.exports = async function (fastify, opts) {
       }
 
       const { data_url, mime, size, data } = rows[0];
+      const hasBlob = hasNonEmptyBlob(data);
+      const cdnOk = data_url && (!hasBlob || await isCdnUrlReachable(data_url, mime));
 
       // Provide JSON metadata info if requested via ?info=1 or Accept: application/json
       if (req.query.info === '1' || req.headers.accept?.includes('application/json')) {
@@ -398,18 +426,20 @@ module.exports = async function (fastify, opts) {
         } catch {}
 
         return reply.send({
-          url: data_url || `/api/premonitions/media/${id}`,
+          url: cdnOk ? data_url : `/api/premonitions/media/${id}`,
           mime,
           warnings: mediaWarnings
         });
       }
 
-      if (data_url) return reply.redirect(302, data_url);
-      if (!data) return reply.status(404).send('Not found');
+      if (cdnOk) return reply.redirect(data_url, 302);
+      if (!hasBlob) return reply.status(404).send('Not found');
 
       if (typeof data === 'string' && data.startsWith('http')) {
-        return reply.redirect(302, data);
+        return reply.redirect(data, 302);
       }
+
+      const byteSize = Number(size) || data.length;
 
       // Handle HTML5 Video Range Requests (Crucial for iOS/Safari & scrubbing)
       const range = req.headers.range;
@@ -419,14 +449,14 @@ module.exports = async function (fastify, opts) {
         const partialend = parts[1];
 
         const start = parseInt(partialstart, 10);
-        const end = Math.min(partialend ? parseInt(partialend, 10) : size - 1, size - 1);
+        const end = Math.min(partialend ? parseInt(partialend, 10) : byteSize - 1, byteSize - 1);
         if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || start > end) {
-          return reply.status(416).header('Content-Range', `bytes */${size}`).send();
+          return reply.status(416).header('Content-Range', `bytes */${byteSize}`).send();
         }
         const chunksize = (end - start) + 1;
 
         reply.status(206);
-        reply.header('Content-Range', `bytes ${start}-${end}/${size}`);
+        reply.header('Content-Range', `bytes ${start}-${end}/${byteSize}`);
         reply.header('Accept-Ranges', 'bytes');
         reply.header('Content-Length', chunksize);
         reply.header('Content-Type', mime);
@@ -436,7 +466,7 @@ module.exports = async function (fastify, opts) {
       }
 
       reply.header('Content-Type', mime || 'application/octet-stream');
-      reply.header('Content-Length', size);
+      reply.header('Content-Length', byteSize);
       reply.header('Accept-Ranges', 'bytes');
       reply.header('Cache-Control', 'private, max-age=3600'); // 1 hour
       reply.send(data); // send raw blob

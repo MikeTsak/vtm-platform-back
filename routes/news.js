@@ -5,6 +5,7 @@
 const sharp = require('sharp');
 const { getSetting } = require('../utils/settings');
 const { getAppBase } = require('../utils/appBase');
+const { hasNonEmptyBlob, isCdnUrlReachable } = require('../utils/cdnMedia');
 const { sanitizeRichText } = require('../utils/sanitize');
 const { xmlEscape, getAuthorSignature, isVideoUrl, resolveMediaUrl, redactNewsAuthor, broadcastNewsEntry, editableUntil, NEWS_AUTHOR_COLUMNS, NEWS_AUTHOR_JOINS } = require('../services/news');
 
@@ -205,27 +206,31 @@ module.exports = async function (fastify, opts) {
       if (!rows.length) return reply.status(404).send('Not found');
 
       const { data_url, mime, size, data } = rows[0];
+      const hasBlob = hasNonEmptyBlob(data);
+      const cdnOk = data_url && (!hasBlob || await isCdnUrlReachable(data_url, mime));
 
-      if (data_url) return reply.redirect(302, data_url);
-      if (!data) return reply.status(404).send('Not found');
+      if (cdnOk) return reply.redirect(data_url, 302);
+      if (!hasBlob) return reply.status(404).send('Not found');
 
       if (typeof data === 'string' && data.startsWith('http')) {
-        return reply.redirect(302, data);
+        return reply.redirect(data, 302);
       }
+
+      const byteSize = Number(size) || data.length;
 
       // Handle HTML5 Video Range Requests (Crucial for iOS/Safari & scrubbing)
       const range = req.headers.range;
-      if (range && mime.startsWith('video/')) {
+      if (range && mime && mime.startsWith('video/')) {
         const parts = range.replace(/bytes=/, "").split("-");
         const partialstart = parts[0];
         const partialend = parts[1];
 
         const start = parseInt(partialstart, 10);
-        const end = partialend ? parseInt(partialend, 10) : size - 1;
+        const end = Math.min(partialend ? parseInt(partialend, 10) : byteSize - 1, byteSize - 1);
         const chunksize = (end - start) + 1;
 
         reply.raw.writeHead(206, {
-          'Content-Range': `bytes ${start}-${end}/${size}`,
+          'Content-Range': `bytes ${start}-${end}/${byteSize}`,
           'Accept-Ranges': 'bytes',
           'Content-Length': chunksize,
           'Content-Type': mime,
@@ -235,7 +240,7 @@ module.exports = async function (fastify, opts) {
       } else {
         // Standard image/file serving
         reply.header('Content-Type', mime || 'application/octet-stream');
-        reply.header('Content-Length', size);
+        reply.header('Content-Length', byteSize);
         reply.header('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
         reply.send(data);
       }

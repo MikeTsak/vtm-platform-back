@@ -1,6 +1,9 @@
 require('dotenv').config();
 const pool = require('./db');
 const { VampireImageClient } = require('./utils/mikes-php-image-handler');
+const { extFromMimeOrBuffer, isCdnUrlReachable } = require('./utils/cdnMedia');
+
+const REPAIR_MODE = process.argv.includes('--repair');
 
 // Ensure API Key exists
 const apiKey = process.env.IMAGE_API_KEY;
@@ -16,20 +19,20 @@ const client = new VampireImageClient({
 
 // The tables and their blob columns to migrate
 const migrations = [
-    { table: 'users', column: 'avatar', urlCol: 'avatar_url' },
-    { table: 'npcs', column: 'avatar', urlCol: 'avatar_url' },
-    { table: 'retainers', column: 'avatar', urlCol: 'avatar_url' },
-    { table: 'chat_groups', column: 'avatar', urlCol: 'avatar_url' },
-    { table: 'chat_media', column: 'data', urlCol: 'data_url' },
-    { table: 'news_media', column: 'data', urlCol: 'data_url' },
-    { table: 'premonition_media', column: 'data', urlCol: 'data_url' }
+    { table: 'users', column: 'avatar', urlCol: 'avatar_url', hasMime: false },
+    { table: 'npcs', column: 'avatar', urlCol: 'avatar_url', hasMime: false },
+    { table: 'retainers', column: 'avatar', urlCol: 'avatar_url', hasMime: false },
+    { table: 'chat_groups', column: 'avatar', urlCol: 'avatar_url', hasMime: false },
+    { table: 'chat_media', column: 'data', urlCol: 'data_url', hasMime: true },
+    { table: 'news_media', column: 'data', urlCol: 'data_url', hasMime: true },
+    { table: 'premonition_media', column: 'data', urlCol: 'data_url', hasMime: true }
 ];
 
 async function migrate() {
-    console.log('🚀 [START] Starting Safe Media Migration...');
+    console.log(`🚀 [START] Starting Safe Media Migration${REPAIR_MODE ? ' (--repair)' : ''}...`);
     let totalUploaded = 0;
 
-    for (const { table, column, urlCol } of migrations) {
+    for (const { table, column, urlCol, hasMime } of migrations) {
         console.log(`\n----------------------------------------`);
         console.log(`📂 [TABLE] Migrating ${table}.${column} -> ${urlCol}`);
         
@@ -41,10 +44,14 @@ async function migrate() {
             // Ignore if column already exists
         }
 
-        // 2. Fetch all rows with non-null blobs AND where the URL column is still null
-        const [rows] = await pool.query(`SELECT id, ${column} FROM ${table} WHERE ${column} IS NOT NULL AND ${urlCol} IS NULL`);
+        // 2. Fetch rows needing migration (or broken/mismatched URLs in --repair mode)
+        const selectCols = hasMime ? `id, ${column}, ${urlCol}, mime` : `id, ${column}, ${urlCol}`;
+        const whereClause = REPAIR_MODE
+            ? `${column} IS NOT NULL AND OCTET_LENGTH(${column}) >= 100`
+            : `${column} IS NOT NULL AND ${urlCol} IS NULL`;
+        const [rows] = await pool.query(`SELECT ${selectCols} FROM ${table} WHERE ${whereClause}`);
         
-        console.log(`📊 [INFO] Found ${rows.length} rows to migrate in ${table}.`);
+        console.log(`📊 [INFO] Found ${rows.length} candidate rows in ${table}.`);
 
         // 3. Upload and Update
         for (const row of rows) {
@@ -57,10 +64,16 @@ async function migrate() {
                 continue;
             }
 
-            const filename = `${table}_${row.id}.jpg`; // Will let PHP deduce correct extension if possible
+            if (REPAIR_MODE && row[urlCol]) {
+                const ok = await isCdnUrlReachable(row[urlCol], row.mime || null);
+                if (ok) continue;
+                console.log(`  🔧 [REPAIR] ${table}_${row.id}: ${row[urlCol]} is unreachable or mismatched, re-uploading...`);
+            }
+
+            const ext = extFromMimeOrBuffer(blob, row.mime || '');
+            const filename = `${table}_${row.id}.${ext}`;
             
             console.log(`  ⏳ [UPLOAD] Row ID ${row.id}: Uploading ${filename} (${Math.round(blob.length/1024)} KB)...`);
-            // const fileBlob = new Blob([blob]);
             const result = await client.uploadImage(blob, filename);
 
             if (result.success) {
