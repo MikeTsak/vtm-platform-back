@@ -114,6 +114,12 @@ function buildTestApp(pool) {
     requireAdmin,
   });
 
+  app.register(require('../../routes/users'), {
+    prefix: '/api/users',
+    authRequired,
+    moderateLimiter: noopLimiter,
+  });
+
   app.register(require('../../routes/characters'), {
     pool,
     log: testLog,

@@ -12,7 +12,7 @@ module.exports = async function (fastify, opts) {
     if (!user) return reply.status(404).send({ error: 'User not found' });
 
     const [characters] = await fastify.db.query(
-      'SELECT id, name, clan, xp, sheet, created_at, updated_at FROM characters WHERE user_id = ? OR retired_user_id = ?',
+      'SELECT id, name, clan, xp, sheet, created_at, retired_at FROM characters WHERE user_id = ? OR retired_user_id = ?',
       [uid, uid]
     );
     const [downtimes] = await fastify.db.query(
