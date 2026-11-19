@@ -34,6 +34,8 @@ async function _respectEmailJsRateLimit() {
   __lastSendAt = Date.now();
 }
 
+const cleanEnv = (v) => (v == null ? '' : String(v).trim());
+
 async function sendResetEmailWithEmailJS({
   to,                // recipient email (string)
   name,              // display name (string)
@@ -41,12 +43,17 @@ async function sendResetEmailWithEmailJS({
   appName = 'Erebus Portal',
   expiresMinutes = 1440
 }) {
+  const serviceId = cleanEnv(process.env.EMAILJS_SERVICE_ID);
+  const templateId = cleanEnv(process.env.EMAILJS_TEMPLATE_ID);
+  const publicKey = cleanEnv(process.env.EMAILJS_PUBLIC_KEY);
+  const privateKey = cleanEnv(process.env.EMAILJS_PRIVATE_KEY);
+
   // Build exactly what EmailJS expects with comprehensive aliases
   const payload = {
-    service_id: process.env.EMAILJS_SERVICE_ID,
-    template_id: process.env.EMAILJS_TEMPLATE_ID,
-    user_id: process.env.EMAILJS_PUBLIC_KEY,     // "user_id" = PUBLIC key
-    accessToken: process.env.EMAILJS_PRIVATE_KEY || undefined, // optional
+    service_id: serviceId,
+    template_id: templateId,
+    user_id: publicKey,     // "user_id" = PUBLIC key
+    accessToken: privateKey || undefined, // required when EmailJS strict mode is enabled
     template_params: {
       to_email: to,
       email: to,
@@ -78,9 +85,10 @@ async function sendResetEmailWithEmailJS({
   // Pre-flight log (no secrets)
   log.mail('EmailJS → sending reset', {
     to: maskEmail(to),
-    service_id: process.env.EMAILJS_SERVICE_ID ? 'set' : 'MISSING',
-    template_id: process.env.EMAILJS_TEMPLATE_ID ? 'set' : 'MISSING',
-    user_id: process.env.EMAILJS_PUBLIC_KEY ? 'set' : 'MISSING',
+    service_id: serviceId ? 'set' : 'MISSING',
+    template_id: templateId ? 'set' : 'MISSING',
+    user_id: publicKey ? 'set' : 'MISSING',
+    private_key: privateKey ? 'set' : 'MISSING',
     // show the exact param keys we send so you can align the template
     vars: Object.keys(payload.template_params)
   });
@@ -117,12 +125,13 @@ async function sendResetEmailWithEmailJS({
     log.ok('EmailJS ← OK', { status: res.status, body });
   } else {
     // Typical failure: 400 "The parameters are invalid..."
+    const snippet = String(body || '').trim().slice(0, 300);
     log.err('EmailJS ← NON-2XX', {
       status: res.status,
       statusText: res.statusText,
-      body
+      body: snippet
     });
-    throw new Error(`EmailJS responded ${res.status} ${res.statusText}: ${body}`);
+    throw new Error(`EmailJS responded ${res.status}${res.statusText ? ` ${res.statusText}` : ''}: ${snippet || 'Unknown error'}`);
   }
 }
 

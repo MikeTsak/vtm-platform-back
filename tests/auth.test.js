@@ -216,6 +216,32 @@ describe('POST /api/auth/reset — token revocation', () => {
   });
 });
 
+describe('POST /api/auth/forgot — delivery failure handling', () => {
+  it('returns 502 with error details and cleans up the unsent token row when EmailJS fails', async () => {
+    const email = uniqueEmail();
+    const { user } = await registerUser(app, { email });
+
+    app.testResetEmails.length = 0;
+    app.testResetEmailError = new Error('EmailJS responded 403 Forbidden: API access in strict mode, but no Private Key was provided');
+    try {
+      const failRes = await app.inject({ method: 'POST', url: '/api/auth/forgot', payload: { email } });
+      expect(failRes.statusCode).toBe(502);
+      expect(failRes.json().error).toContain('EmailJS responded 403 Forbidden');
+      expect(app.testResetEmails.length).toBe(0);
+
+      const [rowsAfterFail] = await pool.query('SELECT id FROM password_resets WHERE user_id = ?', [user.id]);
+      expect(rowsAfterFail.length).toBe(0);
+    } finally {
+      app.testResetEmailError = null;
+    }
+
+    // Retrying immediately succeeds because the failed attempt did not poison cooldown.
+    const okRes = await app.inject({ method: 'POST', url: '/api/auth/forgot', payload: { email } });
+    expect(okRes.statusCode).toBe(200);
+    expect(app.testResetEmails.length).toBe(1);
+  });
+});
+
 describe('role is read live, not from the login-time JWT', () => {
   it('an existing session sees a role change through the admin PATCH without logging in again', async () => {
     const admin = await registerUser(app);

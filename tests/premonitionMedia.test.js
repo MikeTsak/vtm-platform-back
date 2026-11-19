@@ -20,6 +20,15 @@ beforeAll(async () => {
   const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: admin.email, password: admin.password } });
   admin.cookie = extractSessionCookie(login);
 
+  const malkSheetWithPremonition = JSON.stringify({
+    disciplines: { Auspex: 2 },
+    disciplinePowers: { Auspex: [{ id: 'sense_the_unseen', name: 'Sense the Unseen', level: 1 }, { id: 'premonition', name: 'Premonition', level: 2 }] },
+  });
+  await pool.query(
+    "INSERT INTO characters (user_id, name, clan, sheet) VALUES (?, 'MalkWithPower', 'Malkavian', ?)",
+    [recipient.user.id, malkSheetWithPremonition]
+  );
+
   const [m] = await pool.query("INSERT INTO premonition_media (mime, size, data) VALUES ('image/png', 3, 'abc')");
   mediaId = m.insertId;
   const [p] = await pool.query(
@@ -70,6 +79,10 @@ describe('GET /api/premonitions/media/:id', () => {
     // New premonition whose premonitions.id collides numerically with nextId (for `otherRecipient`).
     const otherRecipient = await registerUser(app);
     await pool.query(
+      "INSERT INTO characters (user_id, name, clan, sheet) VALUES (?, 'OtherMalk', 'Malkavian', ?)",
+      [otherRecipient.user.id, JSON.stringify({ disciplines: { Auspex: 2 }, disciplinePowers: { Auspex: [{ id: 'premonition', name: 'Premonition', level: 2 }] } })]
+    );
+    await pool.query(
       "INSERT INTO premonitions (id, sender_id, content_type, content_url) VALUES (?, ?, 'video', 'https://img.miketsak.gr/uploads/sha_colliding.mp4')",
       [nextId, admin.user.id]
     );
@@ -97,5 +110,43 @@ describe('GET /api/premonitions/media/:id', () => {
       headers: { cookie: intruder.cookie },
     });
     expect(resIntruder.statusCode).toBe(404);
+  });
+
+  it('excludes Malkavians without the Premonition power from targeting and viewing', async () => {
+    const malkNoPower = await registerUser(app);
+    await pool.query(
+      "INSERT INTO characters (user_id, name, clan, sheet) VALUES (?, 'MalkNoPower', 'Malkavian', ?)",
+      [malkNoPower.user.id, JSON.stringify({ disciplines: { Auspex: 1 }, disciplinePowers: { Auspex: [{ id: 'sense_the_unseen', name: 'Sense the Unseen', level: 1 }] } })]
+    );
+
+    const listRes = await app.inject({
+      method: 'GET',
+      url: '/api/admin/premonitions/malkavians',
+      headers: { cookie: admin.cookie },
+    });
+    expect(listRes.statusCode).toBe(200);
+    const ids = listRes.json().malkavians.map((m) => m.id);
+    expect(ids).toContain(recipient.user.id);
+    expect(ids).not.toContain(malkNoPower.user.id);
+
+    const sendRes = await app.inject({
+      method: 'POST',
+      url: '/api/admin/premonitions/send',
+      headers: { cookie: admin.cookie },
+      payload: { content_type: 'text', content_text: 'Vision', user_ids: ['all_malkavians'] },
+    });
+    expect(sendRes.statusCode).toBe(201);
+    const sentId = sendRes.json().premonition_id;
+
+    // Even if a premonition_recipients row existed for a Malkavian without Premonition, viewing is blocked.
+    await pool.query('INSERT INTO premonition_recipients (premonition_id, user_id) VALUES (?, ?)', [sentId, malkNoPower.user.id]);
+    const mineRes = await app.inject({
+      method: 'GET',
+      url: '/api/premonitions/mine',
+      headers: { cookie: malkNoPower.cookie },
+    });
+    expect(mineRes.statusCode).toBe(200);
+    expect(mineRes.json().premonitions).toEqual([]);
+    expect((await get(malkNoPower, sentId)).statusCode).toBe(404);
   });
 });

@@ -220,8 +220,14 @@ module.exports = async function (fastify, opts) {
       process.env.EMAILJS_TEMPLATE_ID &&
       process.env.EMAILJS_PUBLIC_KEY
     ) {
-      emailStatus = 'CONFIGURED';
-      emailClass = 'ok';
+      if (process.env.EMAILJS_PRIVATE_KEY) {
+        emailStatus = 'CONFIGURED';
+        emailClass = 'ok';
+      } else {
+        emailStatus = 'MISSING PRIVATE KEY';
+        emailClass = 'bad';
+        errors.push('Email: Missing EMAILJS_PRIVATE_KEY (required when EmailJS strict mode is enabled).');
+      }
     } else {
       errors.push('Email: Missing EmailJS environment variables (SERVICE_ID, TEMPLATE_ID, or PUBLIC_KEY).');
     }

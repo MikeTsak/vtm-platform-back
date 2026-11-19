@@ -65,6 +65,7 @@ function buildTestApp(pool) {
   // one, so tests can pull the real reset link/token out of
   // app.testResetEmails and exercise the full forgot -> reset flow.
   app.testResetEmails = [];
+  app.testResetEmailError = null;
 
   // Same idea for push notifications: captures every call instead of hitting
   // web-push/Expo, so tests can assert who got notified (and with what
@@ -93,6 +94,7 @@ function buildTestApp(pool) {
     authLimiter: noopLimiter,
     broadcastNtfyAlert: noop, // never hit a real ntfy.sh topic from tests
     sendResetEmailWithEmailJS: async (payload) => {
+      if (app.testResetEmailError) throw app.testResetEmailError;
       app.testResetEmails.push(payload);
     },
   });

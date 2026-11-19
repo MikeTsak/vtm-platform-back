@@ -8,6 +8,7 @@ const { isVideoUrl, resolveMediaUrl } = require('../services/news');
 const { isAdmin } = require('../services/guards');
 const { getAppBase } = require('../utils/appBase');
 const { hasNonEmptyBlob, extFromMimeOrBuffer, isCdnUrlReachable } = require('../utils/cdnMedia');
+const { hasPremonitionPower } = require('../utils/sheet');
 
 module.exports = async function (fastify, opts) {
   const { pool, log, authRequired, requireAdmin, imageClient } = opts;
@@ -101,31 +102,35 @@ module.exports = async function (fastify, opts) {
   });
 
 
-  // ADMIN: Get list of Malkavian players  ✅ REPLACE THIS ROUTE
+  // ADMIN: Get list of Malkavian players who possess the Premonition power
   fastify.get('/api/admin/premonitions/malkavians', { preHandler: [authRequired, requireAdmin] }, async (req, reply) => {
     try {
-
-      // One row per user that has at least one Malkavian character
       const [rows] = await pool.query(`
-      SELECT 
+      SELECT
         u.id,
         u.display_name,
-        COALESCE(MAX(c.name), '(no character)') AS char_name
+        c.name AS char_name,
+        c.sheet
       FROM users u
-      LEFT JOIN characters c 
-        ON c.user_id = u.id
+      JOIN characters c ON c.user_id = u.id
       WHERE u.role <> 'admin'
-        AND EXISTS (
-          SELECT 1
-          FROM characters c2
-          WHERE c2.user_id = u.id
-            AND LOWER(TRIM(c2.clan)) = 'malkavian'
-        )
-      GROUP BY u.id, u.display_name
+        AND LOWER(TRIM(c.clan)) = 'malkavian'
       ORDER BY u.display_name ASC
     `);
 
-      reply.send({ malkavians: rows });
+      const seen = new Set();
+      const malkavians = [];
+      for (const r of rows) {
+        if (seen.has(r.id) || !hasPremonitionPower(r.sheet)) continue;
+        seen.add(r.id);
+        malkavians.push({
+          id: r.id,
+          display_name: r.display_name,
+          char_name: r.char_name || '(no character)',
+        });
+      }
+
+      reply.send({ malkavians });
     } catch (e) {
       log.err('Failed to get Malkavian list', { message: e.message });
       reply.status(500).send({ error: 'Failed to get Malkavians' });
@@ -214,15 +219,15 @@ module.exports = async function (fastify, opts) {
       // 2. Figure out who to send it to
       let targetUserIds = [];
       if (sendToAllMalks) {
-        // Get all non-admin Malkavian user IDs
+        // Get all non-admin Malkavian user IDs who possess the Premonition power
         const [malks] = await pool.query(`
-        SELECT DISTINCT u.id
+        SELECT DISTINCT u.id, c.sheet
         FROM users u
         JOIN characters c ON c.user_id = u.id
         WHERE u.role <> 'admin'
           AND LOWER(TRIM(c.clan)) = 'malkavian'
       `);
-        targetUserIds = malks.map(m => m.id);
+        targetUserIds = malks.filter(m => hasPremonitionPower(m.sheet)).map(m => m.id);
       } else {
         // Use the specific list, filtering out any non-numeric values
         targetUserIds = user_ids.map(id => parseInt(id)).filter(id => !isNaN(id));
@@ -309,9 +314,19 @@ module.exports = async function (fastify, opts) {
     }
   });
 
+  async function userCanUsePremonitions(user) {
+    if (isAdmin(user)) return true;
+    const [[ch]] = await pool.query('SELECT clan, sheet FROM characters WHERE user_id = ? LIMIT 1', [user.id]);
+    return !!ch && String(ch.clan || '').trim().toLowerCase() === 'malkavian' && hasPremonitionPower(ch.sheet);
+  }
+
   // PLAYER: Get my premonitions
   fastify.get('/api/premonitions/mine', { preHandler: [authRequired] }, async (req, reply) => {
     try {
+      if (!(await userCanUsePremonitions(req.user))) {
+        reply.header('Cache-Control', 'no-store');
+        return reply.status(200).send({ premonitions: [] });
+      }
 
       const [rows] = await pool.query(`
       SELECT p.id,
@@ -367,6 +382,7 @@ module.exports = async function (fastify, opts) {
   // (Media only reaches the browser same-site now, so <img>/<video> carry the cookie.)
   async function canViewMedia(user, id, isMediaId) {
     if (isAdmin(user)) return true; // Storytellers preview uploads before any premonition exists
+    if (!(await userCanUsePremonitions(user))) return false;
     const [[row]] = await pool.query(
       `SELECT 1 FROM premonitions p
          JOIN premonition_recipients pr ON pr.premonition_id = p.id AND pr.user_id = ?

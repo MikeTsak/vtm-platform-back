@@ -197,11 +197,20 @@ module.exports = async function (fastify, opts) {
     }
 
     try {
-      if (typeof sendResetEmailWithEmailJS === 'function') {
-        await sendResetEmailWithEmailJS({ to: norm, name: user.display_name || 'there', link, appName: process.env.APP_NAME || 'Erebus Portal', expiresMinutes: 1440 });
+      if (typeof sendResetEmailWithEmailJS !== 'function') {
+        throw new Error('Password reset email service is not configured.');
       }
+      await sendResetEmailWithEmailJS({ to: norm, name: user.display_name || 'there', link, appName: process.env.APP_NAME || 'Erebus Portal', expiresMinutes: 1440 });
     } catch (e) {
-      log.err('EmailJS send failed', { error: e?.message || String(e) });
+      // Remove the unsent token row so failed sends do not trigger the retry cooldown.
+      try {
+        await fastify.db.query('DELETE FROM password_resets WHERE token_id=?', [tokenId]);
+      } catch (delErr) {
+        log.err('Failed to clean up unsent password reset token', { error: delErr?.message || String(delErr) });
+      }
+      const errMsg = e?.message || String(e) || 'Failed to send password reset email.';
+      log.err('EmailJS send failed', { error: errMsg });
+      return reply.status(502).send({ error: `Email delivery failed: ${errMsg}` });
     }
 
     return reply.send({
